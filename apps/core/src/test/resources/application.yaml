@@ -1,6 +1,56 @@
 spring:
   main:
     banner-mode: off
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            provider: zitadel
+            client-id: folio-test
+            client-secret: server-side-test-secret
+            client-authentication-method: client_secret_basic
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: openid,profile,email
+          apple:
+            provider: zitadel
+            client-id: folio-test
+            client-secret: server-side-test-secret
+            client-authentication-method: client_secret_basic
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: openid,profile,email
+          facebook:
+            provider: zitadel
+            client-id: folio-test
+            client-secret: server-side-test-secret
+            client-authentication-method: client_secret_basic
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: openid,profile,email
+        provider:
+          zitadel:
+            authorization-uri: https://login.eu.example/oauth/v2/authorize
+            token-uri: https://login.eu.example/oauth/v2/token
+            user-info-uri: https://login.eu.example/oidc/v1/userinfo
+            jwk-set-uri: https://login.eu.example/oauth/v2/keys
+            user-name-attribute: sub
+
+server:
+  servlet:
+    session:
+      cookie:
+        secure: false
+
+platform:
+  identity:
+    allowed-origin: http://localhost:3000
+    broker-issuer: https://login.eu.example
+    recovery-uri: https://login.eu.example/ui/v2/login
+    fresh-authentication-max-age: 5m
+    session-absolute-timeout: 8h
+    session-rotation-interval: 10m
 
 management:
   tracing:

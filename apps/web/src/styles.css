@@ -95,11 +95,49 @@ h1 em { color: var(--accent); font-style: normal; }
 .status-label { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
 footer { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 26px 0 32px; display: flex; justify-content: space-between; gap: 24px; border-top: 1px solid var(--line); color: var(--muted); font-size: .68rem; }
 
+.inline-form { margin: 0; }
+.library-studio { width: min(1180px, calc(100% - 40px)); min-height: 680px; margin: 0 auto; padding: 68px 0 80px; }
+.library-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; padding-bottom: 34px; border-bottom: 1px solid var(--line); }
+.library-heading .eyebrow { margin-bottom: 16px; }
+.library-heading h1 { font-size: clamp(3.2rem, 7vw, 5.9rem); line-height: .95; }
+.library-heading p { margin: 18px 0 0; color: var(--muted); }
+.library-heading p strong { color: var(--ink); }
+.library-grid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 28px; padding-top: 32px; }
+.empty-library, .identity-card { border: 1px solid var(--line); border-radius: 16px; background: var(--folio); box-shadow: 0 18px 50px rgb(34 29 24 / 8%); }
+.empty-library { min-height: 390px; padding: clamp(36px, 7vw, 74px); display: flex; align-items: flex-start; justify-content: center; flex-direction: column; }
+.empty-mark { width: 58px; height: 58px; display: grid; place-items: center; margin-bottom: 27px; border-radius: 15px; color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.empty-library h2 { margin: 0; font-family: Georgia, serif; font-size: clamp(1.8rem, 4vw, 3.1rem); font-weight: 500; letter-spacing: -.035em; }
+.empty-library p { max-width: 580px; margin: 18px 0 30px; color: var(--muted); line-height: 1.65; }
+.identity-card { align-self: start; padding: 28px; }
+.card-kicker { color: var(--accent); font-size: .68rem; font-weight: 740; letter-spacing: .13em; text-transform: uppercase; }
+.identity-card h2 { margin: 12px 0 4px; font-size: 1.35rem; }
+.identity-card > p { margin: 0; color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
+.method-list { margin: 24px 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.method-list span { display: inline-flex; align-items: center; gap: 6px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); font-size: .71rem; font-weight: 650; }
+.method-list svg { color: #277a5b; }
+.link-methods { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.link-methods p { margin: 0 0 9px; color: var(--muted); font-size: .7rem; line-height: 1.5; }
+.link-methods form, .link-methods .button { width: 100%; }
+.library-loading { display: grid; place-items: center; color: var(--muted); }
+
+.dialog-backdrop { position: fixed; z-index: 20; inset: 0; padding: 24px; display: grid; place-items: center; background: rgb(7 13 20 / 62%); backdrop-filter: blur(7px); }
+.sign-in-dialog { position: relative; width: min(460px, 100%); padding: 38px; border: 1px solid var(--line); border-radius: 18px; background: var(--folio); box-shadow: 0 32px 100px rgb(0 0 0 / 30%); }
+.sign-in-dialog h2 { margin: 13px 0 10px; font-family: Georgia, serif; font-size: 2rem; font-weight: 500; letter-spacing: -.035em; }
+.sign-in-dialog > p { margin: 0; color: var(--muted); font-size: .86rem; line-height: 1.6; }
+.sign-in-dialog small { display: block; margin-top: 24px; color: var(--muted); font-size: .68rem; line-height: 1.5; }
+.dialog-close { position: absolute; top: 14px; right: 15px; width: 34px; height: 34px; border: 0; border-radius: 50%; color: var(--muted); background: transparent; font: inherit; font-size: 1.3rem; cursor: pointer; }
+.dialog-close:hover { background: var(--canvas); }
+.provider-list { display: grid; gap: 10px; margin-top: 24px; }
+.provider-list .button { width: 100%; text-decoration: none; }
+.recovery-link { margin: 20px 0 0; padding: 0; border: 0; color: var(--accent); background: transparent; font: inherit; font-size: .76rem; font-weight: 650; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
+
 @media (max-width: 860px) {
   .hero { grid-template-columns: 1fr; padding-top: 55px; gap: 54px; }
   .hero-copy { max-width: 680px; }
   .sample-card { width: min(580px, 94%); margin: 0 auto; transform: none; }
   h1 { font-size: clamp(3.6rem, 11vw, 6.3rem); }
+  .library-grid { grid-template-columns: 1fr; }
+  .identity-card { width: 100%; }
 }
 
 @media (max-width: 560px) {
@@ -122,6 +160,12 @@ footer { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 26px 0 
   .platform-strip { padding: 16px; }
   .status-label { display: none; }
   footer { flex-direction: column; }
+  .library-studio { width: min(100% - 28px, 1180px); padding: 42px 0 58px; }
+  .library-heading { align-items: flex-start; flex-direction: column; }
+  .library-heading h1 { font-size: clamp(3rem, 16vw, 4.4rem); }
+  .library-heading > .button { width: 100%; }
+  .empty-library { min-height: 360px; padding: 30px 24px; }
+  .sign-in-dialog { padding: 34px 24px 28px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

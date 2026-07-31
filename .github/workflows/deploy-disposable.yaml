@@ -32,6 +32,9 @@ env:
   NODE_VERSION: 24.18.1
   NPM_VERSION: 11.8.0
   FIREBASE_TOOLS_VERSION: 15.25.1
+  TF_VAR_zitadel_issuer: ${{ secrets.ZITADEL_ISSUER }}
+  TF_VAR_zitadel_client_id: ${{ secrets.ZITADEL_CLIENT_ID }}
+  TF_VAR_zitadel_client_secret_id: ${{ secrets.ZITADEL_CLIENT_SECRET_ID }}
 
 jobs:
   deploy:

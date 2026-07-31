@@ -3,6 +3,12 @@ spring:
     hikari:
       maximum-pool-size: 2
 
+server:
+  servlet:
+    session:
+      cookie:
+        secure: false
+
 management:
   tracing:
     sampling:

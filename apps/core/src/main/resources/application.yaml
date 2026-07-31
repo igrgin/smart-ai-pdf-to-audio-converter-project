@@ -1,6 +1,49 @@
 spring:
   application:
     name: audiobook-platform-core
+  session:
+    timeout: ${SESSION_IDLE_TIMEOUT:15m}
+    jdbc:
+      initialize-schema: never
+      cleanup-cron: "0 * * * * *"
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            provider: zitadel
+            client-id: ${ZITADEL_CLIENT_ID:folio-local}
+            client-secret: ${ZITADEL_CLIENT_SECRET:local-development-only}
+            client-authentication-method: client_secret_basic
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: openid,profile,email
+            client-name: Google through ZITADEL
+          apple:
+            provider: zitadel
+            client-id: ${ZITADEL_CLIENT_ID:folio-local}
+            client-secret: ${ZITADEL_CLIENT_SECRET:local-development-only}
+            client-authentication-method: client_secret_basic
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: openid,profile,email
+            client-name: Apple through ZITADEL
+          facebook:
+            provider: zitadel
+            client-id: ${ZITADEL_CLIENT_ID:folio-local}
+            client-secret: ${ZITADEL_CLIENT_SECRET:local-development-only}
+            client-authentication-method: client_secret_basic
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: openid,profile,email
+            client-name: Facebook through ZITADEL
+        provider:
+          zitadel:
+            authorization-uri: ${ZITADEL_AUTHORIZATION_URI:http://wiremock:8080/oauth/v2/authorize}
+            token-uri: ${ZITADEL_TOKEN_URI:http://wiremock:8080/oauth/v2/token}
+            user-info-uri: ${ZITADEL_USERINFO_URI:http://wiremock:8080/oidc/v1/userinfo}
+            jwk-set-uri: ${ZITADEL_JWK_SET_URI:http://wiremock:8080/oauth/v2/keys}
+            user-name-attribute: sub
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/audiobook}
     username: ${DATABASE_USER:audiobook}
@@ -16,11 +59,26 @@ spring:
 server:
   port: ${PORT:8080}
   forward-headers-strategy: framework
+  servlet:
+    session:
+      cookie:
+        name: FOLIO_SESSION
+        http-only: true
+        secure: true
+        same-site: strict
+      tracking-modes: cookie
 
 platform:
   build:
     version: ${BUILD_VERSION:dev}
     revision: ${BUILD_REVISION:local}
+  identity:
+    allowed-origin: ${APPLICATION_ORIGIN:http://localhost:3000}
+    broker-issuer: ${ZITADEL_ISSUER:https://login.eu.example}
+    recovery-uri: ${ZITADEL_RECOVERY_URI:https://login.eu.example/ui/v2/login}
+    fresh-authentication-max-age: ${FRESH_AUTHENTICATION_MAX_AGE:5m}
+    session-absolute-timeout: ${SESSION_ABSOLUTE_TIMEOUT:8h}
+    session-rotation-interval: ${SESSION_ROTATION_INTERVAL:10m}
 
 management:
   endpoints:
