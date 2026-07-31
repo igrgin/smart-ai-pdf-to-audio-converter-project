@@ -87,4 +87,89 @@ describe("public sample", () => {
 
     await waitFor(() => expect(screen.getByRole("button", { name: /play public sample/i })).toBeVisible());
   });
+
+  it("offers all brokered providers and secure recovery without third-party scripts", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).endsWith("/api/v1/auth/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            authenticated: false,
+            csrf: { headerName: "X-CSRF-TOKEN", parameterName: "_csrf", token: "csrf-test" }
+          })
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          apiVersion: "v1",
+          build: { version: "0.1.0", revision: "test" },
+          availability: { core: "AVAILABLE", database: "AVAILABLE" }
+        })
+      });
+    }));
+
+    const { container } = render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^sign in$/i }));
+
+    expect(screen.getByRole("dialog", { name: /choose a sign-in method/i })).toBeVisible();
+    expect(screen.getByRole("link", { name: /continue with google/i })).toHaveAttribute(
+      "href", "/oauth2/authorization/google"
+    );
+    expect(screen.getByRole("link", { name: /continue with apple/i })).toHaveAttribute(
+      "href", "/oauth2/authorization/apple"
+    );
+    expect(screen.getByRole("link", { name: /continue with facebook/i })).toHaveAttribute(
+      "href", "/oauth2/authorization/facebook"
+    );
+    expect(container.querySelector('form[action="/api/v1/auth/recovery"] input[name="_csrf"]'))
+      .toHaveValue("csrf-test");
+    expect(container.querySelectorAll("script[src^='http']")).toHaveLength(0);
+  });
+
+  it("enters the private responsive Library without exposing a Listener identifier", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            authenticated: true,
+            listener: {
+              displayName: "Mara",
+              contactEmail: "relay@privaterelay.appleid.com",
+              signInMethods: ["apple", "google"]
+            },
+            csrf: { headerName: "X-CSRF-TOKEN", parameterName: "_csrf", token: "private-csrf" }
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/library")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            displayName: "Mara",
+            contactEmail: "relay@privaterelay.appleid.com",
+            signInMethods: ["apple", "google"],
+            audiobooks: []
+          })
+        });
+      }
+      return Promise.resolve({ ok: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<App />);
+
+    expect(await screen.findByRole("heading", { name: /your library/i })).toBeVisible();
+    expect(screen.getAllByText("Mara")).toHaveLength(2);
+    expect(screen.getByText("relay@privaterelay.appleid.com")).toBeVisible();
+    expect(screen.getByText(/your first audiobook will live here/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /add sign-in method/i })).toBeEnabled();
+    expect(container.textContent).not.toContain("01985f42");
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/library", {
+      headers: { Accept: "application/json" },
+      signal: expect.any(AbortSignal)
+    });
+  });
 });

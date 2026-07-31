@@ -12,10 +12,13 @@
       {
         "source": "**",
         "headers": [
-          { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" },
           { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
+          { "key": "Cross-Origin-Resource-Policy", "value": "same-origin" },
+          { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
           { "key": "Referrer-Policy", "value": "no-referrer" },
-          { "key": "X-Content-Type-Options", "value": "nosniff" }
+          { "key": "X-Content-Type-Options", "value": "nosniff" },
+          { "key": "X-Frame-Options", "value": "DENY" },
+          { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains" }
         ]
       },
       {
@@ -33,7 +36,39 @@
     ],
     "rewrites": [
       {
+        "source": "/oauth2/**",
+        "run": {
+          "serviceId": "folio-core",
+          "region": "europe-west1",
+          "pinTag": true
+        }
+      },
+      {
+        "source": "/login/oauth2/**",
+        "run": {
+          "serviceId": "folio-core",
+          "region": "europe-west1",
+          "pinTag": true
+        }
+      },
+      {
         "source": "/api/**",
+        "run": {
+          "serviceId": "folio-core",
+          "region": "europe-west1",
+          "pinTag": true
+        }
+      },
+      {
+        "source": "/",
+        "run": {
+          "serviceId": "folio-core",
+          "region": "europe-west1",
+          "pinTag": true
+        }
+      },
+      {
+        "source": "/index.html",
         "run": {
           "serviceId": "folio-core",
           "region": "europe-west1",

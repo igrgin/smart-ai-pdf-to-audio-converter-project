@@ -32,4 +32,30 @@ echo "$rendered" | grep -q 'APP_MODE: worker' || {
   exit 1
 }
 
+grep -q 'location /oauth2/' apps/web/nginx.conf &&
+  grep -q 'location /login/oauth2/' apps/web/nginx.conf || {
+  echo "same-origin web proxy must route both OIDC browser endpoints to the core" >&2
+  exit 1
+}
+
+grep -Fq "script-src 'nonce-\$request_id' 'strict-dynamic'" apps/web/security-headers.conf || {
+  echo "web boundary must issue nonce-based strict CSP" >&2
+  exit 1
+}
+
+jq -e '.hosting.rewrites | any(.source == "/oauth2/**") and any(.source == "/login/oauth2/**")' firebase.json >/dev/null || {
+  echo "Firebase must preserve the same-origin OIDC routes" >&2
+  exit 1
+}
+
+jq -e '.hosting.rewrites | any(.source == "/" and .run.serviceId == "folio-core") and any(.source == "/index.html" and .run.serviceId == "folio-core")' firebase.json >/dev/null || {
+  echo "Firebase must obtain the nonce-bearing application shell from the core" >&2
+  exit 1
+}
+
+jq -e '[.hosting.headers[].headers[] | select(.key == "Content-Security-Policy")] | length == 0' firebase.json >/dev/null || {
+  echo "Firebase must not replace the core's per-response CSP" >&2
+  exit 1
+}
+
 echo "local environment contract is valid"

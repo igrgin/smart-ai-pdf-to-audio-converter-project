@@ -28,3 +28,38 @@ variable "core_image" {
     error_message = "core_image must be pinned by sha256 digest."
   }
 }
+
+variable "zitadel_issuer" {
+  description = "EU-hosted ZITADEL custom-domain origin, without a trailing slash."
+  type        = string
+
+  validation {
+    condition     = can(regex("^https://[^/]+$", var.zitadel_issuer))
+    error_message = "zitadel_issuer must be an HTTPS origin without a path or trailing slash."
+  }
+}
+
+variable "zitadel_client_id" {
+  description = "OIDC web application client ID registered in ZITADEL."
+  type        = string
+}
+
+variable "zitadel_client_secret_id" {
+  description = "Secret Manager secret ID containing the ZITADEL OIDC client secret."
+  type        = string
+}
+
+variable "zitadel_google_idp_id" {
+  description = "ZITADEL identity-provider ID for Google."
+  type        = string
+}
+
+variable "zitadel_apple_idp_id" {
+  description = "ZITADEL identity-provider ID for Apple."
+  type        = string
+}
+
+variable "zitadel_facebook_idp_id" {
+  description = "ZITADEL identity-provider ID for Facebook."
+  type        = string
+}

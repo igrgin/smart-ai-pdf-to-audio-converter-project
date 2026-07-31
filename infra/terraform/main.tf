@@ -217,6 +217,12 @@ resource "google_secret_manager_secret_iam_member" "core_database_password" {
   member    = "serviceAccount:${google_service_account.core.email}"
 }
 
+resource "google_secret_manager_secret_iam_member" "core_zitadel_client_secret" {
+  secret_id = var.zitadel_client_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.core.email}"
+}
+
 resource "google_secret_manager_secret_iam_member" "worker_database_password" {
   secret_id = google_secret_manager_secret.database_password.id
   role      = "roles/secretmanager.secretAccessor"
@@ -314,10 +320,63 @@ resource "google_cloud_run_v2_service" "core" {
         value = "0.1"
       }
       env {
+        name  = "APPLICATION_ORIGIN"
+        value = "https://${google_firebase_hosting_site.web.site_id}.web.app"
+      }
+      env {
+        name  = "ZITADEL_ISSUER"
+        value = var.zitadel_issuer
+      }
+      env {
+        name  = "ZITADEL_AUTHORIZATION_URI"
+        value = "${var.zitadel_issuer}/oauth/v2/authorize"
+      }
+      env {
+        name  = "ZITADEL_TOKEN_URI"
+        value = "${var.zitadel_issuer}/oauth/v2/token"
+      }
+      env {
+        name  = "ZITADEL_USERINFO_URI"
+        value = "${var.zitadel_issuer}/oidc/v1/userinfo"
+      }
+      env {
+        name  = "ZITADEL_JWK_SET_URI"
+        value = "${var.zitadel_issuer}/oauth/v2/keys"
+      }
+      env {
+        name  = "ZITADEL_RECOVERY_URI"
+        value = "${var.zitadel_issuer}/ui/v2/login"
+      }
+      env {
+        name  = "ZITADEL_CLIENT_ID"
+        value = var.zitadel_client_id
+      }
+      env {
+        name  = "ZITADEL_GOOGLE_IDP_ID"
+        value = var.zitadel_google_idp_id
+      }
+      env {
+        name  = "ZITADEL_APPLE_IDP_ID"
+        value = var.zitadel_apple_idp_id
+      }
+      env {
+        name  = "ZITADEL_FACEBOOK_IDP_ID"
+        value = var.zitadel_facebook_idp_id
+      }
+      env {
         name = "DATABASE_PASSWORD"
         value_source {
           secret_key_ref {
             secret  = google_secret_manager_secret.database_password.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "ZITADEL_CLIENT_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = var.zitadel_client_secret_id
             version = "latest"
           }
         }
@@ -351,6 +410,7 @@ resource "google_cloud_run_v2_service" "core" {
   depends_on = [
     google_project_service.required["run.googleapis.com"],
     google_secret_manager_secret_iam_member.core_database_password,
+    google_secret_manager_secret_iam_member.core_zitadel_client_secret,
     google_sql_user.platform
   ]
 }

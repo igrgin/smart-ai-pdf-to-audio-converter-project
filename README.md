@@ -11,9 +11,9 @@ and an immutable CI container pipeline.
 - `apps/web`: React/TypeScript PWA using the Clear Signal light palette and Midnight Library dark
   palette, with an original 27-second public sample, transcript, compact/tablet/desktop layouts,
   self-hosted Space Grotesk, and shell-only service-worker caching.
-- `apps/core`: stateless Spring Boot API exposing `GET /api/v1/platform/status`. The response contains
-  only API/build revisions and core/database availability—never content, object coordinates, database
-  addresses, or Listener identifiers.
+- `apps/core`: Spring Boot BFF/API exposing public platform status plus a private Library boundary.
+  Google, Apple, and Facebook are brokered through EU-hosted ZITADEL; OIDC tokens stay in
+  PostgreSQL-backed server sessions and responses never expose Listener identifiers.
 - `compose.yaml`: PostgreSQL 17, a separate Flyway migration run, Pub/Sub emulator, isolated working
   and finalized MinIO stores, all eight worker stages, Grafana OpenTelemetry LGTM, Mailpit, WireMock,
   the core, and the same-origin web proxy.
@@ -60,6 +60,11 @@ Open [http://localhost:3000](http://localhost:3000). Supporting local surfaces a
 - Fake notifications: `http://localhost:8025`
 - Working-object console: `http://localhost:9001`
 - Finalized-object console: `http://localhost:9011`
+
+The public sample works with the checked-in local defaults. Interactive sign-in requires the ZITADEL
+values listed in `.env.example`; see
+[docs/operations/zitadel-identity.md](docs/operations/zitadel-identity.md) for the broker policy and
+callback contract.
 
 All credentials in `compose.yaml` are explicit local-only values. Production configuration uses
 runtime environment variables and Secret Manager; `.env` files are ignored.
