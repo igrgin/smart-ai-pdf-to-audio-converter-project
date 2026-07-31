@@ -21,6 +21,17 @@ export interface Library {
   contactEmail?: string;
   signInMethods: string[];
   audiobooks: unknown[];
+  conversionEntitlement: ConversionEntitlement;
+}
+
+export interface ConversionEntitlement {
+  status: "NO_GRANT" | "AVAILABLE" | "EXHAUSTED" | "EXPIRED";
+  grantedCharacters: number;
+  availableCharacters: number;
+  reservedCharacters: number;
+  committedCharacters: number;
+  canStartConversion: boolean;
+  denialReason?: string;
 }
 
 export async function fetchIdentitySession(signal: AbortSignal): Promise<IdentitySession> {

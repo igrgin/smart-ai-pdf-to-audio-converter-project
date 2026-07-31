@@ -1,6 +1,7 @@
 package dev.audiobook.platform.identity;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -11,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.audiobook.platform.PlatformApplication;
+import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -50,6 +52,9 @@ class IdentitySessionSecurityTest {
 
     @MockitoBean
     private ListenerIdentityService listenerIdentityService;
+
+    @MockitoBean
+    private ConversionEntitlementService conversionEntitlementService;
 
     @MockitoBean
     private DataSource dataSource;
@@ -105,6 +110,10 @@ class IdentitySessionSecurityTest {
 
     @Test
     void privateLibraryRequiresAListenerSessionAndNeverExposesListenerIds() throws Exception {
+        when(conversionEntitlementService.allowance(LISTENER_ONE))
+                .thenReturn(noGrantAllowance());
+        when(conversionEntitlementService.allowance(LISTENER_TWO))
+                .thenReturn(noGrantAllowance());
         mockMvc.perform(get("/api/v1/library"))
                 .andExpect(status().isUnauthorized());
 
@@ -123,6 +132,16 @@ class IdentitySessionSecurityTest {
 
         assertThat(first.getResponse().getContentAsString()).doesNotContain(LISTENER_ONE.toString(), LISTENER_TWO.toString());
         assertThat(second.getResponse().getContentAsString()).doesNotContain(LISTENER_ONE.toString(), LISTENER_TWO.toString(), "First Listener");
+    }
+
+    private static ConversionEntitlementService.Allowance noGrantAllowance() {
+        return new ConversionEntitlementService.Allowance(
+                ConversionEntitlementService.AllowanceStatus.NO_GRANT,
+                0,
+                0,
+                0,
+                0,
+                "NO_GRANT");
     }
 
     @Test

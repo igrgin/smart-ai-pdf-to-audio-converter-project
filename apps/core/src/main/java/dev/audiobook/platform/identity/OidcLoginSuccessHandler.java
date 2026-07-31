@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -24,6 +25,7 @@ final class OidcLoginSuccessHandler implements AuthenticationSuccessHandler {
 
     private final ListenerIdentityService listenerIdentityService;
     private final BrokerIdentity brokerIdentity;
+    private final IdentitySecurityProperties securityProperties;
     private final SecurityContextRepository securityContextRepository;
     private final Clock clock;
 
@@ -92,10 +94,13 @@ final class OidcLoginSuccessHandler implements AuthenticationSuccessHandler {
                 listener.providers(),
                 provider,
                 authenticatedAt);
-        UsernamePasswordAuthenticationToken listenerAuthentication = UsernamePasswordAuthenticationToken.authenticated(
-                principal,
-                null,
-                List.of(new SimpleGrantedAuthority("ROLE_LISTENER")));
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority("ROLE_LISTENER"));
+        if (securityProperties.isOperator(listener.listenerId())) {
+            authorities.add(new SimpleGrantedAuthority("ROLE_OPERATOR"));
+        }
+        UsernamePasswordAuthenticationToken listenerAuthentication =
+                UsernamePasswordAuthenticationToken.authenticated(principal, null, authorities);
         SecurityContext context = SecurityContextHolder.createEmptyContext();
         context.setAuthentication(listenerAuthentication);
         SecurityContextHolder.setContext(context);

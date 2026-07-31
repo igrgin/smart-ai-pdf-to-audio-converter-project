@@ -95,10 +95,15 @@ public class SecurityConfiguration {
     OidcLoginSuccessHandler oidcLoginSuccessHandler(
             ListenerIdentityService listenerIdentityService,
             BrokerIdentity brokerIdentity,
+            IdentitySecurityProperties securityProperties,
             SecurityContextRepository securityContextRepository,
             Clock identityClock) {
         return new OidcLoginSuccessHandler(
-                listenerIdentityService, brokerIdentity, securityContextRepository, identityClock);
+                listenerIdentityService,
+                brokerIdentity,
+                securityProperties,
+                securityContextRepository,
+                identityClock);
     }
 
     @Bean
@@ -142,6 +147,7 @@ public class SecurityConfiguration {
                                 "/login/oauth2/code/**",
                                 "/actuator/health/**")
                         .permitAll()
+                        .requestMatchers("/api/v1/operator/**").hasRole("OPERATOR")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .oauth2Login(oauth -> oauth

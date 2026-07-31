@@ -3,6 +3,11 @@
 Folio uses one EU-hosted ZITADEL instance as its only OIDC broker. The application never talks to
 Google, Apple, or Facebook directly and never receives an upstream provider token in the browser.
 
+Operator access is an explicit local allowlist layered on top of the same broker authentication.
+After an operator establishes a Listener Identity, set `OPERATOR_LISTENER_IDS` to the
+comma-separated local Listener UUIDs allowed to use `/api/v1/operator/**`, redeploy, and have those
+operators authenticate again. Social-provider claims never grant operator access on their own.
+
 ## Broker configuration gate
 
 Before an environment can admit Listeners, configure ZITADEL with all of the following:

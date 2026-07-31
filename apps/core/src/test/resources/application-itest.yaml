@@ -22,6 +22,11 @@ platform:
   build:
     version: itest
     revision: test-revision
+  entitlement:
+    per-conversion-spend-ceiling-micros: 1000000
+    per-listener-spend-ceiling-micros: 2000000
+    provider-spend-ceiling-micros: 3000000
+    global-spend-ceiling-micros: 5000000
   identity:
     broker-issuer: http://localhost:29121
     fresh-authentication-max-age: 5s

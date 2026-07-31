@@ -74,6 +74,16 @@ platform:
   build:
     version: ${BUILD_VERSION:dev}
     revision: ${BUILD_REVISION:local}
+  entitlement:
+    free-grant-characters: 500000
+    free-grant-validity: 365d
+    per-conversion-character-ceiling: 500000
+    per-conversion-spend-ceiling-micros: 5000000
+    per-listener-spend-ceiling-micros: 10000000
+    provider-spend-ceiling-micros: 100000000
+    global-spend-ceiling-micros: 150000000
+    per-listener-concurrency: 1
+    global-concurrency: 3
   identity:
     allowed-origin: ${APPLICATION_ORIGIN:http://localhost:3000}
     broker-issuer: ${ZITADEL_ISSUER:https://login.eu.example}
