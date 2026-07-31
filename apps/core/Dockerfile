@@ -9,7 +9,9 @@ COPY apps/core/src apps/core/src
 RUN ./mvnw --batch-mode --no-transfer-progress -pl apps/core -am package -DskipTests
 
 FROM eclipse-temurin:25-jre-alpine
-RUN addgroup -S platform && adduser -S -G platform -u 10001 platform
+RUN apk upgrade --no-cache \
+    && addgroup -S platform \
+    && adduser -S -G platform -u 10001 platform
 WORKDIR /app
 COPY --from=build --chown=platform:platform /workspace/apps/core/target/platform-core-exec.jar /app/platform-core.jar
 USER 10001:10001
