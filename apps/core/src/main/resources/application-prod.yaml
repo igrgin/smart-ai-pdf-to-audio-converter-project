@@ -1,0 +1,14 @@
+spring:
+  datasource:
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+
+platform:
+  build:
+    version: ${BUILD_VERSION}
+    revision: ${BUILD_REVISION}
+
+management:
+  tracing:
+    enabled: ${TRACING_ENABLED:false}
