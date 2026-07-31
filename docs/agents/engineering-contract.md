@@ -125,6 +125,16 @@ Use the `itest` profile for implementation tests. In this repository, an impleme
 
 **Verify:** Ordinary test classes match `*Test` but not `*ITest`, and they do not start unnecessary containers. Testcontainers-backed implementation test classes match `*ITest`, activate `itest`, and start and exercise every supporting service required by the behavior under test.
 
+### Test property configuration
+
+**Applies to:** Spring Boot tests that require properties specific to their activated profile.
+
+**Contract:** Never use `@DynamicPropertySource`. Define every required profile-specific property in the configuration YAML for the profile the test activates.
+
+**Verify:** No test uses `@DynamicPropertySource`, and each profile-specific test property is declared in the matching test-resource `application-<profile>.yaml` file.
+
+**Migration:** Remove the existing `@DynamicPropertySource` usage from `PlatformStatusITest`; tracked in [GitHub issue #47](https://github.com/igrgin/smart-ai-pdf-to-audio-converter-project/issues/47).
+
 ### Test coverage by behavioral scope
 
 **Applies to:** Every new or changed behavior.
