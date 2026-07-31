@@ -1,0 +1,50 @@
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.iml
+.classpath
+.project
+.settings/
+*.swp
+*~
+
+# Logs and temporary files
+*.log
+logs/
+*.tmp
+
+# Java and JVM build output
+.gradle/
+build/
+out/
+target/
+*.class
+*.hprof
+hs_err_pid*
+
+# Node and frontend build output
+node_modules/
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# Browser and test reports
+blob-report/
+playwright-report/
+test-results/
+
+# Terraform local state and cache
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
