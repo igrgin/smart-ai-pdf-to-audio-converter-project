@@ -63,6 +63,22 @@ class BrokerIdentityTest {
     }
 
     @Test
+    void rejectsMfaWithoutTheTotpMethod() {
+        assertThatThrownBy(() -> brokerIdentity.from(SignInProvider.GOOGLE, user(Map.of(
+                "amr", List.of("mfa"),
+                "auth_time", NOW))))
+                .isInstanceOf(BrokerAuthenticationException.class);
+    }
+
+    @Test
+    void rejectsOtpWithoutTheBrokerMfaDecision() {
+        assertThatThrownBy(() -> brokerIdentity.from(SignInProvider.GOOGLE, user(Map.of(
+                "amr", List.of("otp"),
+                "auth_time", NOW))))
+                .isInstanceOf(BrokerAuthenticationException.class);
+    }
+
+    @Test
     void rejectsStaleAuthenticationForAnInteractiveCeremony() {
         assertThatThrownBy(() -> brokerIdentity.from(SignInProvider.APPLE, user(Map.of(
                 "amr", List.of("mfa", "otp"),

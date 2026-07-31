@@ -33,6 +33,22 @@ final class OidcLoginSuccessHandler implements AuthenticationSuccessHandler {
             HttpServletRequest request,
             HttpServletResponse response,
             Authentication authentication) throws IOException, ServletException {
+        try {
+            completeAuthentication(request, response, authentication);
+        } catch (BrokerAuthenticationException | IdentityLinkConflictException denied) {
+            HttpSession session = request.getSession(false);
+            if (session != null) {
+                session.invalidate();
+            }
+            SecurityContextHolder.clearContext();
+            response.sendRedirect("/?sign-in=failed");
+        }
+    }
+
+    private void completeAuthentication(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            Authentication authentication) throws IOException {
         if (!(authentication instanceof OAuth2AuthenticationToken oauth)
                 || !(oauth.getPrincipal() instanceof OidcUser oidcUser)) {
             throw new BrokerAuthenticationException();

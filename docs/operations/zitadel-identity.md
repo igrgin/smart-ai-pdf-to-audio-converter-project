@@ -8,7 +8,9 @@ Google, Apple, or Facebook directly and never receives an upstream provider toke
 Before an environment can admit Listeners, configure ZITADEL with all of the following:
 
 - an EU-hosted instance and custom HTTPS issuer domain;
-- Google, Apple, and Facebook as enabled external identity providers;
+- Google, Apple, and Facebook as enabled external identity providers; record each ZITADEL provider
+  ID as `ZITADEL_GOOGLE_IDP_ID`, `ZITADEL_APPLE_IDP_ID`, and `ZITADEL_FACEBOOK_IDP_ID` so every
+  application ceremony is pinned to the provider the Listener selected;
 - external identity providers allowed, username/password disabled for this application, automatic
   email/username linking disabled, and interactive account linking enabled;
 - TOTP enabled with Force MFA on and “Force MFA for local authenticated users” off, so external
@@ -29,19 +31,25 @@ is absent, the validated ZITADEL issuer/subject pair remains the link key.
 ## Runtime values
 
 The core needs `APPLICATION_ORIGIN`, `ZITADEL_ISSUER`, the four ZITADEL endpoint variables,
-`ZITADEL_RECOVERY_URI`, `ZITADEL_CLIENT_ID`, and `ZITADEL_CLIENT_SECRET`. Production Terraform reads
+`ZITADEL_RECOVERY_URI`, `ZITADEL_CLIENT_ID`, the three `ZITADEL_*_IDP_ID` values, and
+`ZITADEL_CLIENT_SECRET`. Production Terraform reads
 the client secret from the existing Secret Manager secret named by `zitadel_client_secret_id`; do not
 put it in Terraform variables, repository files, logs, or the browser.
 
-GitHub’s `disposable` environment supplies `ZITADEL_ISSUER`, `ZITADEL_CLIENT_ID`, and
-`ZITADEL_CLIENT_SECRET_ID`. The secret itself must exist in the target disposable project before the
-full apply, and its latest version must contain only the OIDC client secret.
+GitHub’s `disposable` environment supplies `ZITADEL_ISSUER`, `ZITADEL_CLIENT_ID`,
+`ZITADEL_CLIENT_SECRET_ID`, and the three provider IDs. The secret itself must exist in the target
+disposable project before the full apply, and its latest version must contain only the OIDC client
+secret.
 
 ## Session boundary
 
 OIDC authorized-client state and tokens are serialized only into PostgreSQL-backed Spring sessions.
-The browser receives `FOLIO_SESSION` with Secure, HTTP-only, SameSite=Strict attributes and an
-independent CSRF value. The session id changes on authentication and periodically, expires after 15
+The browser receives `FOLIO_SESSION` with Secure, HTTP-only, SameSite=Lax attributes so the
+top-level ZITADEL authorization-code callback retains its state, plus an independent CSRF value.
+The session id changes on authentication and periodically, expires after 15
 minutes idle, and cannot survive eight hours absolute age. Recovery and logout invalidate local state
 before leaving the private surface.
 
+Firebase routes `/` and `/index.html` to the core so the application shell and its CSP nonce are
+generated together on every response. Version-stable same-origin `/assets/app.js` and
+`/assets/app.css` remain immutable Firebase assets; the shell never loads a third-party script.

@@ -1,5 +1,5 @@
 spring:
+  autoconfigure:
+    exclude: org.springframework.boot.session.jdbc.autoconfigure.JdbcSessionAutoConfiguration
   flyway:
     enabled: false
-  session:
-    store-type: none

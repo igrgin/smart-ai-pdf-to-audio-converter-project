@@ -16,9 +16,6 @@ import org.springframework.security.oauth2.client.registration.InMemoryClientReg
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.client.web.HttpSessionOAuth2AuthorizedClientRepository;
-import org.springframework.security.oauth2.core.oidc.user.OidcUser;
-import org.springframework.security.oauth2.client.userinfo.OAuth2UserService;
-import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserRequest;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
@@ -27,6 +24,7 @@ import org.springframework.security.web.csrf.CsrfFilter;
 import org.springframework.security.web.header.HeaderWriterFilter;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 import org.springframework.http.HttpStatus;
+import org.springframework.session.web.http.DefaultCookieSerializer;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(OAuth2ClientProperties.class)
@@ -35,6 +33,17 @@ public class SecurityConfiguration {
     @Bean
     Clock identityClock() {
         return Clock.systemUTC();
+    }
+
+    @Bean
+    DefaultCookieSerializer sessionCookieSerializer(IdentitySecurityProperties properties) {
+        DefaultCookieSerializer serializer = new DefaultCookieSerializer();
+        serializer.setCookieName("FOLIO_SESSION");
+        serializer.setCookiePath("/");
+        serializer.setUseHttpOnlyCookie(true);
+        serializer.setUseSecureCookie(properties.secureSessionCookie());
+        serializer.setSameSite("Lax");
+        return serializer;
     }
 
     @Bean
@@ -65,14 +74,15 @@ public class SecurityConfiguration {
     }
 
     @Bean
-    OAuth2UserService<OidcUserRequest, OidcUser> brokerOidcUserService(BrokerIdentity brokerIdentity) {
-        return new BrokerOidcUserService(brokerIdentity);
+    BrokerOidcUserService brokerOidcUserService(BrokerIdentity brokerIdentity) {
+        return new BrokerOidcUserServiceImpl(brokerIdentity);
     }
 
     @Bean
     OAuth2AuthorizationRequestResolver authorizationRequestResolver(
-            ClientRegistrationRepository clientRegistrationRepository) {
-        return new BrokerAuthorizationRequestResolver(clientRegistrationRepository);
+            ClientRegistrationRepository clientRegistrationRepository,
+            IdentitySecurityProperties properties) {
+        return new BrokerAuthorizationRequestResolver(clientRegistrationRepository, properties);
     }
 
     @Bean
@@ -106,7 +116,7 @@ public class SecurityConfiguration {
             HttpSecurity http,
             SecurityContextRepository securityContextRepository,
             OAuth2AuthorizedClientRepository authorizedClientRepository,
-            OAuth2UserService<OidcUserRequest, OidcUser> brokerOidcUserService,
+            BrokerOidcUserService brokerOidcUserService,
             OAuth2AuthorizationRequestResolver authorizationRequestResolver,
             OidcLoginSuccessHandler successHandler,
             SameOriginFilter sameOriginFilter,
@@ -116,6 +126,8 @@ public class SecurityConfiguration {
                 .securityContext(context -> context.securityContextRepository(securityContextRepository))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(
+                                "/",
+                                "/index.html",
                                 "/api/v1/platform/status",
                                 "/api/v1/auth/session",
                                 "/api/v1/auth/providers",
@@ -135,7 +147,7 @@ public class SecurityConfiguration {
                             if (request.getSession(false) != null) {
                                 request.getSession(false).invalidate();
                             }
-                            response.sendRedirect("/");
+                            response.sendRedirect("/?sign-in=failed");
                         }))
                 .logout(logout -> logout
                         .logoutRequestMatcher(PathPatternRequestMatcher.withDefaults().matcher(

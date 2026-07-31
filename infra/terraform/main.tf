@@ -352,6 +352,18 @@ resource "google_cloud_run_v2_service" "core" {
         value = var.zitadel_client_id
       }
       env {
+        name  = "ZITADEL_GOOGLE_IDP_ID"
+        value = var.zitadel_google_idp_id
+      }
+      env {
+        name  = "ZITADEL_APPLE_IDP_ID"
+        value = var.zitadel_apple_idp_id
+      }
+      env {
+        name  = "ZITADEL_FACEBOOK_IDP_ID"
+        value = var.zitadel_facebook_idp_id
+      }
+      env {
         name = "DATABASE_PASSWORD"
         value_source {
           secret_key_ref {

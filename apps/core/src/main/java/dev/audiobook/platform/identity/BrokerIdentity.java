@@ -7,9 +7,10 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
+import lombok.RequiredArgsConstructor;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 
+@RequiredArgsConstructor
 final class BrokerIdentity {
 
     static final String EXTERNAL_ISSUER_CLAIM = "folio_external_issuer";
@@ -19,15 +20,9 @@ final class BrokerIdentity {
     private final Duration freshAuthenticationMaxAge;
     private final Clock clock;
 
-    BrokerIdentity(URI brokerIssuer, Duration freshAuthenticationMaxAge, Clock clock) {
-        this.brokerIssuer = brokerIssuer;
-        this.freshAuthenticationMaxAge = freshAuthenticationMaxAge;
-        this.clock = clock;
-    }
-
     ExternalIdentity from(SignInProvider provider, OidcUser user) {
         Map<String, Object> claims = user.getClaims();
-        if (!brokerIssuer.toString().equals(claims.get("iss"))) {
+        if (!brokerIssuer.toString().equals(String.valueOf(claims.get("iss")))) {
             throw new BrokerAuthenticationException();
         }
         requireFreshTotp(claims);

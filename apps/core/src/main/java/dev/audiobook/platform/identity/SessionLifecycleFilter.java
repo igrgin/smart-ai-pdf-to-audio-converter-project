@@ -8,9 +8,11 @@ import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
+import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+@RequiredArgsConstructor
 final class SessionLifecycleFilter extends OncePerRequestFilter {
 
     static final String LAST_ROTATION = SessionLifecycleFilter.class.getName() + ".lastRotation";
@@ -18,12 +20,6 @@ final class SessionLifecycleFilter extends OncePerRequestFilter {
     private final Duration absoluteTimeout;
     private final Duration rotationInterval;
     private final Clock clock;
-
-    SessionLifecycleFilter(Duration absoluteTimeout, Duration rotationInterval, Clock clock) {
-        this.absoluteTimeout = absoluteTimeout;
-        this.rotationInterval = rotationInterval;
-        this.clock = clock;
-    }
 
     @Override
     protected void doFilterInternal(

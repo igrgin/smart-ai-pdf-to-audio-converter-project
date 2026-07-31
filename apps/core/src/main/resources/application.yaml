@@ -65,7 +65,9 @@ server:
         name: FOLIO_SESSION
         http-only: true
         secure: true
-        same-site: strict
+        # Lax is required for the top-level authorization-code callback from ZITADEL.
+        # CSRF and exact-Origin checks protect every same-origin mutation.
+        same-site: lax
       tracking-modes: cookie
 
 platform:
@@ -76,6 +78,11 @@ platform:
     allowed-origin: ${APPLICATION_ORIGIN:http://localhost:3000}
     broker-issuer: ${ZITADEL_ISSUER:https://login.eu.example}
     recovery-uri: ${ZITADEL_RECOVERY_URI:https://login.eu.example/ui/v2/login}
+    broker-provider-ids:
+      google: ${ZITADEL_GOOGLE_IDP_ID:google-local}
+      apple: ${ZITADEL_APPLE_IDP_ID:apple-local}
+      facebook: ${ZITADEL_FACEBOOK_IDP_ID:facebook-local}
+    secure-session-cookie: true
     fresh-authentication-max-age: ${FRESH_AUTHENTICATION_MAX_AGE:5m}
     session-absolute-timeout: ${SESSION_ABSOLUTE_TIMEOUT:8h}
     session-rotation-interval: ${SESSION_ROTATION_INTERVAL:10m}

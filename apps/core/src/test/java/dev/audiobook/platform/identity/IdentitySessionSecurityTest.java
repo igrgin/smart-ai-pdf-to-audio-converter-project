@@ -15,6 +15,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +44,7 @@ import org.springframework.test.web.servlet.MvcResult;
 @Import(IdentitySessionSecurityTest.TestOAuthConfiguration.class)
 class IdentitySessionSecurityTest {
 
+    private static final Pattern SCRIPT_NONCE = Pattern.compile("<script nonce=\"([^\"]+)\"");
     private static final UUID LISTENER_ONE = UUID.fromString("01985f42-5f8d-7000-8000-000000000001");
     private static final UUID LISTENER_TWO = UUID.fromString("01985f42-5f8d-7000-8000-000000000002");
 
@@ -53,6 +56,26 @@ class IdentitySessionSecurityTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Test
+    void applicationShellUsesThePerResponseNonceAndOnlySameOriginAssets() throws Exception {
+        MvcResult first = mockMvc.perform(get("/"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andReturn();
+        MvcResult second = mockMvc.perform(get("/"))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        String firstNonce = scriptNonce(first.getResponse().getContentAsString());
+        String secondNonce = scriptNonce(second.getResponse().getContentAsString());
+        assertThat(first.getResponse().getHeader("Content-Security-Policy"))
+                .contains("script-src 'nonce-" + firstNonce + "' 'strict-dynamic'");
+        assertThat(first.getResponse().getContentAsString())
+                .contains("src=\"/assets/app.js\"", "href=\"/assets/app.css\"")
+                .doesNotContain("https://", "http://");
+        assertThat(secondNonce).isNotEqualTo(firstNonce);
+    }
 
     @Test
     void anonymousSessionPublishesOnlyCsrfAndStrictPerResponseHeaders() throws Exception {
@@ -141,6 +164,18 @@ class IdentitySessionSecurityTest {
                 .andExpect(status().isPreconditionRequired())
                 .andExpect(jsonPath("$.reauthenticationRequired").value(true))
                 .andExpect(jsonPath("$.authorizationPath").value("/oauth2/authorization/google"));
+
+        mockMvc.perform(post("/api/v1/auth/links/facebook")
+                        .header("Accept", "text/html")
+                        .header("Origin", "http://localhost:3000")
+                        .with(authentication(listenerAuthentication(
+                                LISTENER_ONE,
+                                "Listener",
+                                null,
+                                Instant.now().minusSeconds(360))))
+                        .with(csrf()))
+                .andExpect(status().isSeeOther())
+                .andExpect(redirectedUrl("/oauth2/authorization/google"));
     }
 
     @Test
@@ -152,7 +187,8 @@ class IdentitySessionSecurityTest {
                         org.hamcrest.Matchers.containsString("code_challenge="),
                         org.hamcrest.Matchers.containsString("code_challenge_method=S256"),
                         org.hamcrest.Matchers.containsString("prompt=login"),
-                        org.hamcrest.Matchers.containsString("max_age=0"))));
+                        org.hamcrest.Matchers.containsString("max_age=0"),
+                        org.hamcrest.Matchers.containsString("idp=google-idp"))));
     }
 
     @Test
@@ -178,6 +214,12 @@ class IdentitySessionSecurityTest {
 
     private static UsernamePasswordAuthenticationToken listenerAuthentication(UUID listenerId, String name, String email) {
         return listenerAuthentication(listenerId, name, email, Instant.now());
+    }
+
+    private static String scriptNonce(String html) {
+        Matcher matcher = SCRIPT_NONCE.matcher(html);
+        assertThat(matcher.find()).isTrue();
+        return matcher.group(1);
     }
 
     private static UsernamePasswordAuthenticationToken listenerAuthentication(

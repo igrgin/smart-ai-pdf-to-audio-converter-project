@@ -12,7 +12,6 @@
       {
         "source": "**",
         "headers": [
-          { "key": "Content-Security-Policy", "value": "default-src 'none'; script-src 'nonce-folio-shell' 'strict-dynamic'; style-src 'self'; font-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; require-trusted-types-for 'script'; trusted-types folio" },
           { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
           { "key": "Cross-Origin-Resource-Policy", "value": "same-origin" },
           { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
@@ -54,6 +53,22 @@
       },
       {
         "source": "/api/**",
+        "run": {
+          "serviceId": "folio-core",
+          "region": "europe-west1",
+          "pinTag": true
+        }
+      },
+      {
+        "source": "/",
+        "run": {
+          "serviceId": "folio-core",
+          "region": "europe-west1",
+          "pinTag": true
+        }
+      },
+      {
+        "source": "/index.html",
         "run": {
           "serviceId": "folio-core",
           "region": "europe-west1",

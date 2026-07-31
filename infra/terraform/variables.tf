@@ -48,3 +48,18 @@ variable "zitadel_client_secret_id" {
   description = "Secret Manager secret ID containing the ZITADEL OIDC client secret."
   type        = string
 }
+
+variable "zitadel_google_idp_id" {
+  description = "ZITADEL identity-provider ID for Google."
+  type        = string
+}
+
+variable "zitadel_apple_idp_id" {
+  description = "ZITADEL identity-provider ID for Apple."
+  type        = string
+}
+
+variable "zitadel_facebook_idp_id" {
+  description = "ZITADEL identity-provider ID for Facebook."
+  type        = string
+}

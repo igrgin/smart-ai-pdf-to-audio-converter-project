@@ -9,6 +9,10 @@ server:
       cookie:
         secure: false
 
+platform:
+  identity:
+    secure-session-cookie: false
+
 management:
   tracing:
     sampling:

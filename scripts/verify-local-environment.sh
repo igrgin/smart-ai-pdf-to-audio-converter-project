@@ -48,4 +48,14 @@ jq -e '.hosting.rewrites | any(.source == "/oauth2/**") and any(.source == "/log
   exit 1
 }
 
+jq -e '.hosting.rewrites | any(.source == "/" and .run.serviceId == "folio-core") and any(.source == "/index.html" and .run.serviceId == "folio-core")' firebase.json >/dev/null || {
+  echo "Firebase must obtain the nonce-bearing application shell from the core" >&2
+  exit 1
+}
+
+jq -e '[.hosting.headers[].headers[] | select(.key == "Content-Security-Policy")] | length == 0' firebase.json >/dev/null || {
+  echo "Firebase must not replace the core's per-response CSP" >&2
+  exit 1
+}
+
 echo "local environment contract is valid"

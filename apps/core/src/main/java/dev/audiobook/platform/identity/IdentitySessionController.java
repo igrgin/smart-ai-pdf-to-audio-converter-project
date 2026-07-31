@@ -61,6 +61,11 @@ public class IdentitySessionController {
         }
 
         if (principal.authenticatedAt().isBefore(clock.instant().minus(properties.freshAuthenticationMaxAge()))) {
+            if (accept != null && accept.contains("text/html")) {
+                return ResponseEntity.status(HttpStatus.SEE_OTHER)
+                        .location(URI.create(authorizationPath(principal.currentProvider())))
+                        .build();
+            }
             return ResponseEntity.status(HttpStatus.PRECONDITION_REQUIRED).body(Map.of(
                     "reauthenticationRequired", true,
                     "authorizationPath", authorizationPath(principal.currentProvider())));

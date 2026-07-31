@@ -48,6 +48,11 @@ platform:
     allowed-origin: http://localhost:3000
     broker-issuer: https://login.eu.example
     recovery-uri: https://login.eu.example/ui/v2/login
+    broker-provider-ids:
+      google: google-idp
+      apple: apple-idp
+      facebook: facebook-idp
+    secure-session-cookie: false
     fresh-authentication-max-age: 5m
     session-absolute-timeout: 8h
     session-rotation-interval: 10m

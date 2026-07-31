@@ -1,8 +1,6 @@
 spring:
   flyway:
     enabled: true
-  session:
-    store-type: jdbc
 
 management:
   tracing:
