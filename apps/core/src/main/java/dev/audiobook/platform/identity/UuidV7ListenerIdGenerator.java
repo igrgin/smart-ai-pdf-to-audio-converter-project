@@ -3,24 +3,17 @@ package dev.audiobook.platform.identity;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.util.UUID;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 @Component
+@RequiredArgsConstructor
 final class UuidV7ListenerIdGenerator implements ListenerIdGenerator {
 
     private static final long RAND_B_MASK = 0x3fff_ffff_ffff_ffffL;
 
     private final Clock clock;
     private final SecureRandom random;
-
-    UuidV7ListenerIdGenerator() {
-        this(Clock.systemUTC(), new SecureRandom());
-    }
-
-    UuidV7ListenerIdGenerator(Clock clock, SecureRandom random) {
-        this.clock = clock;
-        this.random = random;
-    }
 
     @Override
     public UUID generate() {

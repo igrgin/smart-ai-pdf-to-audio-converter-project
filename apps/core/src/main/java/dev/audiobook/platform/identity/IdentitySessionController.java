@@ -61,6 +61,10 @@ public class IdentitySessionController {
         }
 
         if (principal.authenticatedAt().isBefore(clock.instant().minus(properties.freshAuthenticationMaxAge()))) {
+            httpSession.setAttribute(
+                    IdentityLinkCeremony.SESSION_ATTRIBUTE,
+                    IdentityLinkCeremony.awaitingCurrent(
+                            principal.listenerId(), principal.currentProvider(), requestedProvider));
             if (accept != null && accept.contains("text/html")) {
                 return ResponseEntity.status(HttpStatus.SEE_OTHER)
                         .location(URI.create(authorizationPath(principal.currentProvider())))
@@ -71,8 +75,10 @@ public class IdentitySessionController {
                     "authorizationPath", authorizationPath(principal.currentProvider())));
         }
 
-        httpSession.setAttribute(IdentityLinkCeremony.LISTENER_ID, principal.listenerId());
-        httpSession.setAttribute(IdentityLinkCeremony.PROVIDER, requestedProvider.name());
+        httpSession.setAttribute(
+                IdentityLinkCeremony.SESSION_ATTRIBUTE,
+                IdentityLinkCeremony.awaitingTarget(
+                        principal.listenerId(), principal.currentProvider(), requestedProvider));
         if (accept != null && accept.contains("text/html")) {
             return ResponseEntity.status(HttpStatus.SEE_OTHER)
                     .location(URI.create(authorizationPath(requestedProvider)))

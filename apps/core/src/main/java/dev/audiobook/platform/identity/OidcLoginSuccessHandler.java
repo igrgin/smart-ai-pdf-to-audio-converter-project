@@ -8,7 +8,6 @@ import java.io.IOException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
-import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -57,19 +56,31 @@ final class OidcLoginSuccessHandler implements AuthenticationSuccessHandler {
         ExternalIdentity externalIdentity = brokerIdentity.from(provider, oidcUser);
         HttpSession httpSession = request.getSession(true);
 
-        Object pendingListener = httpSession.getAttribute(IdentityLinkCeremony.LISTENER_ID);
-        Object pendingProvider = httpSession.getAttribute(IdentityLinkCeremony.PROVIDER);
+        Object pendingLink = httpSession.getAttribute(IdentityLinkCeremony.SESSION_ATTRIBUTE);
         ListenerSession listener;
-        if (pendingListener instanceof UUID listenerId && provider.name().equals(pendingProvider)) {
-            listener = listenerIdentityService.link(listenerId, externalIdentity);
-        } else if (pendingListener == null && pendingProvider == null) {
+        String redirect = "/";
+        if (pendingLink instanceof IdentityLinkCeremony ceremony
+                && ceremony.stage() == IdentityLinkCeremony.Stage.AWAITING_CURRENT
+                && provider == ceremony.currentProvider()) {
+            listener = listenerIdentityService.establish(externalIdentity);
+            if (!listener.listenerId().equals(ceremony.listenerId())) {
+                throw new BrokerAuthenticationException();
+            }
+            httpSession.setAttribute(
+                    IdentityLinkCeremony.SESSION_ATTRIBUTE,
+                    ceremony.afterCurrentAuthentication());
+            redirect = authorizationPath(ceremony.targetProvider());
+        } else if (pendingLink instanceof IdentityLinkCeremony ceremony
+                && ceremony.stage() == IdentityLinkCeremony.Stage.AWAITING_TARGET
+                && provider == ceremony.targetProvider()) {
+            listener = listenerIdentityService.link(ceremony.listenerId(), externalIdentity);
+            httpSession.removeAttribute(IdentityLinkCeremony.SESSION_ATTRIBUTE);
+        } else if (pendingLink == null) {
             listener = listenerIdentityService.establish(externalIdentity);
         } else {
             throw new BrokerAuthenticationException();
         }
 
-        httpSession.removeAttribute(IdentityLinkCeremony.LISTENER_ID);
-        httpSession.removeAttribute(IdentityLinkCeremony.PROVIDER);
         request.changeSessionId();
         httpSession.setAttribute(SessionLifecycleFilter.LAST_ROTATION, clock.millis());
 
@@ -89,7 +100,11 @@ final class OidcLoginSuccessHandler implements AuthenticationSuccessHandler {
         context.setAuthentication(listenerAuthentication);
         SecurityContextHolder.setContext(context);
         securityContextRepository.saveContext(context, request, response);
-        response.sendRedirect("/");
+        response.sendRedirect(redirect);
+    }
+
+    private static String authorizationPath(SignInProvider provider) {
+        return "/oauth2/authorization/" + provider.name().toLowerCase(java.util.Locale.ROOT);
     }
 
     private static Instant authenticatedAt(OidcUser user) {

@@ -3,7 +3,7 @@
 Issue #21 is accepted at the observable same-origin HTTP boundary. Focused identity tests exercise
 the `ListenerIdentityService` interface; implementation tests exercise the running Spring application,
 real Spring Security OAuth callback/token/JWK/user-info boundaries, PostgreSQL, and a deterministic
-external broker double.
+containerized external broker double.
 
 | Behavior or failure mode | Expected observable result | Coverage |
 | --- | --- | --- |
@@ -12,9 +12,10 @@ external broker double.
 | The broker token endpoint fails | Authentication returns the bounded failure redirect and creates no authenticated session | `IdentitySessionITest` |
 | Apple supplies a relay email or a provider supplies no email | Sign-in succeeds; the value is optional contact metadata | `ListenerIdentityServiceImplTest`, `IdentitySessionITest` |
 | Two subjects supply the same email | Two independent Listener Identities are created | `ListenerIdentityServiceImplTest` |
-| The same issuer and subject authenticate again | The existing Listener Identity is selected | `ListenerIdentityServiceImplTest` |
-| A current Listener links a fresh, interactively authenticated second provider | The issuer/subject pair is attached to that Listener | `ListenerIdentityServiceImplTest`, `IdentitySessionITest` |
-| A link is attempted without fresh current authentication or without a pending link ceremony | The request or callback is denied | `IdentitySessionSecurityTest`, `IdentitySessionITest` |
+| The same issuer and subject authenticate again | The existing Listener Identity is selected | `ListenerIdentityServiceImplTest`, `IdentitySessionITest` |
+| A current Listener links a fresh, interactively authenticated second provider | Google–Apple, Google–Facebook, and Apple–Facebook pairs attach to the Listener | `ListenerIdentityServiceImplTest`, `IdentitySessionITest` |
+| A stale Listener starts a link | The current provider is freshly reauthenticated before the requested provider ceremony resumes | `IdentitySessionSecurityTest`, `IdentitySessionITest` |
+| A callback provider does not match the pending link ceremony | The bounded failure redirect invalidates the session | `IdentitySessionITest` |
 | A new issuer/subject pair is already owned by another Listener | Linking is denied with the same bounded response used for other link failures | `ListenerIdentityServiceImplTest`, `IdentitySessionITest` |
 | Recovery is started | The local session is invalidated before redirecting to ZITADEL self-service | `IdentitySessionITest` |
 | Logout is requested with valid CSRF and origin evidence | The local session and server-side OIDC state are invalidated | `IdentitySessionITest` |

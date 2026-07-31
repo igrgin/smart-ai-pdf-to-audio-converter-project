@@ -1,5 +1,6 @@
 package dev.audiobook.platform.identity;
 
+import java.security.SecureRandom;
 import java.time.Clock;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -33,6 +34,11 @@ public class SecurityConfiguration {
     @Bean
     Clock identityClock() {
         return Clock.systemUTC();
+    }
+
+    @Bean
+    SecureRandom identitySecureRandom() {
+        return new SecureRandom();
     }
 
     @Bean

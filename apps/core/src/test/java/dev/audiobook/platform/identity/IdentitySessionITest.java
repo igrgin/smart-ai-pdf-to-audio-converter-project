@@ -42,6 +42,8 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.utility.DockerImageName;
 import tools.jackson.databind.ObjectMapper;
 
 @Testcontainers(disabledWithoutDocker = true)
@@ -52,24 +54,39 @@ class IdentitySessionITest {
     private static final String ORIGIN = "http://localhost:3000";
     private static final BrokerServer BROKER = BrokerServer.start();
 
+    static {
+        org.testcontainers.Testcontainers.exposeHostPorts(BROKER.port());
+    }
+
     @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17.6-alpine")
             .withDatabaseName("audiobook")
             .withUsername("audiobook")
             .withPassword("integration-test-only");
 
+    @Container
+    static final GenericContainer<?> BROKER_CONTAINER = new GenericContainer<>(
+            DockerImageName.parse("alpine/socat:1.8.0.3"))
+            .withExposedPorts(8080)
+            .withCommand(
+                    "tcp-listen:8080,fork,reuseaddr",
+                    "tcp-connect:host.testcontainers.internal:" + BROKER.port());
+
     @DynamicPropertySource
     static void applicationProperties(DynamicPropertyRegistry registry) {
+        String brokerOrigin = "http://" + BROKER_CONTAINER.getHost() + ":" + BROKER_CONTAINER.getMappedPort(8080);
+        BROKER.advertise(brokerOrigin);
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
-        registry.add("spring.security.oauth2.client.provider.zitadel.authorization-uri", BROKER::authorizationUri);
-        registry.add("spring.security.oauth2.client.provider.zitadel.token-uri", BROKER::tokenUri);
-        registry.add("spring.security.oauth2.client.provider.zitadel.user-info-uri", BROKER::userInfoUri);
-        registry.add("spring.security.oauth2.client.provider.zitadel.jwk-set-uri", BROKER::jwkSetUri);
+        registry.add("spring.security.oauth2.client.provider.zitadel.authorization-uri", () -> brokerOrigin + "/oauth/v2/authorize");
+        registry.add("spring.security.oauth2.client.provider.zitadel.token-uri", () -> brokerOrigin + "/oauth/v2/token");
+        registry.add("spring.security.oauth2.client.provider.zitadel.user-info-uri", () -> brokerOrigin + "/oidc/v1/userinfo");
+        registry.add("spring.security.oauth2.client.provider.zitadel.jwk-set-uri", () -> brokerOrigin + "/oauth/v2/keys");
         registry.add("platform.identity.broker-issuer", BROKER::issuer);
         registry.add("platform.identity.session-rotation-interval", () -> "100ms");
-        registry.add("spring.session.timeout", () -> "5s");
+        registry.add("platform.identity.fresh-authentication-max-age", () -> "5s");
+        registry.add("spring.session.timeout", () -> "8s");
     }
 
     @LocalServerPort
@@ -123,10 +140,34 @@ class IdentitySessionITest {
                 "shared-apple", "relay@privaterelay.appleid.com", "First Listener", "mfa", "otp"));
         assertThat(get(first, "/api/v1/library").body()).contains("apple", "google");
 
+        startLink(first, "facebook");
+        authenticate(first, "facebook", scenario("facebook-one", null, "First Listener", "mfa", "otp"));
+        assertThat(get(first, "/api/v1/library").body()).contains("apple", "facebook", "google");
+
+        startLink(missingEmail, "facebook");
+        authenticate(missingEmail, "facebook", scenario("facebook-three", null, "No Email", "mfa", "otp"));
+        assertThat(get(missingEmail, "/api/v1/library").body()).contains("apple", "facebook");
+
+        SessionClient returning = client();
+        csrf(returning);
+        authenticate(returning, "google", scenario("google-one", null, "Ignored Metadata", "mfa", "otp"));
+        assertThat(get(returning, "/api/v1/library").body())
+                .contains("First Listener", "apple", "facebook", "google")
+                .doesNotContain("Ignored Metadata");
+
         startLink(second, "apple");
         String denied = authenticate(second, "apple", scenario("shared-apple", null, "Second Listener", "mfa", "otp"));
         assertThat(denied).isEqualTo("/?sign-in=failed");
         assertThat(get(second, "/api/v1/library").statusCode()).isEqualTo(401);
+
+        SessionClient mismatchedLink = client();
+        csrf(mismatchedLink);
+        authenticate(mismatchedLink, "google", scenario("mismatch-current", null, "Mismatch", "mfa", "otp"));
+        startLink(mismatchedLink, "apple");
+        assertThat(authenticate(mismatchedLink, "facebook", scenario(
+                "mismatch-target", null, "Mismatch", "mfa", "otp")))
+                .isEqualTo("/?sign-in=failed");
+        assertThat(get(mismatchedLink, "/api/v1/library").statusCode()).isEqualTo(401);
 
         for (String provider : List.of("google", "apple", "facebook")) {
             SessionClient rejected = client();
@@ -154,10 +195,26 @@ class IdentitySessionITest {
         assertThat(recovery.headers().firstValue("location")).contains("https://login.eu.example/ui/v2/login");
         assertThat(get(recoveryClient, "/api/v1/library").statusCode()).isEqualTo(401);
 
+        SessionClient staleLink = client();
+        csrf(staleLink);
+        authenticate(staleLink, "google", scenario("stale-current", null, "Stale Link", "mfa", "otp"));
+        Thread.sleep(5_200);
+        String staleCsrf = csrf(staleLink);
+        HttpResponse<String> currentReauthentication = htmlPost(
+                staleLink, "/api/v1/auth/links/facebook", staleCsrf);
+        assertThat(currentReauthentication.statusCode()).isEqualTo(303);
+        assertThat(currentReauthentication.headers().firstValue("location"))
+                .contains("/oauth2/authorization/google");
+        assertThat(authenticate(staleLink, "google", scenario(
+                "stale-current", null, "Stale Link", "mfa", "otp")))
+                .startsWith("/oauth2/authorization/facebook");
+        authenticate(staleLink, "facebook", scenario("stale-target", null, "Stale Link", "mfa", "otp"));
+        assertThat(get(staleLink, "/api/v1/library").body()).contains("facebook", "google");
+
         SessionClient idle = client();
         csrf(idle);
         authenticate(idle, "google", scenario("idle-listener", null, "Idle Listener", "mfa", "otp"));
-        Thread.sleep(5_200);
+        Thread.sleep(8_200);
         assertThat(get(idle, "/api/v1/library").statusCode()).isEqualTo(401);
     }
 
@@ -199,6 +256,16 @@ class IdentitySessionITest {
 
     private HttpResponse<String> apiPost(SessionClient client, String path, String csrf) throws Exception {
         HttpRequest request = request(path)
+                .header("Origin", ORIGIN)
+                .header("X-CSRF-TOKEN", csrf)
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+        return client.http().send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> htmlPost(SessionClient client, String path, String csrf) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                .header("Accept", "text/html")
                 .header("Origin", ORIGIN)
                 .header("X-CSRF-TOKEN", csrf)
                 .POST(HttpRequest.BodyPublishers.noBody())
@@ -273,6 +340,7 @@ class IdentitySessionITest {
         private final HttpServer server;
         private final RSAKey signingKey;
         private final AtomicReference<BrokerScenario> scenario = new AtomicReference<>();
+        private final AtomicReference<String> advertisedIssuer = new AtomicReference<>();
 
         private BrokerServer(HttpServer server, RSAKey signingKey) {
             this.server = server;
@@ -301,23 +369,16 @@ class IdentitySessionITest {
         }
 
         String issuer() {
-            return "http://127.0.0.1:" + server.getAddress().getPort();
+            String advertised = advertisedIssuer.get();
+            return advertised == null ? "http://127.0.0.1:" + port() : advertised;
         }
 
-        String authorizationUri() {
-            return issuer() + "/oauth/v2/authorize";
+        int port() {
+            return server.getAddress().getPort();
         }
 
-        String tokenUri() {
-            return issuer() + "/oauth/v2/token";
-        }
-
-        String userInfoUri() {
-            return issuer() + "/oidc/v1/userinfo";
-        }
-
-        String jwkSetUri() {
-            return issuer() + "/oauth/v2/keys";
+        void advertise(String issuer) {
+            advertisedIssuer.set(issuer);
         }
 
         void answer(BrokerScenario answer) {
