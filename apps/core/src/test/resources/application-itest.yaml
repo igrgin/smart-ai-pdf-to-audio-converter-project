@@ -1,6 +1,31 @@
 spring:
+  datasource:
+    url: "jdbc:tc:postgresql:17.6-alpine:///audiobook?user=audiobook&password=integration-test-only"
+    username: audiobook
+    password: integration-test-only
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
   flyway:
     enabled: true
+  security:
+    oauth2:
+      client:
+        provider:
+          zitadel:
+            authorization-uri: http://localhost:29121/oauth/v2/authorize
+            token-uri: http://localhost:29121/oauth/v2/token
+            user-info-uri: http://localhost:29121/oidc/v1/userinfo
+            jwk-set-uri: http://localhost:29121/oauth/v2/keys
+  session:
+    timeout: 8s
+
+platform:
+  build:
+    version: itest
+    revision: test-revision
+  identity:
+    broker-issuer: http://localhost:29121
+    fresh-authentication-max-age: 5s
+    session-rotation-interval: 100ms
 
 management:
   tracing:

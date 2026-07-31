@@ -25,13 +25,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.utility.MountableFile;
 import tools.jackson.databind.ObjectMapper;
@@ -42,36 +39,13 @@ import tools.jackson.databind.ObjectMapper;
 class IdentitySessionITest {
 
     private static final String ORIGIN = "http://localhost:3000";
+    private static final int BROKER_HOST_PORT = 29_121;
 
     @Container
-    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17.6-alpine")
-            .withDatabaseName("audiobook")
-            .withUsername("audiobook")
-            .withPassword("integration-test-only");
-
-    @Container
-    static final GenericContainer<?> BROKER_CONTAINER = new GenericContainer<>(
-            DockerImageName.parse("node:22-alpine"))
-            .withExposedPorts(8080)
+    static final FixedPortBrokerContainer BROKER_CONTAINER = new FixedPortBrokerContainer()
             .withCopyFileToContainer(MountableFile.forClasspathResource("broker-server.mjs"), "/broker-server.mjs")
             .withCommand("node", "/broker-server.mjs")
             .waitingFor(Wait.forListeningPort());
-
-    @DynamicPropertySource
-    static void applicationProperties(DynamicPropertyRegistry registry) {
-        String brokerOrigin = "http://" + BROKER_CONTAINER.getHost() + ":" + BROKER_CONTAINER.getMappedPort(8080);
-        registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
-        registry.add("spring.datasource.username", POSTGRES::getUsername);
-        registry.add("spring.datasource.password", POSTGRES::getPassword);
-        registry.add("spring.security.oauth2.client.provider.zitadel.authorization-uri", () -> brokerOrigin + "/oauth/v2/authorize");
-        registry.add("spring.security.oauth2.client.provider.zitadel.token-uri", () -> brokerOrigin + "/oauth/v2/token");
-        registry.add("spring.security.oauth2.client.provider.zitadel.user-info-uri", () -> brokerOrigin + "/oidc/v1/userinfo");
-        registry.add("spring.security.oauth2.client.provider.zitadel.jwk-set-uri", () -> brokerOrigin + "/oauth/v2/keys");
-        registry.add("platform.identity.broker-issuer", () -> brokerOrigin);
-        registry.add("platform.identity.session-rotation-interval", () -> "100ms");
-        registry.add("platform.identity.fresh-authentication-max-age", () -> "5s");
-        registry.add("spring.session.timeout", () -> "8s");
-    }
 
     @LocalServerPort
     private int port;
@@ -393,6 +367,14 @@ class IdentitySessionITest {
 
         BrokerScenario withNonce(String value) {
             return new BrokerScenario(subject, email, displayName, authenticationMethods, value);
+        }
+    }
+
+    private static final class FixedPortBrokerContainer extends GenericContainer<FixedPortBrokerContainer> {
+
+        private FixedPortBrokerContainer() {
+            super(DockerImageName.parse("node:22-alpine"));
+            addFixedExposedPort(BROKER_HOST_PORT, 8080);
         }
     }
 
