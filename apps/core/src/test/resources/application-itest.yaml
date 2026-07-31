@@ -1,6 +1,16 @@
 spring:
+  datasource:
+    url: "jdbc:tc:postgresql:17.6-alpine:///audiobook?user=audiobook&password=integration-test-only"
+    username: audiobook
+    password: integration-test-only
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
   flyway:
     enabled: true
+
+platform:
+  build:
+    version: itest
+    revision: test-revision
 
 management:
   tracing:
