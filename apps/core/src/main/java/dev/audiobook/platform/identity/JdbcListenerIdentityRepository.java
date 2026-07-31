@@ -61,7 +61,20 @@ class JdbcListenerIdentityRepository implements ListenerIdentityRepository {
                 listenerId,
                 externalIdentity.displayName(),
                 externalIdentity.email());
-        insertLink(listenerId, externalIdentity);
+        int created = jdbcTemplate.update(
+                """
+                INSERT INTO external_identity_link (issuer, subject, listener_id, provider)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (issuer, subject) DO NOTHING
+                """,
+                externalIdentity.issuer().toString(),
+                externalIdentity.subject(),
+                listenerId,
+                externalIdentity.provider().name());
+        if (created == 0) {
+            jdbcTemplate.update("DELETE FROM listener_identity WHERE listener_id = ?", listenerId);
+            return findByExternalIdentity(externalIdentity.issuer(), externalIdentity.subject()).orElseThrow();
+        }
         return findById(listenerId).orElseThrow();
     }
 

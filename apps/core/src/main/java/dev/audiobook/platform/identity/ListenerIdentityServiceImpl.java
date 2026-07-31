@@ -22,12 +22,7 @@ public class ListenerIdentityServiceImpl implements ListenerIdentityService {
         if (existing.isPresent()) {
             return existing.orElseThrow();
         }
-        try {
-            return repository.create(listenerIdGenerator.generate(), externalIdentity);
-        } catch (DuplicateKeyException race) {
-            return repository.findByExternalIdentity(externalIdentity.issuer(), externalIdentity.subject())
-                    .orElseThrow(() -> race);
-        }
+        return repository.create(listenerIdGenerator.generate(), externalIdentity);
     }
 
     @Override

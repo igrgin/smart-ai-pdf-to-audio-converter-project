@@ -13,6 +13,7 @@ containerized external broker double.
 | Apple supplies a relay email or a provider supplies no email | Sign-in succeeds; the value is optional contact metadata | `ListenerIdentityServiceImplTest`, `IdentitySessionITest` |
 | Two subjects supply the same email | Two independent Listener Identities are created | `ListenerIdentityServiceImplTest` |
 | The same issuer and subject authenticate again | The existing Listener Identity is selected | `ListenerIdentityServiceImplTest`, `IdentitySessionITest` |
+| Concurrent first callbacks present the same issuer and subject | Both sessions select one Listener Identity without an aborted transaction or orphan record | `IdentitySessionITest` |
 | A current Listener links a fresh, interactively authenticated second provider | Google–Apple, Google–Facebook, and Apple–Facebook pairs attach to the Listener | `ListenerIdentityServiceImplTest`, `IdentitySessionITest` |
 | A stale Listener starts a link | The current provider is freshly reauthenticated before the requested provider ceremony resumes | `IdentitySessionSecurityTest`, `IdentitySessionITest` |
 | A callback provider does not match the pending link ceremony | The bounded failure redirect invalidates the session | `IdentitySessionITest` |

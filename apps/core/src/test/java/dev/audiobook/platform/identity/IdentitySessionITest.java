@@ -2,19 +2,8 @@ package dev.audiobook.platform.identity;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.nimbusds.jose.JOSEObjectType;
-import com.nimbusds.jose.JWSAlgorithm;
-import com.nimbusds.jose.JWSHeader;
-import com.nimbusds.jose.crypto.RSASSASigner;
-import com.nimbusds.jose.jwk.RSAKey;
-import com.nimbusds.jwt.JWTClaimsSet;
-import com.nimbusds.jwt.SignedJWT;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
-import java.io.IOException;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
-import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
@@ -22,28 +11,29 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.interfaces.RSAPrivateKey;
-import java.security.interfaces.RSAPublicKey;
-import java.time.Instant;
-import java.util.Date;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.AfterAll;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
-import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
+import org.testcontainers.utility.MountableFile;
 import tools.jackson.databind.ObjectMapper;
 
 @Testcontainers(disabledWithoutDocker = true)
@@ -52,11 +42,6 @@ import tools.jackson.databind.ObjectMapper;
 class IdentitySessionITest {
 
     private static final String ORIGIN = "http://localhost:3000";
-    private static final BrokerServer BROKER = BrokerServer.start();
-
-    static {
-        org.testcontainers.Testcontainers.exposeHostPorts(BROKER.port());
-    }
 
     @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17.6-alpine")
@@ -66,16 +51,15 @@ class IdentitySessionITest {
 
     @Container
     static final GenericContainer<?> BROKER_CONTAINER = new GenericContainer<>(
-            DockerImageName.parse("alpine/socat:1.8.0.3"))
+            DockerImageName.parse("node:22-alpine"))
             .withExposedPorts(8080)
-            .withCommand(
-                    "tcp-listen:8080,fork,reuseaddr",
-                    "tcp-connect:host.testcontainers.internal:" + BROKER.port());
+            .withCopyFileToContainer(MountableFile.forClasspathResource("broker-server.mjs"), "/broker-server.mjs")
+            .withCommand("node", "/broker-server.mjs")
+            .waitingFor(Wait.forListeningPort());
 
     @DynamicPropertySource
     static void applicationProperties(DynamicPropertyRegistry registry) {
         String brokerOrigin = "http://" + BROKER_CONTAINER.getHost() + ":" + BROKER_CONTAINER.getMappedPort(8080);
-        BROKER.advertise(brokerOrigin);
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
@@ -83,7 +67,7 @@ class IdentitySessionITest {
         registry.add("spring.security.oauth2.client.provider.zitadel.token-uri", () -> brokerOrigin + "/oauth/v2/token");
         registry.add("spring.security.oauth2.client.provider.zitadel.user-info-uri", () -> brokerOrigin + "/oidc/v1/userinfo");
         registry.add("spring.security.oauth2.client.provider.zitadel.jwk-set-uri", () -> brokerOrigin + "/oauth/v2/keys");
-        registry.add("platform.identity.broker-issuer", BROKER::issuer);
+        registry.add("platform.identity.broker-issuer", () -> brokerOrigin);
         registry.add("platform.identity.session-rotation-interval", () -> "100ms");
         registry.add("platform.identity.fresh-authentication-max-age", () -> "5s");
         registry.add("spring.session.timeout", () -> "8s");
@@ -93,10 +77,11 @@ class IdentitySessionITest {
     private int port;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final JdbcTemplate jdbcTemplate;
 
-    @AfterAll
-    static void stopBroker() {
-        BROKER.close();
+    @Autowired
+    IdentitySessionITest(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     @Test
@@ -218,12 +203,71 @@ class IdentitySessionITest {
         assertThat(get(idle, "/api/v1/library").statusCode()).isEqualTo(401);
     }
 
+    @Test
+    void concurrentFirstCallbacksEstablishOneListenerIdentity() throws Exception {
+        jdbcTemplate.execute("""
+                CREATE FUNCTION delay_concurrent_identity_link() RETURNS trigger AS $$
+                BEGIN
+                    IF NEW.subject = 'google-concurrent-race' THEN
+                        PERFORM pg_sleep(0.5);
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """);
+        jdbcTemplate.execute("""
+                CREATE TRIGGER delay_concurrent_identity_link
+                BEFORE INSERT ON external_identity_link
+                FOR EACH ROW EXECUTE FUNCTION delay_concurrent_identity_link()
+                """);
+
+        SessionClient first = client();
+        SessionClient second = client();
+        csrf(first);
+        csrf(second);
+        BrokerScenario scenario = scenario(
+                "google-concurrent-race", null, "Concurrent Listener", "mfa", "otp");
+        PreparedAuthentication firstCallback = prepareAuthentication(first, "google", scenario);
+        PreparedAuthentication secondCallback = prepareAuthentication(second, "google", scenario);
+        CountDownLatch start = new CountDownLatch(1);
+
+        try (var callbacks = Executors.newFixedThreadPool(2)) {
+            Future<String> firstResult = callbacks.submit(() -> completeAuthentication(firstCallback, start));
+            Future<String> secondResult = callbacks.submit(() -> completeAuthentication(secondCallback, start));
+            start.countDown();
+
+            assertThat(firstResult.get(10, TimeUnit.SECONDS)).isEqualTo("/");
+            assertThat(secondResult.get(10, TimeUnit.SECONDS)).isEqualTo("/");
+        }
+
+        assertThat(get(first, "/api/v1/library").body()).contains("Concurrent Listener", "google");
+        assertThat(get(second, "/api/v1/library").body()).contains("Concurrent Listener", "google");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM external_identity_link WHERE issuer = ? AND subject = ?",
+                Integer.class,
+                "https://accounts.google.com",
+                "google-concurrent-race"))
+                .isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM listener_identity WHERE display_name = ?",
+                Integer.class,
+                "Concurrent Listener"))
+                .isEqualTo(1);
+    }
+
     private void startLink(SessionClient client, String provider) throws Exception {
         HttpResponse<String> response = apiPost(client, "/api/v1/auth/links/" + provider, csrf(client));
         assertThat(response.statusCode()).isEqualTo(202);
     }
 
     private String authenticate(SessionClient client, String provider, BrokerScenario scenario) throws Exception {
+        return completeAuthentication(prepareAuthentication(client, provider, scenario), null);
+    }
+
+    private PreparedAuthentication prepareAuthentication(
+            SessionClient client,
+            String provider,
+            BrokerScenario scenario) throws Exception {
         HttpResponse<String> authorization = get(client, "/oauth2/authorization/" + provider);
         assertThat(authorization.statusCode()).isBetween(300, 399);
         URI location = URI.create(authorization.headers().firstValue("location").orElseThrow());
@@ -236,14 +280,26 @@ class IdentitySessionITest {
                 .containsEntry("idp", provider + "-idp");
         assertThat(parameters.get("code_challenge")).isNotBlank();
 
-        BROKER.answer(scenario.withNonce(parameters.get("nonce")));
+        BrokerScenario authorizedScenario = scenario.withNonce(parameters.get("nonce"));
+        String scenarioCode = Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(objectMapper.writeValueAsBytes(authorizedScenario));
         String callback = "/login/oauth2/code/" + provider
-                + "?code=" + encode("code-" + scenario.subject())
+                + "?code=" + encode("code-" + scenarioCode)
                 + "&state=" + encode(parameters.get("state"));
-        HttpResponse<String> response = get(client, callback);
+        return new PreparedAuthentication(client, callback, scenario);
+    }
+
+    private String completeAuthentication(
+            PreparedAuthentication prepared,
+            CountDownLatch start) throws Exception {
+        if (start != null) {
+            start.await(10, TimeUnit.SECONDS);
+        }
+        HttpResponse<String> response = get(prepared.client(), prepared.callback());
         assertThat(response.statusCode()).isBetween(300, 399);
         assertThat(response.body()).doesNotContain(
-                scenario.subject(), "same@example.test", "relay@privaterelay.appleid.com");
+                prepared.scenario().subject(), "same@example.test", "relay@privaterelay.appleid.com");
         URI redirect = URI.create(response.headers().firstValue("location").orElseThrow());
         return redirect.getRawPath() + (redirect.getRawQuery() == null ? "" : "?" + redirect.getRawQuery());
     }
@@ -322,6 +378,12 @@ class IdentitySessionITest {
         }
     }
 
+    private record PreparedAuthentication(
+            SessionClient client,
+            String callback,
+            BrokerScenario scenario) {
+    }
+
     private record BrokerScenario(
             String subject,
             String email,
@@ -334,137 +396,4 @@ class IdentitySessionITest {
         }
     }
 
-    private static final class BrokerServer implements AutoCloseable {
-
-        private static final ObjectMapper JSON = new ObjectMapper();
-        private final HttpServer server;
-        private final RSAKey signingKey;
-        private final AtomicReference<BrokerScenario> scenario = new AtomicReference<>();
-        private final AtomicReference<String> advertisedIssuer = new AtomicReference<>();
-
-        private BrokerServer(HttpServer server, RSAKey signingKey) {
-            this.server = server;
-            this.signingKey = signingKey;
-        }
-
-        static BrokerServer start() {
-            try {
-                KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-                generator.initialize(2048);
-                KeyPair pair = generator.generateKeyPair();
-                RSAKey key = new RSAKey.Builder((RSAPublicKey) pair.getPublic())
-                        .privateKey((RSAPrivateKey) pair.getPrivate())
-                        .keyID("folio-itest")
-                        .build();
-                HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-                BrokerServer broker = new BrokerServer(server, key);
-                server.createContext("/oauth/v2/token", broker::token);
-                server.createContext("/oidc/v1/userinfo", broker::userInfo);
-                server.createContext("/oauth/v2/keys", broker::keys);
-                server.start();
-                return broker;
-            } catch (Exception failure) {
-                throw new IllegalStateException(failure);
-            }
-        }
-
-        String issuer() {
-            String advertised = advertisedIssuer.get();
-            return advertised == null ? "http://127.0.0.1:" + port() : advertised;
-        }
-
-        int port() {
-            return server.getAddress().getPort();
-        }
-
-        void advertise(String issuer) {
-            advertisedIssuer.set(issuer);
-        }
-
-        void answer(BrokerScenario answer) {
-            scenario.set(answer);
-        }
-
-        private void token(HttpExchange exchange) throws IOException {
-            String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            if (!request.contains("grant_type=authorization_code") || !request.contains("code_verifier=")) {
-                respond(exchange, 400, "{\"error\":\"invalid_request\"}");
-                return;
-            }
-            BrokerScenario answer = scenario.get();
-            if (answer.subject().equals("token-failure")) {
-                respond(exchange, 503, "{\"error\":\"temporarily_unavailable\"}");
-                return;
-            }
-            try {
-                String token = idToken(answer);
-                respond(exchange, 200, "{\"access_token\":\"server-only-access\",\"token_type\":\"Bearer\","
-                        + "\"expires_in\":300,\"id_token\":\"" + token + "\"}");
-            } catch (Exception failure) {
-                respond(exchange, 500, "{\"error\":\"server_error\"}");
-            }
-        }
-
-        private void userInfo(HttpExchange exchange) throws IOException {
-            BrokerScenario answer = scenario.get();
-            Map<String, Object> claims = new LinkedHashMap<>();
-            claims.put("sub", "zitadel-" + answer.subject());
-            claims.put("name", answer.displayName());
-            if (answer.email() != null) {
-                claims.put("email", answer.email());
-            }
-            respond(exchange, 200, JSON.writeValueAsString(claims));
-        }
-
-        private void keys(HttpExchange exchange) throws IOException {
-            respond(exchange, 200, "{\"keys\":[" + signingKey.toPublicJWK().toJSONString() + "]}");
-        }
-
-        private String idToken(BrokerScenario answer) throws Exception {
-            Instant now = Instant.now();
-            String provider = answer.subject().split("-", 2)[0];
-            JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder()
-                    .issuer(issuer())
-                    .subject("zitadel-" + answer.subject())
-                    .audience("folio-test")
-                    .issueTime(Date.from(now.minusSeconds(1)))
-                    .expirationTime(Date.from(now.plusSeconds(300)))
-                    .claim("auth_time", Date.from(now))
-                    .claim("nonce", answer.nonce())
-                    .claim("amr", answer.authenticationMethods())
-                    .claim("folio_external_issuer", providerIssuer(provider))
-                    .claim("folio_external_subject", answer.subject())
-                    .claim("name", answer.displayName());
-            if (answer.email() != null) {
-                claims.claim("email", answer.email());
-            }
-            SignedJWT jwt = new SignedJWT(
-                    new JWSHeader.Builder(JWSAlgorithm.RS256).type(JOSEObjectType.JWT).keyID(signingKey.getKeyID()).build(),
-                    claims.build());
-            jwt.sign(new RSASSASigner(signingKey));
-            return jwt.serialize();
-        }
-
-        private static String providerIssuer(String provider) {
-            return switch (provider) {
-                case "google" -> "https://accounts.google.com";
-                case "apple", "shared" -> "https://appleid.apple.com";
-                case "facebook" -> "https://www.facebook.com";
-                default -> "https://identity.example";
-            };
-        }
-
-        private static void respond(HttpExchange exchange, int status, String body) throws IOException {
-            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().set("Content-Type", "application/json");
-            exchange.sendResponseHeaders(status, bytes.length);
-            exchange.getResponseBody().write(bytes);
-            exchange.close();
-        }
-
-        @Override
-        public void close() {
-            server.stop(0);
-        }
-    }
 }
