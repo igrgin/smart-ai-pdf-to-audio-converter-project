@@ -27,8 +27,10 @@ public class PlatformStatusServiceImpl implements PlatformStatusService {
 
     private PlatformStatus.Availability databaseAvailability() {
         try {
-            jdbcTemplate.queryForObject("select 1", Integer.class);
-            return AVAILABLE;
+            Boolean migrationReady = jdbcTemplate.queryForObject(
+                    "select exists(select 1 from platform_status where singleton)",
+                    Boolean.class);
+            return Boolean.TRUE.equals(migrationReady) ? AVAILABLE : DEGRADED;
         } catch (DataAccessException exception) {
             return DEGRADED;
         }

@@ -46,7 +46,7 @@ function App() {
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
-      void audio.play().then(() => setIsPlaying(true));
+      void audio.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
     } else {
       audio.pause();
       setIsPlaying(false);

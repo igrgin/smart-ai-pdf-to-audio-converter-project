@@ -1,10 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
 describe("public sample", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("shows the sample and same-origin platform availability", async () => {
@@ -39,5 +40,51 @@ describe("public sample", () => {
 
     await waitFor(() => expect(screen.getByText(/status delayed/i)).toBeVisible());
     expect(screen.getByRole("button", { name: /play public sample/i })).toBeEnabled();
+  });
+
+  it("switches between the Clear Signal and Midnight Library themes", () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /switch to dark mode/i }));
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(screen.getByRole("button", { name: /switch to light mode/i })).toBeVisible();
+  });
+
+  it("plays, pauses, and resets the public sample when it ends", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    let paused = true;
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => {
+      paused = false;
+      return Promise.resolve();
+    });
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {
+      paused = true;
+    });
+    vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(() => paused);
+
+    const { container } = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /play public sample/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /pause public sample/i })).toBeVisible());
+
+    fireEvent.click(screen.getByRole("button", { name: /pause public sample/i }));
+    expect(pause).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: /play public sample/i })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: /play public sample/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /pause public sample/i })).toBeVisible());
+    fireEvent.ended(container.querySelector("audio")!);
+    expect(screen.getByRole("button", { name: /play public sample/i })).toBeVisible();
+  });
+
+  it("stays ready when the browser rejects audio playback", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /play public sample/i }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /play public sample/i })).toBeVisible());
   });
 });
