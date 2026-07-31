@@ -151,7 +151,15 @@ describe("public sample", () => {
             displayName: "Mara",
             contactEmail: "relay@privaterelay.appleid.com",
             signInMethods: ["apple", "google"],
-            audiobooks: []
+            audiobooks: [],
+            conversionEntitlement: {
+              status: "AVAILABLE",
+              grantedCharacters: 500000,
+              availableCharacters: 500000,
+              reservedCharacters: 0,
+              committedCharacters: 0,
+              canStartConversion: true
+            }
           })
         });
       }
@@ -165,11 +173,55 @@ describe("public sample", () => {
     expect(screen.getAllByText("Mara")).toHaveLength(2);
     expect(screen.getByText("relay@privaterelay.appleid.com")).toBeVisible();
     expect(screen.getByText(/your first audiobook will live here/i)).toBeVisible();
+    expect(screen.getByText(/500,000 narratable characters available/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /create audiobook/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /add sign-in method/i })).toBeEnabled();
     expect(container.textContent).not.toContain("01985f42");
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/library", {
       headers: { Accept: "application/json" },
       signal: expect.any(AbortSignal)
     });
+  });
+
+  it("clearly denies conversion when the Listener has no free Conversion Entitlement", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            authenticated: true,
+            listener: { displayName: "Mara", signInMethods: ["google"] },
+            csrf: { headerName: "X-CSRF-TOKEN", parameterName: "_csrf", token: "private-csrf" }
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/library")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            displayName: "Mara",
+            signInMethods: ["google"],
+            audiobooks: [],
+            conversionEntitlement: {
+              status: "NO_GRANT",
+              grantedCharacters: 0,
+              availableCharacters: 0,
+              reservedCharacters: 0,
+              committedCharacters: 0,
+              canStartConversion: false,
+              denialReason: "NO_GRANT"
+            }
+          })
+        });
+      }
+      return Promise.resolve({ ok: false });
+    }));
+
+    render(<App />);
+
+    expect(await screen.findByText(/no free conversion entitlement is available yet/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /create audiobook/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /start a private audiobook/i })).toBeDisabled();
   });
 });

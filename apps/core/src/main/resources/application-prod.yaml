@@ -27,6 +27,16 @@ platform:
   build:
     version: ${BUILD_VERSION}
     revision: ${BUILD_REVISION}
+  entitlement:
+    free-grant-characters: ${FREE_GRANT_CHARACTERS}
+    free-grant-validity: ${FREE_GRANT_VALIDITY}
+    per-conversion-character-ceiling: ${PER_CONVERSION_CHARACTER_CEILING}
+    per-conversion-spend-ceiling-micros: ${PER_CONVERSION_SPEND_CEILING_MICROS}
+    per-listener-spend-ceiling-micros: ${PER_LISTENER_SPEND_CEILING_MICROS}
+    provider-spend-ceiling-micros: ${PROVIDER_SPEND_CEILING_MICROS}
+    global-spend-ceiling-micros: ${GLOBAL_SPEND_CEILING_MICROS}
+    per-listener-concurrency: ${PER_LISTENER_CONCURRENCY}
+    global-concurrency: ${GLOBAL_CONCURRENCY}
   identity:
     allowed-origin: ${APPLICATION_ORIGIN}
     broker-issuer: ${ZITADEL_ISSUER}
@@ -35,6 +45,7 @@ platform:
       google: ${ZITADEL_GOOGLE_IDP_ID}
       apple: ${ZITADEL_APPLE_IDP_ID}
       facebook: ${ZITADEL_FACEBOOK_IDP_ID}
+    operator-listener-ids: ${OPERATOR_LISTENER_IDS}
 
 management:
   tracing:

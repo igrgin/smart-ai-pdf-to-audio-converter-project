@@ -214,6 +214,7 @@ function PublicStudio({
 function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }) {
   const [methodsOpen, setMethodsOpen] = useState(false);
   const availableProviders = providers.filter((provider) => !library.signInMethods.includes(provider));
+  const canStartConversion = library.conversionEntitlement.canStartConversion;
   return (
     <section className="library-studio" aria-labelledby="library-title">
       <div className="library-heading">
@@ -222,7 +223,7 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
           <h1 id="library-title">Your Library</h1>
           <p>Welcome back, <strong>{library.displayName}</strong>.</p>
         </div>
-        <Button><Upload size={17} /> Create audiobook</Button>
+        <Button disabled={!canStartConversion}><Upload size={17} /> Create audiobook</Button>
       </div>
 
       <div className="library-grid">
@@ -230,36 +231,57 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
           <span className="empty-mark" aria-hidden="true"><BookOpen size={28} /></span>
           <h2>Your first audiobook will live here</h2>
           <p>Choose an authorized PDF or DRM-free EPUB when you’re ready. Nothing leaves your device until you confirm.</p>
-          <Button><Plus size={17} /> Start a private audiobook</Button>
+          <Button disabled={!canStartConversion}><Plus size={17} /> Start a private audiobook</Button>
         </article>
 
-        <aside className="identity-card" aria-labelledby="identity-title">
-          <span className="card-kicker">Listener Identity</span>
-          <h2 id="identity-title">{library.displayName}</h2>
-          {library.contactEmail && <p>{library.contactEmail}</p>}
-          <div className="method-list" aria-label="Linked sign-in methods">
-            {library.signInMethods.map((method) => <span key={method}>{providerLabel(method)} <ShieldCheck size={14} /></span>)}
-          </div>
-          {availableProviders.length > 0 && (
-            <>
-              <Button type="button" variant="outline" onClick={() => setMethodsOpen(!methodsOpen)}>
-                <Plus size={16} /> Add sign-in method
-              </Button>
-              {methodsOpen && (
-                <div className="link-methods">
-                  <p>Fresh authentication of both methods is required.</p>
-                  {availableProviders.map((provider) => (
-                    <CsrfForm key={provider} action={`/api/v1/auth/links/${provider}`} csrf={csrf}>
-                      <Button type="submit" variant="ghost">Add {providerLabel(provider)}</Button>
-                    </CsrfForm>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </aside>
+        <div className="library-sidebar">
+          <EntitlementCard entitlement={library.conversionEntitlement} />
+          <aside className="identity-card" aria-labelledby="identity-title">
+            <span className="card-kicker">Listener Identity</span>
+            <h2 id="identity-title">{library.displayName}</h2>
+            {library.contactEmail && <p>{library.contactEmail}</p>}
+            <div className="method-list" aria-label="Linked sign-in methods">
+              {library.signInMethods.map((method) => <span key={method}>{providerLabel(method)} <ShieldCheck size={14} /></span>)}
+            </div>
+            {availableProviders.length > 0 && (
+              <>
+                <Button type="button" variant="outline" onClick={() => setMethodsOpen(!methodsOpen)}>
+                  <Plus size={16} /> Add sign-in method
+                </Button>
+                {methodsOpen && (
+                  <div className="link-methods">
+                    <p>Fresh authentication of both methods is required.</p>
+                    {availableProviders.map((provider) => (
+                      <CsrfForm key={provider} action={`/api/v1/auth/links/${provider}`} csrf={csrf}>
+                        <Button type="submit" variant="ghost">Add {providerLabel(provider)}</Button>
+                      </CsrfForm>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </aside>
+        </div>
       </div>
     </section>
+  );
+}
+
+function EntitlementCard({ entitlement }: { entitlement: Library["conversionEntitlement"] }) {
+  return (
+    <aside className={`entitlement-card entitlement-card--${entitlement.canStartConversion ? "available" : "denied"}`} aria-labelledby="entitlement-title">
+      <span className="card-kicker">Conversion Entitlement</span>
+      <h2 id="entitlement-title">
+        {entitlement.canStartConversion
+          ? `${entitlement.availableCharacters.toLocaleString("en-US")} narratable characters available`
+          : "No free Conversion Entitlement is available yet"}
+      </h2>
+      <p>
+        {entitlement.canStartConversion
+          ? "Your allowance is reserved only after the narration plan is measured."
+          : "A conversion can start after an approved free grant is added to your Listener Identity."}
+      </p>
+    </aside>
   );
 }
 
