@@ -1,0 +1,7 @@
+spring:
+  flyway:
+    enabled: true
+
+management:
+  tracing:
+    enabled: false

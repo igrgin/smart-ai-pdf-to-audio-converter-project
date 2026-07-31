@@ -1,0 +1,12 @@
+{
+  "projects": {
+    "default": "replace-with-disposable-gcp-project"
+  },
+  "targets": {
+    "replace-with-disposable-gcp-project": {
+      "hosting": {
+        "app": ["replace-with-firebase-site-id"]
+      }
+    }
+  }
+}

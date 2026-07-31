@@ -1,0 +1,118 @@
+name: Deploy disposable environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: Disposable Google Cloud project ID
+        required: true
+        type: string
+      environment_name:
+        description: Lowercase environment name, for example pr-20
+        required: true
+        type: string
+      action:
+        description: Create/update or destroy the environment
+        required: true
+        default: apply
+        type: choice
+        options: [apply, destroy]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: disposable-${{ inputs.project_id }}-${{ inputs.environment_name }}
+  cancel-in-progress: false
+
+env:
+  REGION: europe-west1
+  TERRAFORM_VERSION: 1.15.8
+  NODE_VERSION: 24.18.1
+  NPM_VERSION: 11.8.0
+  FIREBASE_TOOLS_VERSION: 15.25.1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: disposable
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - name: Initialize environment state
+        working-directory: infra/terraform
+        run: >-
+          terraform init -input=false
+          -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+          -backend-config="prefix=folio/${{ inputs.environment_name }}"
+
+      - name: Destroy disposable environment
+        if: inputs.action == 'destroy'
+        working-directory: infra/terraform
+        run: >-
+          terraform destroy -auto-approve -input=false
+          -var="project_id=${{ inputs.project_id }}"
+          -var="environment_name=${{ inputs.environment_name }}"
+          -var="core_image=invalid.example/core@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+      - name: Bootstrap APIs and Artifact Registry
+        if: inputs.action == 'apply'
+        working-directory: infra/terraform
+        run: >-
+          terraform apply -auto-approve -input=false
+          -target=google_project_service.required
+          -target=google_artifact_registry_repository.containers
+          -var="project_id=${{ inputs.project_id }}"
+          -var="environment_name=${{ inputs.environment_name }}"
+          -var="core_image=invalid.example/core@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+      - name: Build immutable core image
+        if: inputs.action == 'apply'
+        id: image
+        run: |
+          repository="${REGION}-docker.pkg.dev/${{ inputs.project_id }}/folio-${{ inputs.environment_name }}-containers"
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker buildx create --use
+          docker buildx build \
+            --file apps/core/Dockerfile \
+            --tag "${repository}/core:${GITHUB_SHA}" \
+            --sbom=true \
+            --provenance=mode=max \
+            --push .
+          digest=$(gcloud artifacts docker images describe "${repository}/core:${GITHUB_SHA}" --format='value(image_summary.digest)')
+          echo "reference=${repository}/core@${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Apply private managed topology and Cloud Run
+        if: inputs.action == 'apply'
+        working-directory: infra/terraform
+        run: >-
+          terraform apply -auto-approve -input=false
+          -var="project_id=${{ inputs.project_id }}"
+          -var="environment_name=${{ inputs.environment_name }}"
+          -var="core_image=${{ steps.image.outputs.reference }}"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: inputs.action == 'apply'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Build and deploy Firebase Hosting
+        if: inputs.action == 'apply'
+        run: |
+          npm install --global "npm@${NPM_VERSION}" "firebase-tools@${FIREBASE_TOOLS_VERSION}"
+          npm ci --ignore-scripts
+          npm run build
+          site_id=$(terraform -chdir=infra/terraform output -raw firebase_site_id)
+          firebase use "${{ inputs.project_id }}"
+          firebase target:apply hosting app "$site_id"
+          firebase deploy --only hosting:app --project "${{ inputs.project_id }}" --non-interactive
+          echo "Deployed https://${site_id}.web.app" >> "$GITHUB_STEP_SUMMARY"

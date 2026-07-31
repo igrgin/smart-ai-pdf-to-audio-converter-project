@@ -1,0 +1,198 @@
+name: audiobook-platform
+
+x-core-build: &core-build
+  context: .
+  dockerfile: apps/core/Dockerfile
+
+x-worker-environment: &worker-environment
+  APP_MODE: worker
+  WORKER_IDLE: "true"
+  SPRING_MAIN_WEB_APPLICATION_TYPE: none
+  SPRING_PROFILES_ACTIVE: dev
+  FLYWAY_ENABLED: "false"
+  DATABASE_URL: jdbc:postgresql://postgres:5432/audiobook
+  DATABASE_USER: audiobook
+  DATABASE_PASSWORD: audiobook-local
+  PUBSUB_EMULATOR_HOST: queue-emulator:8085
+  WORKING_OBJECT_STORE_ENDPOINT: http://object-store-working:9000
+  FINAL_OBJECT_STORE_ENDPOINT: http://object-store-finalized:9000
+  NOTIFICATION_ENDPOINT: smtp://notification-sink:1025
+  ANALYTICS_ENDPOINT: http://analytics-sink:8080
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://telemetry:4318
+
+x-worker: &worker
+  build: *core-build
+  image: audiobook-platform-core:local
+  profiles: [workers]
+  restart: unless-stopped
+  depends_on:
+    migrations:
+      condition: service_completed_successfully
+    queue-emulator:
+      condition: service_started
+  environment: *worker-environment
+
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: audiobook
+      POSTGRES_USER: audiobook
+      POSTGRES_PASSWORD: audiobook-local
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U audiobook -d audiobook"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  migrations:
+    image: flyway/flyway:13.1.0-alpine
+    command: migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/audiobook
+      FLYWAY_USER: audiobook
+      FLYWAY_PASSWORD: audiobook-local
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql
+      FLYWAY_CONNECT_RETRIES: "12"
+    volumes:
+      - ./apps/core/src/main/resources/db/migration:/flyway/sql:ro
+
+  queue-emulator:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:543.0.0-emulators
+    command: gcloud beta emulators pubsub start --project=local-audiobook --host-port=0.0.0.0:8085
+    ports:
+      - "8085:8085"
+
+  object-store-working:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: working-local
+      MINIO_ROOT_PASSWORD: working-local-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - working-objects:/data
+
+  object-store-finalized:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: finalized-local
+      MINIO_ROOT_PASSWORD: finalized-local-secret
+    ports:
+      - "9010:9000"
+      - "9011:9001"
+    volumes:
+      - finalized-objects:/data
+
+  telemetry:
+    image: grafana/otel-lgtm:0.30.0
+    ports:
+      - "3001:3000"
+      - "4317:4317"
+      - "4318:4318"
+
+  notification-sink:
+    image: axllent/mailpit:v1.30.6
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  analytics-sink:
+    image: wiremock/wiremock:3.13.2-alpine
+    command: --global-response-templating --disable-gzip
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./local/analytics:/home/wiremock:ro
+
+  core:
+    build: *core-build
+    image: audiobook-platform-core:local
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      FLYWAY_ENABLED: "false"
+      DATABASE_URL: jdbc:postgresql://postgres:5432/audiobook
+      DATABASE_USER: audiobook
+      DATABASE_PASSWORD: audiobook-local
+      BUILD_VERSION: local
+      BUILD_REVISION: compose
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://telemetry:4318/v1/traces
+    ports:
+      - "8080:8080"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: audiobook-platform-web:local
+    depends_on:
+      core:
+        condition: service_started
+    ports:
+      - "3000:8080"
+
+  worker-inspection:
+    <<: *worker
+    environment:
+      <<: *worker-environment
+      WORKER_STAGE: inspection
+
+  worker-extraction:
+    <<: *worker
+    environment:
+      <<: *worker-environment
+      WORKER_STAGE: extraction
+
+  worker-narration-analysis:
+    <<: *worker
+    environment:
+      <<: *worker-environment
+      WORKER_STAGE: narration-analysis
+
+  worker-speech:
+    <<: *worker
+    environment:
+      <<: *worker-environment
+      WORKER_STAGE: speech
+
+  worker-packaging:
+    <<: *worker
+    environment:
+      <<: *worker-environment
+      WORKER_STAGE: packaging
+
+  worker-finalization:
+    <<: *worker
+    environment:
+      <<: *worker-environment
+      WORKER_STAGE: finalization
+
+  worker-erasure:
+    <<: *worker
+    environment:
+      <<: *worker-environment
+      WORKER_STAGE: erasure
+
+  worker-reconciliation:
+    <<: *worker
+    environment:
+      <<: *worker-environment
+      WORKER_STAGE: reconciliation
+
+volumes:
+  postgres-data:
+  working-objects:
+  finalized-objects:

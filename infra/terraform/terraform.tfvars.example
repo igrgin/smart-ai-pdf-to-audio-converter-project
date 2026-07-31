@@ -1,0 +1,4 @@
+project_id       = "replace-with-disposable-gcp-project"
+environment_name = "pr-20"
+region           = "europe-west1"
+core_image       = "europe-west1-docker.pkg.dev/example/project/core@sha256:replace-with-64-hex-characters"

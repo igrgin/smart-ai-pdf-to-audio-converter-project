@@ -1,0 +1,17 @@
+{
+  "name": "Folio Private Audiobooks",
+  "short_name": "Folio",
+  "description": "A private studio for authorized AI-narrated audiobooks.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f4f1",
+  "theme_color": "#8f2942",
+  "icons": [
+    {
+      "src": "/brand-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
