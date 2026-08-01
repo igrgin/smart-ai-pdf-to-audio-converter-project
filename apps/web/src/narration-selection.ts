@@ -46,7 +46,8 @@ export async function confirmGenerationRecipe(
   conversionId: string,
   voiceId: string,
   pace: NarrationPace,
-  csrf: CsrfProof
+  csrf: CsrfProof,
+  expectedConversionVersion = 0
 ): Promise<ConfirmedGenerationRecipe> {
   const response = await fetch(`/api/v1/audiobook-conversions/${conversionId}/generation-recipe`, {
     method: "POST",
@@ -54,7 +55,7 @@ export async function confirmGenerationRecipe(
       Accept: "application/json",
       "Content-Type": "application/json",
       "Idempotency-Key": crypto.randomUUID(),
-      "If-Match": "\"0\"",
+      "If-Match": `"${expectedConversionVersion}"`,
       [csrf.headerName]: csrf.token
     },
     body: JSON.stringify({ voiceId, pace })

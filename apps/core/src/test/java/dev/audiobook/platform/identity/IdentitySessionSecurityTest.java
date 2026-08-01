@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import dev.audiobook.platform.admission.PublicationSubmissionService;
+import dev.audiobook.platform.narration.NarrationSelectionService;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
 import java.time.Instant;
 import java.util.List;
@@ -63,6 +64,9 @@ class IdentitySessionSecurityTest {
 
     @MockitoBean
     private AudiobookConversionService audiobookConversionService;
+
+    @MockitoBean
+    private NarrationSelectionService narrationSelectionService;
 
     @MockitoBean
     private DataSource dataSource;
@@ -140,6 +144,37 @@ class IdentitySessionSecurityTest {
 
         assertThat(first.getResponse().getContentAsString()).doesNotContain(LISTENER_ONE.toString(), LISTENER_TWO.toString());
         assertThat(second.getResponse().getContentAsString()).doesNotContain(LISTENER_ONE.toString(), LISTENER_TWO.toString(), "First Listener");
+    }
+
+    @Test
+    void privateLibraryExposesAnExplicitNarrationRechoiceWithoutProviderDetails() throws Exception {
+        UUID conversionId = UUID.fromString("01985f42-5f8d-7000-8000-000000000028");
+        UUID recipeId = UUID.fromString("01985f42-5f8d-7000-8000-000000000128");
+        UUID voiceId = UUID.fromString("10000000-0000-7000-8000-000000000001");
+        when(conversionEntitlementService.allowance(LISTENER_ONE)).thenReturn(noGrantAllowance());
+        when(audiobookConversionService.conversions(LISTENER_ONE)).thenReturn(List.of(
+                new AudiobookConversionService.AudiobookConversion(
+                        conversionId, AudiobookConversionService.ConversionState.PREPARING)));
+        when(narrationSelectionService.narrationChoice(LISTENER_ONE, conversionId)).thenReturn(
+                new NarrationSelectionService.NarrationChoiceStatus(
+                        1,
+                        recipeId,
+                        voiceId,
+                        "Rowan",
+                        NarrationSelectionService.NarrationPace.NATURAL,
+                        true));
+
+        MvcResult result = mockMvc.perform(get("/api/v1/library").with(authentication(listenerAuthentication(
+                        LISTENER_ONE, "First Listener", null))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.audiobooks[0].conversionId").value(conversionId.toString()))
+                .andExpect(jsonPath("$.audiobooks[0].version").value(1))
+                .andExpect(jsonPath("$.audiobooks[0].voiceDisplayName").value("Rowan"))
+                .andExpect(jsonPath("$.audiobooks[0].pace").value("NATURAL"))
+                .andExpect(jsonPath("$.audiobooks[0].explicitNarrationChoiceRequired").value(true))
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString()).doesNotContain("openai", "modelSnapshot", "providerVoice");
     }
 
     private static ConversionEntitlementService.Allowance noGrantAllowance() {

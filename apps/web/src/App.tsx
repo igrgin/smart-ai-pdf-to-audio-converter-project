@@ -18,6 +18,7 @@ import { Button } from "./components/ui/button";
 import {
   fetchIdentitySession,
   fetchLibrary,
+  type AudiobookConversion,
   type CsrfProof,
   type IdentitySession,
   type Library
@@ -222,7 +223,7 @@ function PublicStudio({
 
 function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }) {
   const [methodsOpen, setMethodsOpen] = useState(false);
-  const [creationOpen, setCreationOpen] = useState(false);
+  const [creationTarget, setCreationTarget] = useState<AudiobookConversion | null | undefined>(undefined);
   const availableProviders = providers.filter((provider) => !library.signInMethods.includes(provider));
   const canStartConversion = library.conversionEntitlement.canStartConversion;
   return (
@@ -233,7 +234,7 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
           <h1 id="library-title">Your Library</h1>
           <p>Welcome back, <strong>{library.displayName}</strong>.</p>
         </div>
-        <Button disabled={!canStartConversion} onClick={() => setCreationOpen(true)}><Upload size={17} /> Create audiobook</Button>
+        <Button disabled={!canStartConversion} onClick={() => setCreationTarget(null)}><Upload size={17} /> Create audiobook</Button>
       </div>
 
       <div className="library-grid">
@@ -242,7 +243,7 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
             <span className="empty-mark" aria-hidden="true"><BookOpen size={28} /></span>
             <h2>Your first audiobook will live here</h2>
             <p>Choose an authorized PDF or DRM-free EPUB when you’re ready. Nothing leaves your device until you confirm.</p>
-            <Button disabled={!canStartConversion} onClick={() => setCreationOpen(true)}><Plus size={17} /> Start a private audiobook</Button>
+            <Button disabled={!canStartConversion} onClick={() => setCreationTarget(null)}><Plus size={17} /> Start a private audiobook</Button>
           </article>
         ) : (
           <div className="conversion-list" aria-label="Private audiobooks">
@@ -251,7 +252,16 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
                 <span className="empty-mark" aria-hidden="true"><Sparkles size={28} /></span>
                 <span className="card-kicker">{conversion.state}</span>
                 <h2>Preparing your private audiobook</h2>
-                <p>The publication passed quarantine inspection. Folio is preparing its narration plan.</p>
+                <p>
+                  {conversion.explicitNarrationChoiceRequired
+                    ? "The current Generation Recipe is no longer eligible. Choose explicitly before speech can begin."
+                    : `Folio is preparing ${conversion.voiceDisplayName ?? "the selected Narrator Voice"} at ${conversion.pace ? paceLabel(conversion.pace) : "Natural"} pace.`}
+                </p>
+                {conversion.explicitNarrationChoiceRequired && (
+                  <Button type="button" variant="outline" onClick={() => setCreationTarget(conversion)}>
+                    Choose a new Narrator Voice
+                  </Button>
+                )}
               </article>
             ))}
           </div>
@@ -286,12 +296,26 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
           </aside>
         </div>
       </div>
-      {creationOpen && <CreateAudiobookDialog csrf={csrf} onClose={() => setCreationOpen(false)} />}
+      {creationTarget !== undefined && (
+        <CreateAudiobookDialog
+          csrf={csrf}
+          existingConversion={creationTarget ?? undefined}
+          onClose={() => setCreationTarget(undefined)}
+        />
+      )}
     </section>
   );
 }
 
-function CreateAudiobookDialog({ csrf, onClose }: { csrf: CsrfProof; onClose: () => void }) {
+function CreateAudiobookDialog({
+  csrf,
+  existingConversion,
+  onClose
+}: {
+  csrf: CsrfProof;
+  existingConversion?: AudiobookConversion;
+  onClose: () => void;
+}) {
   const [file, setFile] = useState<File | null>(null);
   const [attested, setAttested] = useState(false);
   const [stage, setStage] = useState<TransferStage | "CONFIRMING" | "PREPARING" | "FAILED" | null>(null);
@@ -332,18 +356,23 @@ function CreateAudiobookDialog({ csrf, onClose }: { csrf: CsrfProof; onClose: ()
   };
 
   const create = async () => {
-    if (!file || !attested || !selectedVoiceId || busy) return;
+    if ((!existingConversion && (!file || !attested)) || !selectedVoiceId || busy) return;
     setSubmission(null);
     setRecipe(null);
     try {
-      const result = await submitAuthorizedEpub(file, csrf, setStage);
-      setSubmission(result);
-      if (result.state !== "ADMITTED" || !result.conversionId) {
-        setStage("FAILED");
-        return;
-      }
+      const result = existingConversion
+        ? { submissionId: "", state: "ADMITTED" as const, conversionId: existingConversion.conversionId }
+        : await submitAuthorizedEpub(file!, csrf, setStage);
+      if (!existingConversion) setSubmission(result);
+      if (result.state !== "ADMITTED" || !result.conversionId) throw new Error("Conversion is not ready for narration");
       setStage("CONFIRMING");
-      const confirmed = await confirmGenerationRecipe(result.conversionId, selectedVoiceId, pace, csrf);
+      const confirmed = await confirmGenerationRecipe(
+        result.conversionId,
+        selectedVoiceId,
+        pace,
+        csrf,
+        existingConversion?.version ?? 0
+      );
       setRecipe(confirmed);
       setStage("PREPARING");
     } catch {
@@ -372,8 +401,8 @@ function CreateAudiobookDialog({ csrf, onClose }: { csrf: CsrfProof; onClose: ()
     <div className="dialog-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
       <section className="create-dialog" role="dialog" aria-modal="true" aria-labelledby="create-title" onMouseDown={(event) => event.stopPropagation()}>
         <button className="dialog-close" type="button" onClick={onClose} disabled={busy} aria-label="Close Create audiobook">×</button>
-        <span className="card-kicker">Private creation flow</span>
-        <h2 id="create-title">Create a private audiobook</h2>
+        <span className="card-kicker">{existingConversion ? "Explicit narration re-choice" : "Private creation flow"}</span>
+        <h2 id="create-title">{existingConversion ? "Choose a new Narrator Voice" : "Create a private audiobook"}</h2>
         {stage === "PREPARING" ? (
           <div className="creation-result" aria-live="polite">
             <Sparkles size={24} />
@@ -382,11 +411,11 @@ function CreateAudiobookDialog({ csrf, onClose }: { csrf: CsrfProof; onClose: ()
               The EPUB passed quarantine inspection. {recipe?.voiceDisplayName} at {paceLabel(recipe?.pace ?? pace)} pace
               is frozen for generation while Folio prepares its narration plan.
             </p>
-            <span>Conversion {submission?.conversionId?.slice(0, 8)}</span>
+            <span>Conversion {(recipe?.conversionId ?? submission?.conversionId)?.slice(0, 8)}</span>
           </div>
         ) : (
           <>
-            <label
+            {!existingConversion && <label
               className="epub-dropzone"
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
@@ -403,8 +432,8 @@ function CreateAudiobookDialog({ csrf, onClose }: { csrf: CsrfProof; onClose: ()
                 onChange={(event) => choose(event.target.files?.[0])}
                 disabled={busy}
               />
-            </label>
-            {file && <p className="local-file">{file.name} stays on this device until you activate Create audiobook.</p>}
+            </label>}
+            {!existingConversion && file && <p className="local-file">{file.name} stays on this device until you activate Create audiobook.</p>}
             <section className="narrator-choice" aria-labelledby="narrator-choice-title">
               <div className="choice-heading">
                 <div>
@@ -469,14 +498,18 @@ function CreateAudiobookDialog({ csrf, onClose }: { csrf: CsrfProof; onClose: ()
               </div>
               <p>Audiobook-wide narration intent; playback speed stays independent.</p>
             </fieldset>
-            <label className="attestation-check">
+            {!existingConversion && <label className="attestation-check">
               <input type="checkbox" checked={attested} onChange={(event) => setAttested(event.target.checked)} disabled={busy} />
               <span>I attest that I’m permitted to reproduce this DRM-free publication as a private audiobook.</span>
-            </label>
-            <p className="rights-note">Rights Attestation · terms rights-v1 · notice notice-v1</p>
+            </label>}
+            {!existingConversion && <p className="rights-note">Rights Attestation · terms rights-v1 · notice notice-v1</p>}
             {stage && <p className={`creation-status creation-status--${stage.toLowerCase()}`} aria-live="polite">{stageLabel(stage)}</p>}
-            <Button type="button" onClick={() => void create()} disabled={!file || !attested || !selectedVoice || busy}>
-              <Upload size={17} /> Create audiobook
+            <Button
+              type="button"
+              onClick={() => void create()}
+              disabled={(!existingConversion && (!file || !attested)) || !selectedVoice || busy}
+            >
+              <Upload size={17} /> {existingConversion ? "Confirm new choice" : "Create audiobook"}
             </Button>
           </>
         )}

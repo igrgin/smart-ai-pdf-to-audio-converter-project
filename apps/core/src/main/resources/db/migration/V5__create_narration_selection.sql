@@ -83,6 +83,11 @@ ALTER TABLE workflow.audiobook_conversion
     ADD CONSTRAINT audiobook_conversion_current_recipe_fk
     FOREIGN KEY (current_generation_recipe_id, conversion_id, listener_id)
     REFERENCES narration.generation_recipe(recipe_id, conversion_id, listener_id);
+ALTER TABLE workflow.audiobook_conversion
+    DROP CONSTRAINT audiobook_conversion_state_check;
+ALTER TABLE workflow.audiobook_conversion
+    ADD CONSTRAINT audiobook_conversion_state_check
+    CHECK (state IN ('PREPARING', 'GENERATING'));
 
 CREATE INDEX generation_recipe_conversion_idx
     ON narration.generation_recipe(conversion_id, created_at);
@@ -125,22 +130,22 @@ INSERT INTO narration.narrator_voice (
 ) VALUES
     ('10000000-0000-7000-8000-000000000001', 1, 'Rowan', 'British English',
      'Warm', 'Grounded', 'voice-review-2026-07', 'AVAILABLE',
-     '/samples/midnight-library-of-small-beginnings.mp3', 'folio-preview-v1', 27, TRUE),
+     '/samples/narrator-voices/rowan-folio-preview-v1.mp3', 'folio-preview-v1', 29, TRUE),
     ('10000000-0000-7000-8000-000000000002', 2, 'Marlowe', 'American English',
      'Clear', 'Assured', 'voice-review-2026-07', 'AVAILABLE',
-     '/samples/midnight-library-of-small-beginnings.mp3', 'folio-preview-v1', 27, TRUE),
+     '/samples/narrator-voices/marlowe-folio-preview-v1.mp3', 'folio-preview-v1', 29, TRUE),
     ('10000000-0000-7000-8000-000000000003', 3, 'Ellis', 'Irish English',
      'Bright', 'Expressive', 'voice-review-2026-07', 'AVAILABLE',
-     '/samples/midnight-library-of-small-beginnings.mp3', 'folio-preview-v1', 27, TRUE),
-    ('10000000-0000-7000-8000-000000000004', 4, 'Clara', 'Canadian English',
+     '/samples/narrator-voices/ellis-folio-preview-v1.mp3', 'folio-preview-v1', 29, TRUE),
+    ('10000000-0000-7000-8000-000000000004', 4, 'Clara', 'British English',
      'Calm', 'Intimate', 'voice-review-2026-07', 'AVAILABLE',
-     '/samples/midnight-library-of-small-beginnings.mp3', 'folio-preview-v1', 27, TRUE),
+     '/samples/narrator-voices/clara-folio-preview-v1.mp3', 'folio-preview-v1', 29, TRUE),
     ('10000000-0000-7000-8000-000000000005', 5, 'Ansel', 'Australian English',
      'Open', 'Conversational', 'voice-review-2026-07', 'AVAILABLE',
-     '/samples/midnight-library-of-small-beginnings.mp3', 'folio-preview-v1', 27, TRUE),
-    ('10000000-0000-7000-8000-000000000006', 6, 'Sloane', 'New Zealand English',
+     '/samples/narrator-voices/ansel-folio-preview-v1.mp3', 'folio-preview-v1', 29, TRUE),
+    ('10000000-0000-7000-8000-000000000006', 6, 'Sloane', 'American English',
      'Poised', 'Reflective', 'voice-review-2026-07', 'AVAILABLE',
-     '/samples/midnight-library-of-small-beginnings.mp3', 'folio-preview-v1', 27, TRUE);
+     '/samples/narrator-voices/sloane-folio-preview-v1.mp3', 'folio-preview-v1', 29, TRUE);
 
 INSERT INTO narration.provider_capability_profile (
     profile_id, profile_version, provider, service, endpoint, model_snapshot, region,

@@ -7,6 +7,7 @@ import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.identity.ExternalIdentity;
 import dev.audiobook.platform.identity.ListenerIdentityService;
 import dev.audiobook.platform.identity.SignInProvider;
+import dev.audiobook.platform.workflow.AudiobookConversionService;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -25,20 +26,24 @@ import org.springframework.transaction.annotation.Transactional;
 class NarrationSelectionITest {
 
     private static final UUID ROWAN_ID = UUID.fromString("10000000-0000-7000-8000-000000000001");
+    private static final UUID MARLOWE_ID = UUID.fromString("10000000-0000-7000-8000-000000000002");
     private static final UUID PROFILE_ID = UUID.fromString("20000000-0000-7000-8000-000000000001");
     private static final UUID ROWAN_MAPPING_ID = UUID.fromString("30000000-0000-7000-8000-000000000001");
 
     private final NarrationSelectionService narrationSelectionService;
     private final ListenerIdentityService listenerIdentityService;
+    private final AudiobookConversionService audiobookConversionService;
     private final JdbcTemplate jdbcTemplate;
 
     @Autowired
     NarrationSelectionITest(
             NarrationSelectionService narrationSelectionService,
             ListenerIdentityService listenerIdentityService,
+            AudiobookConversionService audiobookConversionService,
             JdbcTemplate jdbcTemplate) {
         this.narrationSelectionService = narrationSelectionService;
         this.listenerIdentityService = listenerIdentityService;
+        this.audiobookConversionService = audiobookConversionService;
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -53,6 +58,9 @@ class NarrationSelectionITest {
         assertThat(catalog.voices())
                 .extracting(voice -> voice.preview().passageVersion())
                 .containsOnly("folio-preview-v1");
+        assertThat(catalog.voices())
+                .extracting(voice -> voice.preview().uri())
+                .doesNotHaveDuplicates();
         assertThat(catalog.voices())
                 .allSatisfy(voice -> {
                     assertThat(voice.descriptors()).hasSize(2);
@@ -79,7 +87,7 @@ class NarrationSelectionITest {
 
         NarrationSelectionService.ConfirmedRecipe confirmed = narrationSelectionService.confirm(command);
         NarrationSelectionService.ConfirmedRecipe replay = narrationSelectionService.confirm(command);
-        NarrationSelectionService.GenerationAuthorization authorization = narrationSelectionService.authorizeGeneration(
+        NarrationSelectionService.GenerationAuthorization authorization = audiobookConversionService.beginSpeechGeneration(
                 conversion.listenerId(), conversion.conversionId());
 
         assertThat(replay).isEqualTo(confirmed);
@@ -92,6 +100,9 @@ class NarrationSelectionITest {
                         NarrationSelectionService.GenerationAuthorization::recipeId,
                         NarrationSelectionService.GenerationAuthorization::recipeDigest)
                 .containsExactly(confirmed.recipeId(), confirmed.recipeDigest());
+        assertThat(audiobookConversionService.conversions(conversion.listenerId()))
+                .extracting(AudiobookConversionService.AudiobookConversion::state)
+                .containsExactly(AudiobookConversionService.ConversionState.GENERATING);
 
         Map<String, Object> frozen = jdbcTemplate.queryForMap(
                 """
@@ -134,8 +145,8 @@ class NarrationSelectionITest {
                         0,
                         "unissued-voice-28")))
                 .isInstanceOf(NarrationSelectionRejectedException.class)
-                .extracting(exception -> ((NarrationSelectionRejectedException) exception).reasonCode())
-                .isEqualTo("UNISSUED_VOICE_IDENTIFIER");
+                .extracting(exception -> ((NarrationSelectionRejectedException) exception).reason())
+                .isEqualTo(NarrationRejectionReason.UNISSUED_VOICE_IDENTIFIER);
 
         Conversion temporary = conversion("temporary");
         jdbcTemplate.update(
@@ -145,11 +156,11 @@ class NarrationSelectionITest {
         assertRejected(
                 temporary,
                 "temporarily-unavailable-28",
-                "VOICE_TEMPORARILY_UNAVAILABLE");
+                NarrationRejectionReason.VOICE_TEMPORARILY_UNAVAILABLE);
 
         jdbcTemplate.update("UPDATE narration.narrator_voice SET availability = 'RETIRED' WHERE voice_id = ?", ROWAN_ID);
         Conversion retired = conversion("retired");
-        assertRejected(retired, "retired-28", "VOICE_RETIRED");
+        assertRejected(retired, "retired-28", NarrationRejectionReason.VOICE_RETIRED);
     }
 
     @Test
@@ -160,7 +171,10 @@ class NarrationSelectionITest {
                 OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(1),
                 PROFILE_ID);
 
-        assertRejected(staleAtConfirmation, "stale-confirmation-28", "CAPABILITY_PROFILE_STALE");
+        assertRejected(
+                staleAtConfirmation,
+                "stale-confirmation-28",
+                NarrationRejectionReason.CAPABILITY_PROFILE_STALE);
 
         jdbcTemplate.update(
                 "UPDATE narration.provider_capability_profile SET expires_at = ? WHERE profile_id = ?",
@@ -173,15 +187,43 @@ class NarrationSelectionITest {
                 "UPDATE narration.voice_mapping SET mapping_state = 'STALE' WHERE mapping_id = ?",
                 ROWAN_MAPPING_ID);
 
-        assertThatThrownBy(() -> narrationSelectionService.authorizeGeneration(
+        assertThatThrownBy(() -> audiobookConversionService.beginSpeechGeneration(
                         staleAtGeneration.listenerId(), staleAtGeneration.conversionId()))
                 .isInstanceOf(NarrationSelectionRejectedException.class)
-                .extracting(exception -> ((NarrationSelectionRejectedException) exception).reasonCode())
-                .isEqualTo("EXPLICIT_NEW_CHOICE_REQUIRED");
+                .extracting(exception -> ((NarrationSelectionRejectedException) exception).reason())
+                .isEqualTo(NarrationRejectionReason.EXPLICIT_NEW_CHOICE_REQUIRED);
+        assertThat(audiobookConversionService.conversions(staleAtGeneration.listenerId()))
+                .extracting(AudiobookConversionService.AudiobookConversion::state)
+                .containsExactly(AudiobookConversionService.ConversionState.PREPARING);
+        assertThat(narrationSelectionService.narrationChoice(
+                        staleAtGeneration.listenerId(), staleAtGeneration.conversionId()))
+                .extracting(
+                        NarrationSelectionService.NarrationChoiceStatus::conversionVersion,
+                        NarrationSelectionService.NarrationChoiceStatus::explicitChoiceRequired)
+                .containsExactly(1L, true);
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM narration.generation_recipe WHERE recipe_id = ?",
                 Long.class,
                 confirmed.recipeId())).isEqualTo(1L);
+
+        NarrationSelectionService.ConfirmedRecipe replacement = narrationSelectionService.confirm(
+                new NarrationSelectionService.ConfirmCommand(
+                        staleAtGeneration.listenerId(),
+                        staleAtGeneration.conversionId(),
+                        MARLOWE_ID,
+                        NarrationSelectionService.NarrationPace.NATURAL,
+                        1,
+                        "explicit-replacement-28"));
+
+        assertThat(replacement.conversionVersion()).isEqualTo(2);
+        assertThat(replacement.recipeId()).isNotEqualTo(confirmed.recipeId());
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT supersedes_recipe_id FROM narration.generation_recipe WHERE recipe_id = ?",
+                UUID.class,
+                replacement.recipeId())).isEqualTo(confirmed.recipeId());
+        assertThat(narrationSelectionService.narrationChoice(
+                        staleAtGeneration.listenerId(), staleAtGeneration.conversionId()).explicitChoiceRequired())
+                .isFalse();
     }
 
     @Test
@@ -191,18 +233,22 @@ class NarrationSelectionITest {
                 "UPDATE narration.voice_mapping SET required_region = 'us' WHERE mapping_id = ?",
                 ROWAN_MAPPING_ID);
 
-        assertRejected(conversion, "policy-mismatch-28", "UNSUPPORTED_REGION_OR_DATA_POLICY");
+        assertRejected(
+                conversion,
+                "policy-mismatch-28",
+                NarrationRejectionReason.UNSUPPORTED_REGION_OR_DATA_POLICY);
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM narration.generation_recipe WHERE conversion_id = ?",
                 Long.class,
                 conversion.conversionId())).isZero();
     }
 
-    private void assertRejected(Conversion conversion, String operationKey, String reasonCode) {
+    private void assertRejected(
+            Conversion conversion, String operationKey, NarrationRejectionReason reason) {
         assertThatThrownBy(() -> narrationSelectionService.confirm(command(conversion, operationKey)))
                 .isInstanceOf(NarrationSelectionRejectedException.class)
-                .extracting(exception -> ((NarrationSelectionRejectedException) exception).reasonCode())
-                .isEqualTo(reasonCode);
+                .extracting(exception -> ((NarrationSelectionRejectedException) exception).reason())
+                .isEqualTo(reason);
     }
 
     private static NarrationSelectionService.ConfirmCommand command(Conversion conversion, String operationKey) {

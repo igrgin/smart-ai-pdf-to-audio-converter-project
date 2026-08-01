@@ -1,5 +1,20 @@
 package dev.audiobook.platform.narration;
 
+import static dev.audiobook.platform.narration.NarrationRejectionReason.AUDIOBOOK_CONVERSION_NOT_FOUND;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.CAPABILITY_PROFILE_STALE;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.CONVERSION_VERSION_MISMATCH;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.EXPLICIT_NEW_CHOICE_REQUIRED;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.GENERATION_RECIPE_ALREADY_CONFIRMED;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.GENERATION_RECIPE_REQUIRED;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.IDEMPOTENCY_KEY_REUSED;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.UNISSUED_VOICE_IDENTIFIER;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.UNSUPPORTED_NARRATION_PACE;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.UNSUPPORTED_REGION_OR_DATA_POLICY;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.VOICE_MAPPING_STALE;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.VOICE_MAPPING_UNAVAILABLE;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.VOICE_RETIRED;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.VOICE_TEMPORARILY_UNAVAILABLE;
+
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -14,6 +29,7 @@ import java.util.Objects;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +40,42 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
     private static final String SEGMENTATION_POLICY_VERSION = "semantic-segments-v1";
     private static final String AUDIO_POLICY_VERSION = "mono-24k-mp3-v1";
     private static final String TOOLCHAIN_VERSION = "speech-worker-ffmpeg-v1";
+    private static final String FROZEN_RECIPE_ELIGIBILITY_SQL = """
+            vm.mapping_state = 'CURRENT'
+              AND p.profile_state = 'CURRENT'
+              AND p.expires_at > ?
+              AND vm.narrator_voice_id = gr.narrator_voice_id
+              AND vm.mapping_version = gr.mapping_version
+              AND vm.provider_voice = gr.provider_voice
+              AND vm.preview_version = gr.preview_version
+              AND vm.evaluation_version = gr.evaluation_version
+              AND vm.required_region = gr.region
+              AND vm.required_data_policy_version = gr.data_policy_version
+              AND p.profile_version = gr.capability_profile_version
+              AND p.provider = gr.provider
+              AND p.service = gr.service
+              AND p.endpoint = gr.endpoint
+              AND p.model_snapshot = gr.model_snapshot
+              AND p.region = gr.region
+              AND p.data_policy_version = gr.data_policy_version
+              AND gr.pace = ANY(p.supported_paces)
+              AND vm.native_controls -> gr.pace = gr.native_controls
+            """;
+    private static final RowMapper<NarratorVoice> NARRATOR_VOICE_ROW_MAPPER = (resultSet, row) ->
+            new NarratorVoice(
+                    resultSet.getObject("voice_id", UUID.class),
+                    resultSet.getString("display_name"),
+                    resultSet.getString("english_variety"),
+                    List.of(
+                            resultSet.getString("descriptor_primary"),
+                            resultSet.getString("descriptor_secondary")),
+                    resultSet.getString("descriptor_review_version"),
+                    VoiceAvailability.valueOf(resultSet.getString("availability")),
+                    new VoicePreview(
+                            resultSet.getString("preview_uri"),
+                            resultSet.getString("preview_passage_version"),
+                            resultSet.getInt("preview_duration_seconds"),
+                            resultSet.getBoolean("preview_ai_generated")));
 
     private final JdbcTemplate jdbcTemplate;
     private final Clock identityClock;
@@ -39,20 +91,7 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
                        preview_ai_generated
                 FROM narration.narrator_voice ORDER BY catalog_ordinal
                 """,
-                (resultSet, row) -> new NarratorVoice(
-                        resultSet.getObject("voice_id", UUID.class),
-                        resultSet.getString("display_name"),
-                        resultSet.getString("english_variety"),
-                        List.of(
-                                resultSet.getString("descriptor_primary"),
-                                resultSet.getString("descriptor_secondary")),
-                        resultSet.getString("descriptor_review_version"),
-                        VoiceAvailability.valueOf(resultSet.getString("availability")),
-                        new VoicePreview(
-                                resultSet.getString("preview_uri"),
-                                resultSet.getString("preview_passage_version"),
-                                resultSet.getInt("preview_duration_seconds"),
-                                resultSet.getBoolean("preview_ai_generated"))));
+                NARRATOR_VOICE_ROW_MAPPER);
         return new VoiceCatalog(voices, List.of(NarrationPace.values()), NarrationPace.NATURAL);
     }
 
@@ -64,7 +103,7 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
         StoredOperation replay = findOperation(command.operationKey());
         if (replay != null) {
             if (!replay.requestFingerprint().equals(requestFingerprint)) {
-                throw rejected("IDEMPOTENCY_KEY_REUSED");
+                throw rejected(IDEMPOTENCY_KEY_REUSED);
             }
             return confirmedRecipe(replay.recipeId());
         }
@@ -73,19 +112,23 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
         replay = findOperation(command.operationKey());
         if (replay != null) {
             if (!replay.requestFingerprint().equals(requestFingerprint)) {
-                throw rejected("IDEMPOTENCY_KEY_REUSED");
+                throw rejected(IDEMPOTENCY_KEY_REUSED);
             }
             return confirmedRecipe(replay.recipeId());
         }
         if (conversion.version() != command.expectedConversionVersion()) {
-            throw rejected("CONVERSION_VERSION_MISMATCH");
+            throw rejected(CONVERSION_VERSION_MISMATCH);
         }
         NarratorVoice voice = narratorVoice(command.voiceId());
         if (voice.availability() != VoiceAvailability.AVAILABLE) {
-            throw rejected("VOICE_" + voice.availability().name());
+            throw rejected(switch (voice.availability()) {
+                case TEMPORARILY_UNAVAILABLE -> VOICE_TEMPORARILY_UNAVAILABLE;
+                case RETIRED -> VOICE_RETIRED;
+                case AVAILABLE -> throw new IllegalStateException("Available voice cannot be rejected for availability");
+            });
         }
         if (conversion.currentRecipeId() != null && eligibleForGeneration(conversion.currentRecipeId())) {
-            throw rejected("GENERATION_RECIPE_ALREADY_CONFIRMED");
+            throw rejected(GENERATION_RECIPE_ALREADY_CONFIRMED);
         }
 
         EligibleMapping mapping = eligibleMapping(command.voiceId(), command.pace(), voice.preview().passageVersion());
@@ -166,31 +209,52 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
 
     @Override
     @Transactional(readOnly = true)
+    public NarrationChoiceStatus narrationChoice(UUID listenerId, UUID conversionId) {
+        Objects.requireNonNull(listenerId, "listenerId");
+        Objects.requireNonNull(conversionId, "conversionId");
+        List<StoredNarrationChoice> choices = jdbcTemplate.query(
+                """
+                SELECT ac.version, ac.current_generation_recipe_id, gr.narrator_voice_id,
+                       gr.voice_display_name, gr.pace
+                FROM workflow.audiobook_conversion ac
+                LEFT JOIN narration.generation_recipe gr
+                  ON gr.recipe_id = ac.current_generation_recipe_id
+                WHERE ac.conversion_id = ? AND ac.listener_id = ?
+                """,
+                (resultSet, row) -> new StoredNarrationChoice(
+                        resultSet.getLong("version"),
+                        resultSet.getObject("current_generation_recipe_id", UUID.class),
+                        resultSet.getObject("narrator_voice_id", UUID.class),
+                        resultSet.getString("voice_display_name"),
+                        resultSet.getString("pace") == null
+                                ? null
+                                : NarrationPace.valueOf(resultSet.getString("pace"))),
+                conversionId,
+                listenerId);
+        if (choices.isEmpty()) {
+            throw rejected(AUDIOBOOK_CONVERSION_NOT_FOUND);
+        }
+        StoredNarrationChoice choice = choices.getFirst();
+        boolean explicitChoiceRequired = choice.recipeId() == null || !eligibleForGeneration(choice.recipeId());
+        return new NarrationChoiceStatus(
+                choice.version(),
+                choice.recipeId(),
+                choice.voiceId(),
+                choice.voiceDisplayName(),
+                choice.pace(),
+                explicitChoiceRequired);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public GenerationAuthorization authorizeGeneration(UUID listenerId, UUID conversionId) {
         Objects.requireNonNull(listenerId, "listenerId");
         Objects.requireNonNull(conversionId, "conversionId");
         List<ActiveRecipe> recipes = jdbcTemplate.query(
                 """
                 SELECT gr.recipe_id, gr.recipe_digest,
-                       vm.mapping_state = 'CURRENT'
-                         AND p.profile_state = 'CURRENT'
-                         AND p.expires_at > ?
-                         AND vm.narrator_voice_id = gr.narrator_voice_id
-                         AND vm.mapping_version = gr.mapping_version
-                         AND vm.provider_voice = gr.provider_voice
-                         AND vm.preview_version = gr.preview_version
-                         AND vm.evaluation_version = gr.evaluation_version
-                         AND vm.required_region = gr.region
-                         AND vm.required_data_policy_version = gr.data_policy_version
-                         AND p.profile_version = gr.capability_profile_version
-                         AND p.provider = gr.provider
-                         AND p.service = gr.service
-                         AND p.endpoint = gr.endpoint
-                         AND p.model_snapshot = gr.model_snapshot
-                         AND p.region = gr.region
-                         AND p.data_policy_version = gr.data_policy_version
-                         AND gr.pace = ANY(p.supported_paces)
-                         AND vm.native_controls -> gr.pace = gr.native_controls AS eligible
+                       """ + FROZEN_RECIPE_ELIGIBILITY_SQL + """
+                       AS eligible
                 FROM workflow.audiobook_conversion ac
                 JOIN narration.generation_recipe gr ON gr.recipe_id = ac.current_generation_recipe_id
                 JOIN narration.voice_mapping vm ON vm.mapping_id = gr.voice_mapping_id
@@ -205,11 +269,11 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
                 conversionId,
                 listenerId);
         if (recipes.isEmpty()) {
-            throw rejected("GENERATION_RECIPE_REQUIRED");
+            throw rejected(GENERATION_RECIPE_REQUIRED);
         }
         ActiveRecipe recipe = recipes.getFirst();
         if (!recipe.eligible()) {
-            throw rejected("EXPLICIT_NEW_CHOICE_REQUIRED");
+            throw rejected(EXPLICIT_NEW_CHOICE_REQUIRED);
         }
         return new GenerationAuthorization(recipe.recipeId(), recipe.recipeDigest());
     }
@@ -255,7 +319,7 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
                 pace.name(),
                 voiceId);
         if (candidates.isEmpty()) {
-            throw rejected("VOICE_MAPPING_UNAVAILABLE");
+            throw rejected(VOICE_MAPPING_UNAVAILABLE);
         }
         Instant now = identityClock.instant();
         for (MappingCandidate candidate : candidates) {
@@ -265,36 +329,21 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
         }
         if (candidates.stream().noneMatch(candidate -> "CURRENT".equals(candidate.mappingState())
                 && currentPreviewVersion.equals(candidate.previewVersion()))) {
-            throw rejected("VOICE_MAPPING_STALE");
+            throw rejected(VOICE_MAPPING_STALE);
         }
         if (candidates.stream().noneMatch(candidate -> "CURRENT".equals(candidate.profileState())
                 && candidate.expiresAt().isAfter(now))) {
-            throw rejected("CAPABILITY_PROFILE_STALE");
+            throw rejected(CAPABILITY_PROFILE_STALE);
         }
         if (candidates.stream().noneMatch(MappingCandidate::regionAndPolicyMatch)) {
-            throw rejected("UNSUPPORTED_REGION_OR_DATA_POLICY");
+            throw rejected(UNSUPPORTED_REGION_OR_DATA_POLICY);
         }
-        throw rejected("UNSUPPORTED_NARRATION_PACE");
+        throw rejected(UNSUPPORTED_NARRATION_PACE);
     }
 
     private boolean eligibleForGeneration(UUID recipeId) {
         Boolean eligible = jdbcTemplate.queryForObject(
-                """
-                SELECT vm.mapping_state = 'CURRENT'
-                    AND p.profile_state = 'CURRENT'
-                    AND p.expires_at > ?
-                    AND vm.mapping_version = gr.mapping_version
-                    AND vm.provider_voice = gr.provider_voice
-                    AND vm.preview_version = gr.preview_version
-                    AND vm.evaluation_version = gr.evaluation_version
-                    AND vm.required_region = gr.region
-                    AND vm.required_data_policy_version = gr.data_policy_version
-                    AND p.profile_version = gr.capability_profile_version
-                    AND p.model_snapshot = gr.model_snapshot
-                    AND p.region = gr.region
-                    AND p.data_policy_version = gr.data_policy_version
-                    AND gr.pace = ANY(p.supported_paces)
-                    AND vm.native_controls -> gr.pace = gr.native_controls
+                "SELECT " + FROZEN_RECIPE_ELIGIBILITY_SQL + """
                 FROM narration.generation_recipe gr
                 JOIN narration.voice_mapping vm ON vm.mapping_id = gr.voice_mapping_id
                 JOIN narration.provider_capability_profile p ON p.profile_id = gr.capability_profile_id
@@ -315,21 +364,10 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
                        preview_ai_generated
                 FROM narration.narrator_voice WHERE voice_id = ?
                 """,
-                (resultSet, row) -> new NarratorVoice(
-                        resultSet.getObject("voice_id", UUID.class),
-                        resultSet.getString("display_name"),
-                        resultSet.getString("english_variety"),
-                        List.of(resultSet.getString("descriptor_primary"), resultSet.getString("descriptor_secondary")),
-                        resultSet.getString("descriptor_review_version"),
-                        VoiceAvailability.valueOf(resultSet.getString("availability")),
-                        new VoicePreview(
-                                resultSet.getString("preview_uri"),
-                                resultSet.getString("preview_passage_version"),
-                                resultSet.getInt("preview_duration_seconds"),
-                                resultSet.getBoolean("preview_ai_generated"))),
+                NARRATOR_VOICE_ROW_MAPPER,
                 voiceId);
         if (voices.isEmpty()) {
-            throw rejected("UNISSUED_VOICE_IDENTIFIER");
+            throw rejected(UNISSUED_VOICE_IDENTIFIER);
         }
         return voices.getFirst();
     }
@@ -347,7 +385,7 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
                 conversionId,
                 listenerId);
         if (conversions.isEmpty()) {
-            throw rejected("AUDIOBOOK_CONVERSION_NOT_FOUND");
+            throw rejected(AUDIOBOOK_CONVERSION_NOT_FOUND);
         }
         return conversions.getFirst();
     }
@@ -474,8 +512,8 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
         }
     }
 
-    private static NarrationSelectionRejectedException rejected(String reasonCode) {
-        return new NarrationSelectionRejectedException(reasonCode);
+    private static NarrationSelectionRejectedException rejected(NarrationRejectionReason reason) {
+        return new NarrationSelectionRejectedException(reason);
     }
 
     private record StoredOperation(String requestFingerprint, UUID recipeId) {
@@ -485,6 +523,10 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
     }
 
     private record ActiveRecipe(UUID recipeId, String recipeDigest, boolean eligible) {
+    }
+
+    private record StoredNarrationChoice(
+            long version, UUID recipeId, UUID voiceId, String voiceDisplayName, NarrationPace pace) {
     }
 
     private record MappingCandidate(

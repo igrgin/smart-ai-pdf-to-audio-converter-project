@@ -9,6 +9,8 @@ public interface NarrationSelectionService {
 
     ConfirmedRecipe confirm(ConfirmCommand command);
 
+    NarrationChoiceStatus narrationChoice(UUID listenerId, UUID conversionId);
+
     GenerationAuthorization authorizeGeneration(UUID listenerId, UUID conversionId);
 
     record VoiceCatalog(List<NarratorVoice> voices, List<NarrationPace> paces, NarrationPace defaultPace) {
@@ -54,6 +56,15 @@ public interface NarrationSelectionService {
     }
 
     record GenerationAuthorization(UUID recipeId, String recipeDigest) {
+    }
+
+    record NarrationChoiceStatus(
+            long conversionVersion,
+            UUID recipeId,
+            UUID voiceId,
+            String voiceDisplayName,
+            NarrationPace pace,
+            boolean explicitChoiceRequired) {
     }
 
     enum VoiceAvailability {

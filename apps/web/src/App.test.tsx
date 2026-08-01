@@ -264,12 +264,12 @@ describe("public sample", () => {
               voice("10000000-0000-7000-8000-000000000001", "Rowan", "British English", ["Warm", "Grounded"]),
               voice("10000000-0000-7000-8000-000000000002", "Marlowe", "American English", ["Clear", "Assured"]),
               voice("10000000-0000-7000-8000-000000000003", "Ellis", "Irish English", ["Bright", "Expressive"]),
-              voice("10000000-0000-7000-8000-000000000004", "Clara", "Canadian English", ["Calm", "Intimate"]),
+              voice("10000000-0000-7000-8000-000000000004", "Clara", "British English", ["Calm", "Intimate"]),
               voice("10000000-0000-7000-8000-000000000005", "Ansel", "Australian English", ["Open", "Conversational"]),
               voice(
                 "10000000-0000-7000-8000-000000000006",
                 "Sloane",
-                "New Zealand English",
+                "American English",
                 ["Poised", "Reflective"],
                 "TEMPORARILY_UNAVAILABLE"
               )
@@ -289,13 +289,109 @@ describe("public sample", () => {
     const dialog = screen.getByRole("dialog", { name: /create a private audiobook/i });
     expect(await within(dialog).findByRole("button", { name: /select rowan/i })).toHaveAttribute("aria-pressed", "true");
     expect(within(dialog).getByRole("button", { name: /play rowan preview/i })).toBeEnabled();
-    expect(within(dialog).getByText("British English")).toBeVisible();
+    expect(within(dialog).getAllByText("British English")).toHaveLength(2);
     expect(within(dialog).getByText("Warm · Grounded")).toBeVisible();
-    expect(within(dialog).getAllByText(/27-second standard passage/i)).toHaveLength(6);
+    expect(within(dialog).getAllByText(/29-second standard passage/i)).toHaveLength(6);
     expect(within(dialog).getByRole("button", { name: /select sloane/i })).toBeDisabled();
     expect(within(dialog).getByText(/temporarily unavailable/i)).toBeVisible();
     expect(within(dialog).getByRole("button", { name: "Natural" })).toHaveAttribute("aria-pressed", "true");
     expect(within(dialog).getByText(/playback speed stays independent/i)).toBeVisible();
+  });
+
+  it("requires and confirms an explicit new choice when a frozen recipe becomes stale", async () => {
+    const conversionId = "01985f42-5f8d-7000-8000-000000000228";
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            authenticated: true,
+            listener: { displayName: "Mara", signInMethods: ["google"] },
+            csrf: { headerName: "X-CSRF-TOKEN", parameterName: "_csrf", token: "private-csrf" }
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/library")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            displayName: "Mara",
+            signInMethods: ["google"],
+            audiobooks: [{
+              conversionId,
+              state: "PREPARING",
+              version: 1,
+              recipeId: "01985f42-5f8d-7000-8000-000000000128",
+              voiceId: "10000000-0000-7000-8000-000000000001",
+              voiceDisplayName: "Rowan",
+              pace: "NATURAL",
+              explicitNarrationChoiceRequired: true
+            }],
+            conversionEntitlement: {
+              status: "EXHAUSTED",
+              grantedCharacters: 500000,
+              availableCharacters: 0,
+              reservedCharacters: 500000,
+              committedCharacters: 0,
+              canStartConversion: false,
+              denialReason: "ACTIVE_RESERVATION"
+            }
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/narrator-voices")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            voices: [voice(
+              "10000000-0000-7000-8000-000000000002",
+              "Marlowe",
+              "American English",
+              ["Clear", "Assured"]
+            )],
+            paces: ["MEASURED", "NATURAL", "BRISK"],
+            defaultPace: "NATURAL"
+          })
+        });
+      }
+      if (url.endsWith(`/${conversionId}/generation-recipe`) && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            recipeId: "01985f42-5f8d-7000-8000-000000000328",
+            conversionId,
+            voiceId: "10000000-0000-7000-8000-000000000002",
+            voiceDisplayName: "Marlowe",
+            pace: "NATURAL",
+            recipeDigest: "c".repeat(64),
+            conversionVersion: 2
+          })
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /choose a new narrator voice/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /choose a new narrator voice/i });
+    expect(await within(dialog).findByRole("button", { name: /select marlowe/i })).toHaveAttribute("aria-pressed", "true");
+    expect(within(dialog).queryByLabelText(/choose drm-free epub/i)).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: /confirm new choice/i }));
+
+    expect(await screen.findByText(/marlowe at natural pace is frozen for generation/i)).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/audiobook-conversions/${conversionId}/generation-recipe`,
+      expect.objectContaining({
+        headers: expect.objectContaining({ "If-Match": "\"1\"" }),
+        body: JSON.stringify({
+          voiceId: "10000000-0000-7000-8000-000000000002",
+          pace: "NATURAL"
+        })
+      })
+    );
   });
 
   it("keeps EPUB bytes local until Create audiobook then shows the preparing conversion", async () => {
@@ -455,9 +551,9 @@ function voice(
     descriptorReviewVersion: "voice-review-2026-07",
     availability,
     preview: {
-      uri: "/samples/midnight-library-of-small-beginnings.mp3",
+      uri: `/samples/narrator-voices/${displayName.toLowerCase()}-folio-preview-v1.mp3`,
       passageVersion: "folio-preview-v1",
-      durationSeconds: 27,
+      durationSeconds: 29,
       aiGenerated: true
     }
   };

@@ -22,16 +22,16 @@ public class NarrationExceptionHandler {
 
     @ExceptionHandler(NarrationSelectionRejectedException.class)
     ProblemDetail rejectedChoice(NarrationSelectionRejectedException exception) {
-        HttpStatus status = switch (exception.reasonCode()) {
-            case "AUDIOBOOK_CONVERSION_NOT_FOUND" -> HttpStatus.NOT_FOUND;
-            case "CONVERSION_VERSION_MISMATCH" -> HttpStatus.PRECONDITION_FAILED;
+        HttpStatus status = switch (exception.reason()) {
+            case AUDIOBOOK_CONVERSION_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case CONVERSION_VERSION_MISMATCH -> HttpStatus.PRECONDITION_FAILED;
             default -> HttpStatus.CONFLICT;
         };
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
                 status, "This Narrator Voice and Narration Pace combination is not currently eligible.");
         problem.setType(URI.create("urn:folio:problem:narration-choice-rejected"));
         problem.setTitle("Narration choice rejected");
-        problem.setProperty("code", exception.reasonCode());
+        problem.setProperty("code", exception.reason().name());
         return problem;
     }
 }
