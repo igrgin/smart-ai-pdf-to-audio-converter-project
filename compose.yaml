@@ -16,6 +16,7 @@ x-worker-environment: &worker-environment
   PUBSUB_EMULATOR_HOST: queue-emulator:8085
   WORKING_OBJECT_STORE_ENDPOINT: http://object-store-working:9000
   FINAL_OBJECT_STORE_ENDPOINT: http://object-store-finalized:9000
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   NOTIFICATION_ENDPOINT: smtp://notification-sink:1025
   ANALYTICS_ENDPOINT: http://analytics-sink:8080
   OTEL_EXPORTER_OTLP_ENDPOINT: http://telemetry:4318

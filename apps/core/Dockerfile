@@ -19,7 +19,7 @@ ARG SETUPTOOLS_VERSION=83.0.0
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
-        clamav libgl1 python3 python3-pip qpdf tesseract-ocr tesseract-ocr-eng \
+        clamav ffmpeg libgl1 python3 python3-pip qpdf tesseract-ocr tesseract-ocr-eng \
     && freshclam --no-warnings \
     && rm -rf /var/lib/apt/lists/*
 RUN python3 -m pip install --break-system-packages --no-cache-dir \

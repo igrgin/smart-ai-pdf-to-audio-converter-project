@@ -35,6 +35,7 @@ env:
   TF_VAR_zitadel_issuer: ${{ secrets.ZITADEL_ISSUER }}
   TF_VAR_zitadel_client_id: ${{ secrets.ZITADEL_CLIENT_ID }}
   TF_VAR_zitadel_client_secret_id: ${{ secrets.ZITADEL_CLIENT_SECRET_ID }}
+  TF_VAR_openai_api_key_secret_id: ${{ secrets.OPENAI_API_KEY_SECRET_ID }}
   TF_VAR_zitadel_google_idp_id: ${{ secrets.ZITADEL_GOOGLE_IDP_ID }}
   TF_VAR_zitadel_apple_idp_id: ${{ secrets.ZITADEL_APPLE_IDP_ID }}
   TF_VAR_zitadel_facebook_idp_id: ${{ secrets.ZITADEL_FACEBOOK_IDP_ID }}

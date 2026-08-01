@@ -97,6 +97,13 @@ resource "random_password" "inspection_database" {
   special = true
 }
 
+resource "random_password" "generation_worker_database" {
+  for_each = toset(["speech", "packaging"])
+
+  length  = 32
+  special = true
+}
+
 resource "random_password" "upload_capability" {
   length  = 48
   special = false
@@ -157,6 +164,14 @@ resource "google_sql_user" "inspection" {
   password = random_password.inspection_database.result
 }
 
+resource "google_sql_user" "generation_worker" {
+  for_each = toset(["speech", "packaging"])
+
+  name     = "folio_${replace(each.key, "-", "_")}_worker"
+  instance = google_sql_database_instance.postgres.name
+  password = random_password.generation_worker_database[each.key].result
+}
+
 resource "google_secret_manager_secret" "database_password" {
   secret_id = "${local.prefix}-database-password"
   replication {
@@ -201,6 +216,21 @@ resource "google_secret_manager_secret" "inspection_database_password" {
   depends_on = [google_project_service.required["secretmanager.googleapis.com"]]
 }
 
+resource "google_secret_manager_secret" "generation_worker_database_password" {
+  for_each = toset(["speech", "packaging"])
+
+  secret_id = "${local.prefix}-${each.key}-database-password"
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.required["secretmanager.googleapis.com"]]
+}
+
 resource "google_secret_manager_secret_version" "narration_database_password" {
   secret      = google_secret_manager_secret.narration_database_password.id
   secret_data = random_password.narration_database.result
@@ -209,6 +239,13 @@ resource "google_secret_manager_secret_version" "narration_database_password" {
 resource "google_secret_manager_secret_version" "inspection_database_password" {
   secret      = google_secret_manager_secret.inspection_database_password.id
   secret_data = random_password.inspection_database.result
+}
+
+resource "google_secret_manager_secret_version" "generation_worker_database_password" {
+  for_each = toset(["speech", "packaging"])
+
+  secret      = google_secret_manager_secret.generation_worker_database_password[each.key].id
+  secret_data = random_password.generation_worker_database[each.key].result
 }
 
 resource "google_secret_manager_secret" "upload_capability" {
@@ -350,9 +387,17 @@ resource "google_secret_manager_secret_iam_member" "core_upload_capability" {
 }
 
 resource "google_secret_manager_secret_iam_member" "worker_database_password" {
-  for_each = setsubtract(local.worker_stages_without_narration, toset(["inspection"]))
+  for_each = setsubtract(local.worker_stages_without_narration, toset(["inspection", "speech", "packaging"]))
 
   secret_id = google_secret_manager_secret.database_password.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workers[each.key].email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "generation_worker_database_password" {
+  for_each = toset(["speech", "packaging"])
+
+  secret_id = google_secret_manager_secret.generation_worker_database_password[each.key].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.workers[each.key].email}"
 }
@@ -367,6 +412,12 @@ resource "google_secret_manager_secret_iam_member" "inspection_database_password
   secret_id = google_secret_manager_secret.inspection_database_password.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.inspection_worker.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "speech_openai_api_key" {
+  secret_id = var.openai_api_key_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workers["speech"].email}"
 }
 
 resource "google_pubsub_topic_iam_member" "core_publisher" {
@@ -389,12 +440,37 @@ resource "google_service_account_iam_member" "pubsub_push_token_creator" {
   member             = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
 
-resource "google_storage_bucket_iam_member" "worker_working_objects" {
-  for_each = setsubtract(local.worker_stages_without_narration, toset(["inspection"]))
-
+resource "google_storage_bucket_iam_member" "speech_working_reader" {
   bucket = google_storage_bucket.working.name
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.workers[each.key].email}"
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.workers["speech"].email}"
+
+  condition {
+    title      = "SpeechInputsAndResultsRead"
+    expression = "resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.working.name}/objects/narration-plans/\") || resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.working.name}/objects/conversions/\")"
+  }
+}
+
+resource "google_storage_bucket_iam_member" "speech_working_creator" {
+  bucket = google_storage_bucket.working.name
+  role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.workers["speech"].email}"
+
+  condition {
+    title      = "SpeechResultsCreate"
+    expression = "resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.working.name}/objects/conversions/\")"
+  }
+}
+
+resource "google_storage_bucket_iam_member" "packaging_working_reader" {
+  bucket = google_storage_bucket.working.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.workers["packaging"].email}"
+
+  condition {
+    title      = "AcceptedSpeechRead"
+    expression = "resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.working.name}/objects/conversions/\")"
+  }
 }
 
 resource "google_storage_bucket_iam_member" "narration_working_reader" {
@@ -438,12 +514,26 @@ resource "google_storage_bucket_iam_member" "core_working_objects" {
   member = "serviceAccount:${google_service_account.core.email}"
 }
 
-resource "google_storage_bucket_iam_member" "worker_finalized_objects" {
-  for_each = setsubtract(local.worker_stages_without_narration, toset(["inspection"]))
-
+resource "google_storage_bucket_iam_member" "packaging_finalized_creator" {
   bucket = google_storage_bucket.finalized.name
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.workers[each.key].email}"
+  role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.workers["packaging"].email}"
+
+  condition {
+    title      = "FinalAudiobookAssetsCreate"
+    expression = "resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.finalized.name}/objects/audiobooks/\")"
+  }
+}
+
+resource "google_storage_bucket_iam_member" "packaging_finalized_reader" {
+  bucket = google_storage_bucket.finalized.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.workers["packaging"].email}"
+
+  condition {
+    title      = "FinalAudiobookAssetsVerify"
+    expression = "resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.finalized.name}/objects/audiobooks/\")"
+  }
 }
 
 resource "google_storage_bucket_iam_member" "core_finalized_objects" {
@@ -721,7 +811,9 @@ resource "google_cloud_run_v2_job" "workers" {
         env {
           name = "DATABASE_USER"
           value = each.key == "inspection" ? google_sql_user.inspection.name : (
-            each.key == "narration-analysis" ? google_sql_user.narration_worker.name : google_sql_user.platform.name
+            each.key == "narration-analysis" ? google_sql_user.narration_worker.name : (
+              contains(["speech", "packaging"], each.key) ? google_sql_user.generation_worker[each.key].name : google_sql_user.platform.name
+            )
           )
         }
         env {
@@ -758,6 +850,18 @@ resource "google_cloud_run_v2_job" "workers" {
         env {
           name  = "APPLICATION_ORIGIN"
           value = "https://worker.invalid"
+        }
+        dynamic "env" {
+          for_each = each.key == "speech" ? [true] : []
+          content {
+            name = "OPENAI_API_KEY"
+            value_source {
+              secret_key_ref {
+                secret  = var.openai_api_key_secret_id
+                version = "latest"
+              }
+            }
+          }
         }
         env {
           name  = "ZITADEL_ISSUER"
@@ -848,7 +952,9 @@ resource "google_cloud_run_v2_job" "workers" {
           value_source {
             secret_key_ref {
               secret = each.key == "inspection" ? google_secret_manager_secret.inspection_database_password.secret_id : (
-                each.key == "narration-analysis" ? google_secret_manager_secret.narration_database_password.secret_id : google_secret_manager_secret.database_password.secret_id
+                each.key == "narration-analysis" ? google_secret_manager_secret.narration_database_password.secret_id : (
+                  contains(["speech", "packaging"], each.key) ? google_secret_manager_secret.generation_worker_database_password[each.key].secret_id : google_secret_manager_secret.database_password.secret_id
+                )
               )
               version = "latest"
             }
@@ -869,12 +975,15 @@ resource "google_cloud_run_v2_job" "workers" {
   depends_on = [
     google_project_service.required["run.googleapis.com"],
     google_secret_manager_secret_iam_member.worker_database_password,
+    google_secret_manager_secret_iam_member.generation_worker_database_password,
     google_secret_manager_secret_iam_member.narration_database_password,
     google_secret_manager_secret_iam_member.inspection_database_password,
+    google_secret_manager_secret_iam_member.speech_openai_api_key,
     google_storage_bucket_iam_member.inspection_working_objects,
     google_sql_user.narration_worker,
     google_sql_user.platform,
-    google_sql_user.inspection
+    google_sql_user.inspection,
+    google_sql_user.generation_worker
   ]
 }
 
