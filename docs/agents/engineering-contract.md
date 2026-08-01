@@ -2,6 +2,39 @@
 
 This document contains binding project instructions for implementation. Resolve conflicts with the user before writing code.
 
+## Source structure
+
+### Ownership-led organization
+
+**Applies to:** Spring Boot and React/TypeScript production and test source code.
+
+**Contract:**
+
+- Structure source code as a predictable map of ownership. Organize application code first by a coherent business capability, user-facing feature, or independently reusable platform concern, using the project's domain and product language.
+- Place behavior, invariants, mutable state, validation, types, adapters, and tests with the area that owns their outcome. Keep code together when it changes as one responsibility.
+- Give each file one explainable owner. When ownership is unclear or two locations appear equally valid, clarify the responsibility or the owning areas before placing the code.
+- Each owning area exposes only the smallest deliberate interface required by actual callers and keeps its implementation internal. Callers depend on that interface and do not import another area's internal implementation.
+- Dependencies between peer areas must be explicit and acyclic. Do not conceal unclear ownership or circular dependencies through generic shared code, path aliases, or deep imports.
+- Begin with the smallest structure that remains easy to scan. Add a file, package, folder, or separate project only when it identifies a distinct responsibility, hides a separately changing decision, supports demonstrated reuse, reduces a real navigation problem, or establishes a required build boundary.
+- Do not require identical internal structures across owning areas. Do not create empty or one-file categories merely to satisfy a standard tree, and do not retain a large flat area after its internal responsibilities have become difficult to distinguish.
+- Create shared code only for an independently nameable responsibility with a stable interface and multiple actual consumers. Code that uses one area's vocabulary or implements one area's rules remains with that owner. Do not use `common`, `shared`, `utils`, `helpers`, or similar names as catch-all destinations.
+- Keep application-wide composition, runtime bootstrap, generated sources, and repository tooling in clearly named homes appropriate to those responsibilities rather than assigning them artificially to a business feature.
+- Test source follows the same ownership map as the behavior it verifies. Tests may be colocated or placed in a separate mirrored test source tree according to the project's toolchain, without requiring every implementation folder to be reproduced.
+
+For Spring Boot:
+
+- Use the application's business modules as the first package level beneath the application root.
+- Keep types deliberately exposed to peer modules at the module's package root. Place the module's implementation beneath `internal`, subdividing it only where the general rules above justify another package.
+- Peer modules import only the owning module's exposed types. Framework-facing code such as controllers, persistence adapters, messaging adapters, configuration, and scheduled or asynchronous runners remains with the module whose behavior it supports.
+- Keep the Spring Boot application class above the application packages so component scanning covers the application without using the default package.
+
+For React and TypeScript:
+
+- Use user-facing features and coherent application capabilities as the primary source areas. Keep feature-specific components, hooks, state, validation, API translation, types, and tests with their owning feature.
+- Give each feature used by another area a deliberate entry point that exports only its supported interface. Other features import through that entry point rather than importing internal files.
+- Keep the application shell responsible for application composition, navigation, and application-wide concerns; do not let it become the hidden owner of feature behavior.
+- Extract reusable UI or TypeScript code only when it has a precise responsibility and actual consumers independent of a single feature.
+
 ## GitHub workflow
 
 ### Issue branch starting point
