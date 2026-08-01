@@ -47,6 +47,26 @@ server:
         secure: false
 
 platform:
+  generation:
+    working-asset-path: ${java.io.tmpdir}/folio-working-tests/audio-generation
+    final-asset-path: ${java.io.tmpdir}/folio-final-tests/audiobooks
+    working-bucket: local-working-test
+    final-bucket: local-final-test
+    maximum-segment-characters: 3800
+    open-ai-api-key: test-only-unused-provider-key
+    ffmpeg-command: ffmpeg
+    command-timeout: 2m
+    sample-rate: 24000
+    bitrate-kbps: 64
+    target-lufs: -18.0
+    true-peak-ceiling-dbtp: -1.5
+    maximum-part-duration: 15m
+    maximum-part-bytes: 10485760
+    continuation-silence: 100ms
+    paragraph-silence: 350ms
+    structural-silence: 700ms
+    chapter-silence: 1s
+    working-asset-retention: 30d
   demonstration-subscription:
     webhook-secret: whsec_test_webhook
     monthly-price-id: price_folio_demo_monthly

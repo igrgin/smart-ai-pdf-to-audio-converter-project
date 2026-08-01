@@ -369,6 +369,12 @@ resource "google_secret_manager_secret_iam_member" "inspection_database_password
   member    = "serviceAccount:${google_service_account.inspection_worker.email}"
 }
 
+resource "google_secret_manager_secret_iam_member" "speech_openai_api_key" {
+  secret_id = var.openai_api_key_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workers["speech"].email}"
+}
+
 resource "google_pubsub_topic_iam_member" "core_publisher" {
   topic  = google_pubsub_topic.work.name
   role   = "roles/pubsub.publisher"
@@ -759,6 +765,18 @@ resource "google_cloud_run_v2_job" "workers" {
           name  = "APPLICATION_ORIGIN"
           value = "https://worker.invalid"
         }
+        dynamic "env" {
+          for_each = each.key == "speech" ? [true] : []
+          content {
+            name = "OPENAI_API_KEY"
+            value_source {
+              secret_key_ref {
+                secret  = var.openai_api_key_secret_id
+                version = "latest"
+              }
+            }
+          }
+        }
         env {
           name  = "ZITADEL_ISSUER"
           value = "https://worker.invalid"
@@ -871,6 +889,7 @@ resource "google_cloud_run_v2_job" "workers" {
     google_secret_manager_secret_iam_member.worker_database_password,
     google_secret_manager_secret_iam_member.narration_database_password,
     google_secret_manager_secret_iam_member.inspection_database_password,
+    google_secret_manager_secret_iam_member.speech_openai_api_key,
     google_storage_bucket_iam_member.inspection_working_objects,
     google_sql_user.narration_worker,
     google_sql_user.platform,

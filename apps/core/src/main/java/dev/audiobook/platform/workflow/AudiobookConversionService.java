@@ -45,7 +45,10 @@ public interface AudiobookConversionService {
                         case PREPARING -> "NARRATION_PLAN_PENDING";
                         case AWAITING_REVIEW -> "NARRATION_REVIEW_AVAILABLE";
                         case GENERATING -> "GENERATION_IN_PROGRESS";
+                        case FINALIZING -> "FINAL_AUDIOBOOK_VALIDATION";
+                        case FINALIZED -> "PRIVATE_AUDIOBOOK_AVAILABLE";
                         case PAUSED -> "SOURCE_TOO_DAMAGED";
+                        case FAILED -> "CONVERSION_FAILED";
                     },
                     state == ConversionState.AWAITING_REVIEW
                             ? List.of(AllowedAction.REVIEW_NARRATION_PLAN, AllowedAction.ACCEPT_RECOMMENDATIONS)
@@ -74,6 +77,9 @@ public interface AudiobookConversionService {
         PREPARING,
         AWAITING_REVIEW,
         GENERATING,
+        FINALIZING,
+        FINALIZED,
+        FAILED,
         PAUSED
     }
 

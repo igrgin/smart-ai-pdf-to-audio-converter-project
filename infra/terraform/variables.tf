@@ -49,6 +49,11 @@ variable "zitadel_client_secret_id" {
   type        = string
 }
 
+variable "openai_api_key_secret_id" {
+  description = "Secret Manager secret ID containing the approved OpenAI speech API key."
+  type        = string
+}
+
 variable "zitadel_google_idp_id" {
   description = "ZITADEL identity-provider ID for Google."
   type        = string

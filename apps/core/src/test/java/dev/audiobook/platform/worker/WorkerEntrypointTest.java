@@ -7,6 +7,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 
+import dev.audiobook.platform.generation.AudiobookGenerationWorkerService;
 import dev.audiobook.platform.narration.NarrationPlanJobService;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -21,7 +22,8 @@ class WorkerEntrypointTest {
         WorkerEntrypoint entrypoint = new WorkerEntrypoint(
                 new WorkerProperties(WorkerProperties.Stage.INSPECTION, false, null, null),
                 narrationPlanJobService,
-                inspectionWorkerService);
+                inspectionWorkerService,
+                mock(AudiobookGenerationWorkerService.class));
 
         assertThatCode(() -> entrypoint.run(mock(ApplicationArguments.class)))
                 .doesNotThrowAnyException();
@@ -35,7 +37,8 @@ class WorkerEntrypointTest {
         WorkerEntrypoint entrypoint = new WorkerEntrypoint(
                 new WorkerProperties(WorkerProperties.Stage.NARRATION_ANALYSIS, false, null, null),
                 narrationPlanJobService,
-                mock(InspectionWorkerService.class));
+                mock(InspectionWorkerService.class),
+                mock(AudiobookGenerationWorkerService.class));
 
         entrypoint.run(mock(ApplicationArguments.class));
 
@@ -51,7 +54,8 @@ class WorkerEntrypointTest {
                 new WorkerProperties(
                         WorkerProperties.Stage.NARRATION_ANALYSIS, false, messageId, workId),
                 narrationPlanJobService,
-                mock(InspectionWorkerService.class));
+                mock(InspectionWorkerService.class),
+                mock(AudiobookGenerationWorkerService.class));
 
         entrypoint.run(mock(ApplicationArguments.class));
 
@@ -64,7 +68,8 @@ class WorkerEntrypointTest {
         WorkerEntrypoint entrypoint = new WorkerEntrypoint(
                 new WorkerProperties(null, false, null, null),
                 mock(NarrationPlanJobService.class),
-                mock(InspectionWorkerService.class));
+                mock(InspectionWorkerService.class),
+                mock(AudiobookGenerationWorkerService.class));
 
         assertThatThrownBy(() -> entrypoint.run(mock(ApplicationArguments.class)))
                 .isInstanceOf(IllegalStateException.class)
@@ -76,7 +81,8 @@ class WorkerEntrypointTest {
         WorkerEntrypoint entrypoint = new WorkerEntrypoint(
                 new WorkerProperties(WorkerProperties.Stage.RECONCILIATION, true, null, null),
                 mock(NarrationPlanJobService.class),
-                mock(InspectionWorkerService.class));
+                mock(InspectionWorkerService.class),
+                mock(AudiobookGenerationWorkerService.class));
         Thread.currentThread().interrupt();
 
         try {
@@ -93,7 +99,8 @@ class WorkerEntrypointTest {
         WorkerEntrypoint entrypoint = new WorkerEntrypoint(
                 new WorkerProperties(WorkerProperties.Stage.NARRATION_ANALYSIS, true, null, null),
                 narrationPlanJobService,
-                mock(InspectionWorkerService.class));
+                mock(InspectionWorkerService.class),
+                mock(AudiobookGenerationWorkerService.class));
         AtomicReference<Throwable> failure = new AtomicReference<>();
         Thread worker = Thread.ofVirtual().start(() -> {
             try {
@@ -112,5 +119,27 @@ class WorkerEntrypointTest {
                 throw new AssertionError("Expected polling cancellation to propagate", failure.get());
             }
         }).doesNotThrowAnyException();
+    }
+
+    @Test
+    void speechAndPackagingStagesAdvanceOnlyTheirGenerationBoundaries() throws Exception {
+        AudiobookGenerationWorkerService generationWorker =
+                mock(AudiobookGenerationWorkerService.class);
+        WorkerEntrypoint speech = new WorkerEntrypoint(
+                new WorkerProperties(WorkerProperties.Stage.SPEECH, false, null, null),
+                mock(NarrationPlanJobService.class),
+                mock(InspectionWorkerService.class),
+                generationWorker);
+        WorkerEntrypoint packaging = new WorkerEntrypoint(
+                new WorkerProperties(WorkerProperties.Stage.PACKAGING, false, null, null),
+                mock(NarrationPlanJobService.class),
+                mock(InspectionWorkerService.class),
+                generationWorker);
+
+        speech.run(mock(ApplicationArguments.class));
+        packaging.run(mock(ApplicationArguments.class));
+
+        verify(generationWorker).generatePending();
+        verify(generationWorker).packageAndFinalizePending();
     }
 }

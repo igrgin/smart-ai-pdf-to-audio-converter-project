@@ -1,5 +1,6 @@
 package dev.audiobook.platform.worker;
 
+import dev.audiobook.platform.generation.AudiobookGenerationWorkerService;
 import dev.audiobook.platform.narration.NarrationPlanJobService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +18,7 @@ public class WorkerEntrypoint implements ApplicationRunner {
     private final WorkerProperties workerProperties;
     private final NarrationPlanJobService narrationPlanJobService;
     private final InspectionWorkerService inspectionWorkerService;
+    private final AudiobookGenerationWorkerService audiobookGenerationWorkerService;
 
     @Override
     public void run(ApplicationArguments arguments) throws InterruptedException {
@@ -41,6 +43,12 @@ public class WorkerEntrypoint implements ApplicationRunner {
             }
             if (workerProperties.stage() == WorkerProperties.Stage.NARRATION_ANALYSIS) {
                 narrationPlanJobService.processPending();
+            }
+            if (workerProperties.stage() == WorkerProperties.Stage.SPEECH) {
+                audiobookGenerationWorkerService.generatePending();
+            }
+            if (workerProperties.stage() == WorkerProperties.Stage.PACKAGING) {
+                audiobookGenerationWorkerService.packageAndFinalizePending();
             }
             if (workerProperties.idle()) {
                 Thread.sleep(1_000);

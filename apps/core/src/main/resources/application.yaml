@@ -73,6 +73,26 @@ server:
       tracking-modes: cookie
 
 platform:
+  generation:
+    working-asset-path: ${AUDIO_WORKING_ASSET_PATH:${java.io.tmpdir}/folio-working/audio-generation}
+    final-asset-path: ${AUDIO_FINAL_ASSET_PATH:${java.io.tmpdir}/folio-final/audiobooks}
+    working-bucket: ${WORKING_BUCKET:local-working}
+    final-bucket: ${FINALIZED_BUCKET:local-final}
+    maximum-segment-characters: 3800
+    open-ai-api-key: ${OPENAI_API_KEY:}
+    ffmpeg-command: ${FFMPEG_COMMAND:ffmpeg}
+    command-timeout: 2m
+    sample-rate: 24000
+    bitrate-kbps: 64
+    target-lufs: -18.0
+    true-peak-ceiling-dbtp: -1.5
+    maximum-part-duration: 15m
+    maximum-part-bytes: 10485760
+    continuation-silence: 100ms
+    paragraph-silence: 350ms
+    structural-silence: 700ms
+    chapter-silence: 1s
+    working-asset-retention: 30d
   demonstration-subscription:
     webhook-secret: ${STRIPE_WEBHOOK_SECRET:whsec_local_demonstration_only}
     monthly-price-id: ${STRIPE_DEMONSTRATION_MONTHLY_PRICE_ID:price_folio_demo_monthly}
