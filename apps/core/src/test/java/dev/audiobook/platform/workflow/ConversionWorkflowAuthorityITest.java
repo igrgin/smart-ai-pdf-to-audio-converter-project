@@ -8,6 +8,7 @@ import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import dev.audiobook.platform.workflow.internal.ConversionWorkflowAdministrationService;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -339,7 +340,7 @@ class ConversionWorkflowAuthorityITest {
         UUID messageId = UUID.randomUUID();
         workflowService.claimDelivery(delivery(
                 messageId, ConversionWorkflowService.Stage.NARRATION_ANALYSIS, "analysis-worker"));
-        Instant deadline = Instant.now().plus(Duration.ofDays(7));
+        Instant deadline = Instant.now().plus(Duration.ofDays(7)).truncatedTo(ChronoUnit.MICROS);
 
         var paused = lifecycleService.pause(new ConversionLifecycleService.PauseCommand(
                 messageId,
