@@ -13,6 +13,9 @@ public interface NarrationSelectionService {
 
     GenerationAuthorization authorizeGeneration(UUID listenerId, UUID conversionId);
 
+    FailoverAuthorization failoverGeneration(
+            UUID listenerId, UUID conversionId, UUID failedRecipeId);
+
     record VoiceCatalog(List<NarratorVoice> voices, List<NarrationPace> paces, NarrationPace defaultPace) {
         public VoiceCatalog {
             voices = List.copyOf(voices);
@@ -56,6 +59,15 @@ public interface NarrationSelectionService {
     }
 
     record GenerationAuthorization(UUID recipeId, String recipeDigest) {
+    }
+
+    record FailoverAuthorization(
+            UUID failedRecipeId,
+            UUID replacementRecipeId,
+            String replacementRecipeDigest,
+            String capabilityProfileVersion,
+            String voiceEquivalenceVersion,
+            String paceEquivalenceVersion) {
     }
 
     record NarrationChoiceStatus(

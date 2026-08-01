@@ -22,12 +22,14 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
                 WHERE c.state = 'GENERATING'
                   AND (
                     NOT EXISTS (
-                        SELECT 1 FROM generation.segment_manifest m
-                        WHERE m.conversion_id = c.conversion_id
+                        SELECT 1 FROM generation.active_segment_manifest active
+                        WHERE active.conversion_id = c.conversion_id
                     )
                     OR EXISTS (
                         SELECT 1
                         FROM generation.speech_segment s
+                        JOIN generation.active_segment_manifest active
+                          ON active.manifest_id = s.manifest_id
                         LEFT JOIN generation.accepted_segment a
                           ON a.operation_key = s.operation_key
                         WHERE s.conversion_id = c.conversion_id
@@ -58,10 +60,16 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
         List<ConversionCoordinate> candidates = jdbcTemplate.query(
                 """
                 SELECT m.listener_id, m.conversion_id
-                FROM generation.segment_manifest m
-                WHERE NOT EXISTS (
+                FROM generation.active_segment_manifest active
+                JOIN generation.segment_manifest m ON m.manifest_id = active.manifest_id
+                JOIN workflow.audiobook_conversion conversion
+                  ON conversion.conversion_id = m.conversion_id
+                WHERE conversion.state = 'GENERATING'
+                  AND NOT EXISTS (
                     SELECT 1
                     FROM generation.speech_segment s
+                    JOIN generation.active_segment_manifest selected
+                      ON selected.manifest_id = s.manifest_id
                     LEFT JOIN generation.accepted_segment a
                       ON a.operation_key = s.operation_key
                     WHERE s.conversion_id = m.conversion_id

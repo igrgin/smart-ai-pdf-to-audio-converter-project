@@ -27,8 +27,10 @@ class NarrationSelectionITest {
 
     private static final UUID ROWAN_ID = UUID.fromString("10000000-0000-7000-8000-000000000001");
     private static final UUID MARLOWE_ID = UUID.fromString("10000000-0000-7000-8000-000000000002");
-    private static final UUID PROFILE_ID = UUID.fromString("20000000-0000-7000-8000-000000000001");
-    private static final UUID ROWAN_MAPPING_ID = UUID.fromString("30000000-0000-7000-8000-000000000001");
+    private static final UUID PROFILE_ID = UUID.fromString("20000000-0000-7000-8000-000000000002");
+    private static final UUID ROWAN_MAPPING_ID = UUID.fromString("30000000-0000-7000-8000-000000000101");
+    private static final UUID LEGACY_PROFILE_ID = UUID.fromString("20000000-0000-7000-8000-000000000001");
+    private static final UUID LEGACY_ROWAN_MAPPING_ID = UUID.fromString("30000000-0000-7000-8000-000000000001");
 
     private final NarrationSelectionService narrationSelectionService;
     private final ListenerIdentityService listenerIdentityService;
@@ -116,15 +118,15 @@ class NarrationSelectionITest {
                 confirmed.recipeId());
         assertThat(frozen)
                 .containsEntry("capability_profile_id", PROFILE_ID)
-                .containsEntry("capability_profile_version", "openai-speech-eu-v1")
+                .containsEntry("capability_profile_version", "openai-speech-eu-v2")
                 .containsEntry("provider", "openai")
                 .containsEntry("service", "speech")
                 .containsEntry("endpoint", "https://eu.api.openai.com/v1/audio/speech")
                 .containsEntry("model_snapshot", "gpt-4o-mini-tts-2025-12-15")
                 .containsEntry("region", "eu")
-                .containsEntry("data_policy_version", "eu-private-v1")
+                .containsEntry("data_policy_version", "openai-eu-zdr-v1")
                 .containsEntry("voice_mapping_id", ROWAN_MAPPING_ID)
-                .containsEntry("mapping_version", "rowan-openai-v1")
+                .containsEntry("mapping_version", "rowan-openai-v2")
                 .containsEntry("preview_version", "folio-preview-v1")
                 .containsEntry("evaluation_version", "speech-eval-2026-08")
                 .containsEntry("segmentation_policy_version", "semantic-segments-v1")
@@ -243,6 +245,64 @@ class NarrationSelectionITest {
                 "SELECT count(*) FROM narration.generation_recipe WHERE conversion_id = ?",
                 Long.class,
                 conversion.conversionId())).isZero();
+    }
+
+    @Test
+    void anAlreadyFrozenLegacyRecipeCanFailOverThroughItsQualifiedEquivalence() {
+        Conversion conversion = conversion("legacy-failover");
+        NarrationSelectionService.ConfirmedRecipe current = narrationSelectionService.confirm(
+                command(conversion, "legacy-failover-source-30"));
+        UUID legacyRecipeId = UUID.randomUUID();
+        jdbcTemplate.update(
+                """
+                INSERT INTO narration.generation_recipe (
+                    recipe_id, conversion_id, listener_id, supersedes_recipe_id,
+                    narrator_voice_id, voice_display_name, pace,
+                    capability_profile_id, capability_profile_version, provider, service, endpoint,
+                    model_snapshot, region, data_policy_version,
+                    voice_mapping_id, mapping_version, provider_voice, native_controls,
+                    preview_version, evaluation_version, segmentation_policy_version,
+                    audio_policy_version, toolchain_version, recipe_digest, created_at
+                )
+                SELECT ?, gr.conversion_id, gr.listener_id, gr.recipe_id,
+                       gr.narrator_voice_id, gr.voice_display_name, gr.pace,
+                       p.profile_id, p.profile_version, p.provider, p.service, p.endpoint,
+                       p.model_snapshot, p.region, p.data_policy_version,
+                       vm.mapping_id, vm.mapping_version, vm.provider_voice,
+                       vm.native_controls -> gr.pace,
+                       vm.preview_version, vm.evaluation_version, gr.segmentation_policy_version,
+                       gr.audio_policy_version, gr.toolchain_version, ?, gr.created_at
+                FROM narration.generation_recipe gr
+                JOIN narration.provider_capability_profile p ON p.profile_id = ?
+                JOIN narration.voice_mapping vm ON vm.mapping_id = ?
+                WHERE gr.recipe_id = ?
+                """,
+                legacyRecipeId,
+                "b".repeat(64),
+                LEGACY_PROFILE_ID,
+                LEGACY_ROWAN_MAPPING_ID,
+                current.recipeId());
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.audiobook_conversion
+                SET current_generation_recipe_id = ?
+                WHERE conversion_id = ? AND listener_id = ?
+                """,
+                legacyRecipeId,
+                conversion.conversionId(),
+                conversion.listenerId());
+
+        NarrationSelectionService.FailoverAuthorization failover = narrationSelectionService.failoverGeneration(
+                conversion.listenerId(), conversion.conversionId(), legacyRecipeId);
+
+        assertThat(failover.failedRecipeId()).isEqualTo(legacyRecipeId);
+        assertThat(failover.capabilityProfileVersion()).isEqualTo("google-speech-eu-v1");
+        assertThat(failover.voiceEquivalenceVersion()).isEqualTo("voice-equivalence-2026-08");
+        assertThat(failover.paceEquivalenceVersion()).isEqualTo("pace-natural-equivalence-2026-08");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT supersedes_recipe_id FROM narration.generation_recipe WHERE recipe_id = ?",
+                UUID.class,
+                failover.replacementRecipeId())).isEqualTo(legacyRecipeId);
     }
 
     private void assertRejected(

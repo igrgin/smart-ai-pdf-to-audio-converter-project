@@ -45,6 +45,7 @@ public class SpeechProviderImpl implements SpeechProvider {
                 .header("Authorization", "Bearer " + properties.openAiApiKey())
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/octet-stream")
+                .header("X-Client-Request-Id", request.operationId())
                 .POST(HttpRequest.BodyPublishers.ofString(body(request)))
                 .build();
         try {
@@ -99,6 +100,9 @@ public class SpeechProviderImpl implements SpeechProvider {
 
     private static void validate(SpeechRequest request) {
         if (request == null
+                || blank(request.operationId())
+                || request.operationId().length() > 100
+                || !opaque(request.operationId())
                 || request.endpoint() == null
                 || !APPROVED_SPEECH_ENDPOINT.equals(request.endpoint())
                 || blank(request.model())
@@ -114,5 +118,14 @@ public class SpeechProviderImpl implements SpeechProvider {
 
     private static boolean blank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private static boolean opaque(String value) {
+        try {
+            java.util.UUID.fromString(value);
+            return true;
+        } catch (IllegalArgumentException exception) {
+            return false;
+        }
     }
 }

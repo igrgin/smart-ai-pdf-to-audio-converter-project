@@ -9,10 +9,12 @@ import dev.audiobook.platform.narration.NarrationPlanAssetStore;
 import dev.audiobook.platform.narration.NarrationReviewAssetStore;
 import dev.audiobook.platform.narration.NarrationReviewService;
 import dev.audiobook.platform.narration.NarrationSelectionService;
+import dev.audiobook.platform.narration.NarrationSelectionRejectedException;
+import dev.audiobook.platform.narration.NarrationRejectionReason;
 import dev.audiobook.platform.narration.PublicationNarrationPlanInterpreter;
+import dev.audiobook.platform.provider.GovernedSpeechService;
 import dev.audiobook.platform.workflow.AudiobookConversionFinalizationService;
 import java.io.IOException;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.Timestamp;
@@ -49,7 +51,7 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
     private final AudiobookAssetStore audiobookAssetStore;
     private final SpeechSegmentationService segmentationService;
     private final NarrationSelectionService narrationSelectionService;
-    private final SpeechProvider speechProvider;
+    private final GovernedSpeechService governedSpeechService;
     private final SpeechResultValidationService validationService;
     private final AudioPackagingService packagingService;
     private final PrivateAudiobookLibraryService privateAudiobookLibraryService;
@@ -124,6 +126,17 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                 segmented.manifestDigest(),
                 segmented.segments().size(),
                 createdAt);
+        jdbcTemplate.update(
+                """
+                INSERT INTO generation.active_segment_manifest (
+                    conversion_id, listener_id, manifest_id, activated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT (conversion_id) DO UPDATE
+                SET listener_id = EXCLUDED.listener_id,
+                    manifest_id = EXCLUDED.manifest_id,
+                    activated_at = EXCLUDED.activated_at
+                """,
+                conversionId, listenerId, manifestId, createdAt);
         for (SpeechSegmentationService.ApprovedChapter chapter : approvedChapters) {
             jdbcTemplate.update(
                     """
@@ -174,8 +187,15 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
             return replay;
         }
         StoredSegment segment = storedSegment(listenerId, conversionId, operationKey);
-        NarrationSelectionService.GenerationAuthorization authorization =
-                narrationSelectionService.authorizeGeneration(listenerId, conversionId);
+        NarrationSelectionService.GenerationAuthorization authorization;
+        try {
+            authorization = narrationSelectionService.authorizeGeneration(listenerId, conversionId);
+        } catch (NarrationSelectionRejectedException exception) {
+            if (exception.reason() == NarrationRejectionReason.EXPLICIT_NEW_CHOICE_REQUIRED) {
+                throw restartUnderFailover(listenerId, conversionId, segment.recipeId());
+            }
+            throw exception;
+        }
         if (!authorization.recipeId().equals(segment.recipeId())
                 || !authorization.recipeDigest().equals(segment.recipeDigest())) {
             throw new IllegalStateException("Frozen Generation Recipe is no longer eligible");
@@ -209,22 +229,18 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                 Timestamp.from(startedAt));
         try {
             String spokenText = readSpokenText(segment);
-            NativeControls controls = nativeControls(segment.nativeControls());
-            SpeechProvider.SpeechResult providerResult = speechProvider.synthesize(
-                    new SpeechProvider.SpeechRequest(
-                            URI.create(segment.endpoint()),
-                            segment.model(),
-                            segment.region(),
-                            segment.voice(),
-                            controls.speed(),
-                            controls.instructions(),
-                            spokenText));
+            GovernedSpeechService.SpeechOutcome providerOutcome = governedSpeechService.synthesize(
+                    new GovernedSpeechService.SpeechCommand(
+                            segment.recipeId(), attemptId.toString(), spokenText));
+            SpeechProvider.SpeechResult providerResult = providerOutcome.speech();
             String receivedDigest = SpeechSegmentationServiceImpl.sha256Bytes(providerResult.audio());
             jdbcTemplate.update(
                     """
                     UPDATE generation.speech_attempt
                     SET state = 'RECEIVED', provider_request_id = ?, actual_model = ?,
-                        actual_region = ?, actual_voice = ?, received_sha256 = ?
+                        actual_region = ?, actual_voice = ?, received_sha256 = ?,
+                        capability_profile_version = ?, input_meter = ?, input_units = ?,
+                        output_meter = ?, output_units = ?
                     WHERE attempt_id = ?
                     """,
                     providerResult.providerRequestId(),
@@ -232,6 +248,11 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                     providerResult.actualRegion(),
                     providerResult.actualVoice(),
                     receivedDigest,
+                    providerOutcome.capabilityProfileVersion(),
+                    providerOutcome.usage().inputMeter(),
+                    providerOutcome.usage().inputUnits(),
+                    providerOutcome.usage().outputMeter(),
+                    providerOutcome.usage().outputUnits(),
                     attemptId);
             SpeechResultValidationService.ValidatedPcm pcm = validationService.validate(
                     new SpeechResultValidationService.ExpectedRoute(
@@ -279,11 +300,24 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
             return result;
         } catch (RuntimeException | IOException exception) {
             failAttempt(attemptId, failureCode(exception));
+            if (exception instanceof SpeechProviderException providerException
+                    && providerException.retryable()) {
+                throw restartUnderFailover(listenerId, conversionId, segment.recipeId());
+            }
             if (exception instanceof RuntimeException runtimeException) {
                 throw runtimeException;
             }
             throw new IllegalStateException("Speech Working Asset storage is unavailable", exception);
         }
+    }
+
+    private GenerationRestartedException restartUnderFailover(
+            UUID listenerId, UUID conversionId, UUID failedRecipeId) {
+        NarrationSelectionService.FailoverAuthorization failover =
+                narrationSelectionService.failoverGeneration(listenerId, conversionId, failedRecipeId);
+        GenerationManifest replacement = prepare(listenerId, conversionId);
+        return new GenerationRestartedException(
+                failover.replacementRecipeId(), replacement.manifestId());
     }
 
     @Override
@@ -464,10 +498,11 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
         List<StoredSegment> matches = jdbcTemplate.query(
                 """
                 SELECT s.segment_id, s.spoken_text_ref, s.spoken_text_sha256,
-                       gr.recipe_id, m.recipe_digest, gr.endpoint, gr.model_snapshot, gr.region,
-                       gr.provider_voice, gr.native_controls::text AS native_controls
+                       gr.recipe_id, m.recipe_digest, gr.model_snapshot, gr.region,
+                       gr.provider_voice
                 FROM generation.speech_segment s
                 JOIN generation.segment_manifest m ON m.manifest_id = s.manifest_id
+                JOIN generation.active_segment_manifest active ON active.manifest_id = m.manifest_id
                 JOIN narration.generation_recipe gr ON gr.recipe_id = m.recipe_id
                 WHERE s.listener_id = ? AND s.conversion_id = ? AND s.operation_key = ?
                 """,
@@ -477,11 +512,9 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                         resultSet.getString("spoken_text_sha256"),
                         resultSet.getObject("recipe_id", UUID.class),
                         resultSet.getString("recipe_digest"),
-                        resultSet.getString("endpoint"),
                         resultSet.getString("model_snapshot"),
                         resultSet.getString("region"),
-                        resultSet.getString("provider_voice"),
-                        resultSet.getString("native_controls")),
+                        resultSet.getString("provider_voice")),
                 listenerId,
                 conversionId,
                 operationKey);
@@ -495,20 +528,6 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
         byte[] content = audiobookAssetStore.readWorking(segment.spokenTextReference());
         requireDigest(content, segment.spokenTextDigest(), "Speech text");
         return new String(content, StandardCharsets.UTF_8);
-    }
-
-    private static NativeControls nativeControls(String json) {
-        try {
-            JsonNode controls = OBJECT_MAPPER.readTree(json);
-            double speed = controls.path("speed").asDouble(Double.NaN);
-            String instructions = controls.path("instructions").asText(null);
-            if (!Double.isFinite(speed) || speed <= 0 || instructions == null || instructions.isBlank()) {
-                throw new IllegalStateException("Frozen speech controls are invalid");
-            }
-            return new NativeControls(speed, instructions);
-        } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("Frozen speech controls are invalid", exception);
-        }
     }
 
     private void failAttempt(UUID attemptId, String code) {
@@ -540,9 +559,15 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
             UUID listenerId, UUID conversionId, String operationKey, boolean replayed) {
         List<AcceptedSegment> matches = jdbcTemplate.query(
                 """
-                SELECT operation_key, attempt_id, pcm_sha256, duration_ms
-                FROM generation.accepted_segment
-                WHERE listener_id = ? AND conversion_id = ? AND operation_key = ?
+                SELECT accepted.operation_key, accepted.attempt_id,
+                       accepted.pcm_sha256, accepted.duration_ms
+                FROM generation.accepted_segment accepted
+                JOIN generation.speech_segment segment
+                  ON segment.operation_key = accepted.operation_key
+                JOIN generation.active_segment_manifest active
+                  ON active.manifest_id = segment.manifest_id
+                WHERE accepted.listener_id = ? AND accepted.conversion_id = ?
+                  AND accepted.operation_key = ?
                 """,
                 (resultSet, row) -> new AcceptedSegment(
                         resultSet.getString("operation_key"),
@@ -563,6 +588,7 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                        m.segment_count, m.created_at, m.segmentation_policy_version,
                        gr.audio_policy_version, gr.toolchain_version
                 FROM generation.segment_manifest m
+                JOIN generation.active_segment_manifest active ON active.manifest_id = m.manifest_id
                 JOIN narration.generation_recipe gr ON gr.recipe_id = m.recipe_id
                 WHERE m.listener_id = ? AND m.conversion_id = ?
                 """,
@@ -594,6 +620,7 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                 JOIN generation.audiobook_chapter_plan cp
                   ON cp.manifest_id = s.manifest_id AND cp.chapter_ordinal = s.chapter_ordinal
                 JOIN generation.accepted_segment a ON a.operation_key = s.operation_key
+                JOIN generation.active_segment_manifest active ON active.manifest_id = s.manifest_id
                 WHERE s.listener_id = ? AND s.conversion_id = ?
                 ORDER BY s.chapter_ordinal, s.segment_ordinal
                 """,
@@ -877,9 +904,14 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
     private GenerationManifest existingManifest(UUID listenerId, UUID conversionId) {
         List<GenerationManifest> matches = jdbcTemplate.query(
                 """
-                SELECT manifest_id, manifest_digest
-                FROM generation.segment_manifest
-                WHERE listener_id = ? AND conversion_id = ?
+                SELECT manifest.manifest_id, manifest.manifest_digest
+                FROM generation.segment_manifest manifest
+                JOIN generation.active_segment_manifest active
+                  ON active.manifest_id = manifest.manifest_id
+                JOIN workflow.audiobook_conversion conversion
+                  ON conversion.conversion_id = manifest.conversion_id
+                WHERE manifest.listener_id = ? AND manifest.conversion_id = ?
+                  AND conversion.current_generation_recipe_id = manifest.recipe_id
                 """,
                 (resultSet, row) -> new GenerationManifest(
                         resultSet.getObject("manifest_id", UUID.class),
@@ -997,14 +1029,9 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
             String spokenTextDigest,
             UUID recipeId,
             String recipeDigest,
-            String endpoint,
             String model,
             String region,
-            String voice,
-            String nativeControls) {
-    }
-
-    private record NativeControls(double speed, String instructions) {
+            String voice) {
     }
 
     private record StoredManifest(

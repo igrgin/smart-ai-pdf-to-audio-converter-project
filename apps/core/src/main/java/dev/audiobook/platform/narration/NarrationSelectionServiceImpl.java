@@ -6,6 +6,7 @@ import static dev.audiobook.platform.narration.NarrationRejectionReason.CONVERSI
 import static dev.audiobook.platform.narration.NarrationRejectionReason.EXPLICIT_NEW_CHOICE_REQUIRED;
 import static dev.audiobook.platform.narration.NarrationRejectionReason.GENERATION_RECIPE_ALREADY_CONFIRMED;
 import static dev.audiobook.platform.narration.NarrationRejectionReason.GENERATION_RECIPE_REQUIRED;
+import static dev.audiobook.platform.narration.NarrationRejectionReason.QUALIFIED_FAILOVER_UNAVAILABLE;
 import static dev.audiobook.platform.narration.NarrationRejectionReason.IDEMPOTENCY_KEY_REUSED;
 import static dev.audiobook.platform.narration.NarrationRejectionReason.UNISSUED_VOICE_IDENTIFIER;
 import static dev.audiobook.platform.narration.NarrationRejectionReason.UNSUPPORTED_NARRATION_PACE;
@@ -43,6 +44,11 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
     private static final String FROZEN_RECIPE_ELIGIBILITY_SQL = """
             vm.mapping_state = 'CURRENT'
               AND p.profile_state = 'CURRENT'
+              AND p.privacy_state = 'QUALIFIED'
+              AND p.region_state = 'QUALIFIED'
+              AND p.access_state = 'QUALIFIED'
+              AND p.quota_state = 'QUALIFIED'
+              AND p.evaluation_state = 'QUALIFIED'
               AND p.expires_at > ?
               AND vm.narrator_voice_id = gr.narrator_voice_id
               AND vm.mapping_version = gr.mapping_version
@@ -278,6 +284,118 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
         return new GenerationAuthorization(recipe.recipeId(), recipe.recipeDigest());
     }
 
+    @Override
+    @Transactional
+    public FailoverAuthorization failoverGeneration(
+            UUID listenerId, UUID conversionId, UUID failedRecipeId) {
+        Objects.requireNonNull(listenerId, "listenerId");
+        Objects.requireNonNull(conversionId, "conversionId");
+        Objects.requireNonNull(failedRecipeId, "failedRecipeId");
+        StoredConversion conversion = lockConversion(listenerId, conversionId);
+        if (!failedRecipeId.equals(conversion.currentRecipeId())) {
+            throw rejected(QUALIFIED_FAILOVER_UNAVAILABLE);
+        }
+        Instant now = identityClock.instant();
+        List<FailoverCandidate> candidates = jdbcTemplate.query(
+                """
+                SELECT gr.narrator_voice_id, gr.voice_display_name, gr.pace,
+                       fm.mapping_id, fm.mapping_version, fm.provider_voice,
+                       (fm.native_controls -> gr.pace)::text AS selected_controls,
+                       fm.preview_version, fm.evaluation_version,
+                       fp.profile_id, fp.profile_version, fp.provider, fp.service, fp.endpoint,
+                       fp.model_snapshot, fp.region, fp.data_policy_version,
+                       q.voice_equivalence_version, q.pace_equivalence_version,
+                       gr.segmentation_policy_version, gr.audio_policy_version, gr.toolchain_version
+                FROM narration.generation_recipe gr
+                JOIN narration.qualified_voice_equivalence q
+                  ON q.primary_mapping_id = gr.voice_mapping_id
+                JOIN narration.voice_mapping fm ON fm.mapping_id = q.failover_mapping_id
+                JOIN narration.provider_capability_profile fp
+                  ON fp.profile_id = fm.capability_profile_id
+                WHERE gr.recipe_id = ? AND gr.listener_id = ? AND gr.conversion_id = ?
+                  AND q.evaluation_state = 'QUALIFIED' AND q.expires_at > ?
+                  AND q.pace = gr.pace
+                  AND fm.narrator_voice_id = gr.narrator_voice_id
+                  AND fm.mapping_state = 'CURRENT'
+                  AND fm.required_region = fp.region
+                  AND fm.required_data_policy_version = fp.data_policy_version
+                  AND fp.service = 'speech' AND fp.profile_state = 'CURRENT'
+                  AND fp.privacy_state = 'QUALIFIED' AND fp.region_state = 'QUALIFIED'
+                  AND fp.access_state = 'QUALIFIED' AND fp.quota_state = 'QUALIFIED'
+                  AND fp.evaluation_state = 'QUALIFIED' AND fp.expires_at > ?
+                  AND gr.pace = ANY(fp.supported_paces)
+                  AND fm.native_controls -> gr.pace IS NOT NULL
+                ORDER BY q.checked_at DESC, q.equivalence_id
+                """,
+                (resultSet, row) -> new FailoverCandidate(
+                        resultSet.getObject("narrator_voice_id", UUID.class),
+                        resultSet.getString("voice_display_name"), resultSet.getString("pace"),
+                        resultSet.getObject("mapping_id", UUID.class),
+                        resultSet.getString("mapping_version"), resultSet.getString("provider_voice"),
+                        resultSet.getString("selected_controls"), resultSet.getString("preview_version"),
+                        resultSet.getString("evaluation_version"),
+                        resultSet.getObject("profile_id", UUID.class), resultSet.getString("profile_version"),
+                        resultSet.getString("provider"), resultSet.getString("service"),
+                        resultSet.getString("endpoint"), resultSet.getString("model_snapshot"),
+                        resultSet.getString("region"), resultSet.getString("data_policy_version"),
+                        resultSet.getString("voice_equivalence_version"),
+                        resultSet.getString("pace_equivalence_version"),
+                        resultSet.getString("segmentation_policy_version"),
+                        resultSet.getString("audio_policy_version"), resultSet.getString("toolchain_version")),
+                failedRecipeId, listenerId, conversionId, Timestamp.from(now), Timestamp.from(now));
+        if (candidates.isEmpty()) {
+            throw rejected(QUALIFIED_FAILOVER_UNAVAILABLE);
+        }
+        FailoverCandidate candidate = candidates.getFirst();
+        UUID replacementRecipeId = identifierGenerator.generate();
+        Instant createdAt = identityClock.instant();
+        String digest = sha256("""
+                schemaVersion=failover-1
+                replacementRecipeId=%s
+                failedRecipeId=%s
+                conversionId=%s
+                profileVersion=%s
+                mappingVersion=%s
+                voiceEquivalenceVersion=%s
+                paceEquivalenceVersion=%s
+                createdAt=%s
+                """.formatted(replacementRecipeId, failedRecipeId, conversionId,
+                candidate.profileVersion(), candidate.mappingVersion(),
+                candidate.voiceEquivalenceVersion(), candidate.paceEquivalenceVersion(), createdAt));
+        jdbcTemplate.update(
+                """
+                INSERT INTO narration.generation_recipe (
+                    recipe_id, conversion_id, listener_id, supersedes_recipe_id,
+                    narrator_voice_id, voice_display_name, pace,
+                    capability_profile_id, capability_profile_version, provider, service, endpoint,
+                    model_snapshot, region, data_policy_version,
+                    voice_mapping_id, mapping_version, provider_voice, native_controls,
+                    preview_version, evaluation_version, segmentation_policy_version,
+                    audio_policy_version, toolchain_version, recipe_digest, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb,
+                          ?, ?, ?, ?, ?, ?, ?)
+                """,
+                replacementRecipeId, conversionId, listenerId, failedRecipeId,
+                candidate.voiceId(), candidate.voiceDisplayName(), candidate.pace(),
+                candidate.profileId(), candidate.profileVersion(), candidate.provider(),
+                candidate.service(), candidate.endpoint(), candidate.model(), candidate.region(),
+                candidate.dataPolicyVersion(), candidate.mappingId(), candidate.mappingVersion(),
+                candidate.providerVoice(), candidate.nativeControls(), candidate.previewVersion(),
+                candidate.evaluationVersion(), candidate.segmentationPolicyVersion(),
+                candidate.audioPolicyVersion(), candidate.toolchainVersion(), digest,
+                Timestamp.from(createdAt));
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.audiobook_conversion
+                SET current_generation_recipe_id = ?, version = version + 1
+                WHERE conversion_id = ? AND listener_id = ?
+                """,
+                replacementRecipeId, conversionId, listenerId);
+        return new FailoverAuthorization(
+                failedRecipeId, replacementRecipeId, digest, candidate.profileVersion(),
+                candidate.voiceEquivalenceVersion(), candidate.paceEquivalenceVersion());
+    }
+
     private EligibleMapping eligibleMapping(UUID voiceId, NarrationPace pace, String currentPreviewVersion) {
         List<MappingCandidate> candidates = jdbcTemplate.query(
                 """
@@ -287,11 +405,17 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
                        vm.preview_version, vm.evaluation_version, vm.mapping_state,
                        p.profile_id, p.profile_version, p.provider, p.service, p.endpoint,
                        p.model_snapshot, p.region, p.data_policy_version, p.profile_state,
-                       p.checked_at, p.expires_at, ? = ANY(p.supported_paces) AS supports_pace
+                       p.privacy_state, p.region_state, p.access_state, p.quota_state,
+                       p.evaluation_state, p.checked_at, p.expires_at,
+                       ? = ANY(p.supported_paces) AS supports_pace
                 FROM narration.voice_mapping vm
                 JOIN narration.provider_capability_profile p
                   ON p.profile_id = vm.capability_profile_id
                 WHERE vm.narrator_voice_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM narration.qualified_voice_equivalence q
+                      WHERE q.failover_mapping_id = vm.mapping_id
+                  )
                 ORDER BY p.checked_at DESC, vm.mapping_id
                 """,
                 (resultSet, row) -> new MappingCandidate(
@@ -313,6 +437,11 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
                         resultSet.getString("region"),
                         resultSet.getString("data_policy_version"),
                         resultSet.getString("profile_state"),
+                        resultSet.getString("privacy_state"),
+                        resultSet.getString("region_state"),
+                        resultSet.getString("access_state"),
+                        resultSet.getString("quota_state"),
+                        resultSet.getString("evaluation_state"),
                         resultSet.getObject("expires_at", OffsetDateTime.class).toInstant(),
                         resultSet.getBoolean("supports_pace")),
                 pace.name(),
@@ -335,7 +464,9 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
                 && candidate.expiresAt().isAfter(now))) {
             throw rejected(CAPABILITY_PROFILE_STALE);
         }
-        if (candidates.stream().noneMatch(MappingCandidate::regionAndPolicyMatch)) {
+        if (candidates.stream().noneMatch(candidate -> "CURRENT".equals(candidate.mappingState())
+                && "CURRENT".equals(candidate.profileState())
+                && candidate.regionAndPolicyMatch())) {
             throw rejected(UNSUPPORTED_REGION_OR_DATA_POLICY);
         }
         throw rejected(UNSUPPORTED_NARRATION_PACE);
@@ -548,6 +679,11 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
             String region,
             String dataPolicyVersion,
             String profileState,
+            String privacyState,
+            String regionState,
+            String accessState,
+            String quotaState,
+            String evaluationState,
             Instant expiresAt,
             boolean supportsPace) {
 
@@ -558,6 +694,11 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
         boolean eligible(Instant now, String currentPreviewVersion) {
             return "CURRENT".equals(mappingState)
                     && "CURRENT".equals(profileState)
+                    && "QUALIFIED".equals(privacyState)
+                    && "QUALIFIED".equals(regionState)
+                    && "QUALIFIED".equals(accessState)
+                    && "QUALIFIED".equals(quotaState)
+                    && "QUALIFIED".equals(evaluationState)
                     && expiresAt.isAfter(now)
                     && regionAndPolicyMatch()
                     && supportsPace
@@ -599,5 +740,30 @@ public class NarrationSelectionServiceImpl implements NarrationSelectionService 
             String modelSnapshot,
             String region,
             String dataPolicyVersion) {
+    }
+
+    private record FailoverCandidate(
+            UUID voiceId,
+            String voiceDisplayName,
+            String pace,
+            UUID mappingId,
+            String mappingVersion,
+            String providerVoice,
+            String nativeControls,
+            String previewVersion,
+            String evaluationVersion,
+            UUID profileId,
+            String profileVersion,
+            String provider,
+            String service,
+            String endpoint,
+            String model,
+            String region,
+            String dataPolicyVersion,
+            String voiceEquivalenceVersion,
+            String paceEquivalenceVersion,
+            String segmentationPolicyVersion,
+            String audioPolicyVersion,
+            String toolchainVersion) {
     }
 }
