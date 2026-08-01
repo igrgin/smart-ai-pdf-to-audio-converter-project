@@ -4,11 +4,13 @@ import java.sql.Timestamp;
 import java.time.Clock;
 import java.util.List;
 import java.util.UUID;
+import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 @Service
+@RequiredArgsConstructor
 @ConditionalOnProperty(name = "app.mode", havingValue = "core", matchIfMissing = true)
 public class AdmissionOutboxRelayServiceImpl implements AdmissionOutboxRelayService {
 
@@ -17,15 +19,6 @@ public class AdmissionOutboxRelayServiceImpl implements AdmissionOutboxRelayServ
     private final JdbcTemplate jdbcTemplate;
     private final InspectionWorkPublisher publisher;
     private final Clock clock;
-
-    public AdmissionOutboxRelayServiceImpl(
-            JdbcTemplate jdbcTemplate,
-            InspectionWorkPublisher publisher,
-            Clock clock) {
-        this.jdbcTemplate = jdbcTemplate;
-        this.publisher = publisher;
-        this.clock = clock;
-    }
 
     @Override
     public int relayPending() {

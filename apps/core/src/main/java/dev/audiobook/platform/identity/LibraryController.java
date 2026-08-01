@@ -1,7 +1,7 @@
 package dev.audiobook.platform.identity;
 
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
-import dev.audiobook.platform.admission.PublicationSubmissionService;
+import dev.audiobook.platform.workflow.AudiobookConversionService;
 import java.util.List;
 import java.util.Locale;
 import lombok.RequiredArgsConstructor;
@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class LibraryController {
 
     private final ConversionEntitlementService entitlementService;
-    private final PublicationSubmissionService submissionService;
+    private final AudiobookConversionService audiobookConversionService;
 
     @GetMapping
     public ResponseEntity<LibraryView> library(@AuthenticationPrincipal ListenerPrincipal principal) {
@@ -32,7 +32,7 @@ public class LibraryController {
                         principal.displayName(),
                         principal.contactEmail(),
                         methods,
-                        submissionService.conversions(principal.listenerId()),
+                        audiobookConversionService.conversions(principal.listenerId()),
                         ConversionEntitlementView.from(entitlementService.allowance(principal.listenerId()))));
     }
 
@@ -40,7 +40,7 @@ public class LibraryController {
             String displayName,
             String contactEmail,
             List<String> signInMethods,
-            List<PublicationSubmissionService.AudiobookConversion> audiobooks,
+            List<AudiobookConversionService.AudiobookConversion> audiobooks,
             ConversionEntitlementView conversionEntitlement) {
     }
 

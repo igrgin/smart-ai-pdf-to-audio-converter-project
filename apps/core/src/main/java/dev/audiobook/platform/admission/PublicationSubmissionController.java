@@ -5,6 +5,7 @@ import java.net.URI;
 import java.time.Instant;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -21,9 +22,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/publication-submissions")
 @RequiredArgsConstructor
+@Slf4j
 public class PublicationSubmissionController {
 
     private final PublicationSubmissionService submissionService;
+    private final AdmissionOutboxRelayService outboxRelayService;
 
     @PostMapping
     public ResponseEntity<CreationResponse> create(
@@ -89,6 +92,11 @@ public class PublicationSubmissionController {
                         request.byteLength(),
                         request.sha256(),
                         idempotencyKey));
+        try {
+            outboxRelayService.relayPending();
+        } catch (RuntimeException exception) {
+            log.warn("admission_outbox_relay_deferred");
+        }
         return ResponseEntity.accepted().cacheControl(CacheControl.noStore()).body(submission);
     }
 

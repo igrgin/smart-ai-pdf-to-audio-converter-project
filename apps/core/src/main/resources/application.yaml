@@ -50,8 +50,10 @@ spring:
     password: ${DATABASE_PASSWORD:audiobook-local}
     hikari:
       maximum-pool-size: ${DATABASE_POOL_SIZE:4}
+      connection-init-sql: SET search_path TO admission, workflow, public
   flyway:
     enabled: ${FLYWAY_ENABLED:true}
+    default-schema: public
     locations: classpath:db/migration
   jackson:
     default-property-inclusion: non_null
@@ -87,6 +89,8 @@ platform:
     cloud-project-id: ${GOOGLE_CLOUD_PROJECT:local-audiobook}
     working-bucket: ${WORKING_BUCKET:local-working}
     work-topic: ${WORK_TOPIC:folio-local-work}
+    push-audience: ${PUBSUB_PUSH_AUDIENCE:folio-local-inspection}
+    push-service-account: ${PUBSUB_PUSH_SERVICE_ACCOUNT:local-inspection@local-audiobook.iam.gserviceaccount.com}
   build:
     version: ${BUILD_VERSION:dev}
     revision: ${BUILD_REVISION:local}

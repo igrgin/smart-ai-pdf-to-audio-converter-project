@@ -1,26 +1,25 @@
 package dev.audiobook.platform.admission;
 
+import dev.audiobook.platform.workflow.InspectionWorkflowService;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.UUID;
+import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 @Component
+@RequiredArgsConstructor
 @Profile("!prod")
 public class InProcessInspectionWorkPublisher implements InspectionWorkPublisher {
 
     private final PublicationSubmissionService submissionService;
+    private final InspectionWorkflowService inspectionWorkflowService;
     private final Clock clock;
-
-    public InProcessInspectionWorkPublisher(PublicationSubmissionService submissionService, Clock clock) {
-        this.submissionService = submissionService;
-        this.clock = clock;
-    }
 
     @Override
     public void publish(UUID messageId, UUID workId) {
-        submissionService.acceptInspectionDelivery(messageId, workId);
+        inspectionWorkflowService.acceptDelivery(messageId, workId);
         submissionService.inspect(new PublicationSubmissionService.InspectionCommand(
                 workId,
                 "in-process-inspection-worker",

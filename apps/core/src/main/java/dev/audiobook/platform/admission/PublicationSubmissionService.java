@@ -1,7 +1,6 @@
 package dev.audiobook.platform.admission;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.UUID;
 
 public interface PublicationSubmissionService {
@@ -16,13 +15,9 @@ public interface PublicationSubmissionService {
 
     int expireDue();
 
-    Delivery acceptInspectionDelivery(UUID messageId, UUID workId);
-
     Inspection inspect(InspectionCommand command);
 
     Submission submission(UUID listenerId, UUID submissionId);
-
-    List<AudiobookConversion> conversions(UUID listenerId);
 
     record CreateCommand(
             UUID listenerId,
@@ -75,9 +70,6 @@ public interface PublicationSubmissionService {
     record InspectionCommand(UUID workId, String workerId, Instant leaseUntil, String operationKey) {
     }
 
-    record Delivery(UUID workId, boolean duplicate) {
-    }
-
     record Inspection(
             UUID submissionId,
             InspectionOutcome outcome,
@@ -92,9 +84,6 @@ public interface PublicationSubmissionService {
             SubmissionState state,
             String reasonCode,
             UUID conversionId) {
-    }
-
-    record AudiobookConversion(UUID conversionId, ConversionState state) {
     }
 
     enum SubmissionState {
@@ -113,7 +102,4 @@ public interface PublicationSubmissionService {
         LEASED_BY_ANOTHER_WORKER
     }
 
-    enum ConversionState {
-        PREPARING
-    }
 }

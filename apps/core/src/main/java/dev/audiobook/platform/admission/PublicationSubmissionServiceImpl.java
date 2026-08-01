@@ -1,6 +1,9 @@
 package dev.audiobook.platform.admission;
 
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
+import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
+import dev.audiobook.platform.workflow.AudiobookConversionService;
+import dev.audiobook.platform.workflow.InspectionWorkflowService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -38,6 +41,9 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
     private final AdmissionProperties properties;
     private final Clock identityClock;
     private final org.springframework.transaction.PlatformTransactionManager transactionManager;
+    private final PlatformIdentifierGenerator identifierGenerator;
+    private final AudiobookConversionService audiobookConversionService;
+    private final InspectionWorkflowService inspectionWorkflowService;
 
     @Override
     @Transactional
@@ -50,10 +56,10 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
         }
 
         Instant now = identityClock.instant();
-        UUID submissionId = UUID.randomUUID();
-        UUID attestationId = UUID.randomUUID();
-        UUID conversionId = UUID.randomUUID();
-        UUID sessionId = UUID.randomUUID();
+        UUID submissionId = identifierGenerator.generate();
+        UUID attestationId = identifierGenerator.generate();
+        UUID conversionId = identifierGenerator.generate();
+        UUID sessionId = identifierGenerator.generate();
         Instant expiresAt = now.plus(properties.uploadSessionValidity());
         ConversionEntitlementService.AdmissionDecision reservation = entitlementService.authorizeSpeech(
                 new ConversionEntitlementService.AdmissionRequest(
@@ -186,11 +192,12 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
             jdbcTemplate.update(
                     """
                     INSERT INTO quarantine_object (
-                        object_id, submission_id, object_key, storage_generation,
+                        object_id, listener_id, submission_id, object_key, storage_generation,
                         byte_length, sha256, cleanup_due_at, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     command.submissionId(),
+                    upload.listenerId(),
                     command.submissionId(),
                     stored.key(),
                     stored.generation(),
@@ -238,27 +245,7 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
         }
 
         Instant now = identityClock.instant();
-        UUID workId = UUID.randomUUID();
-        UUID messageId = UUID.randomUUID();
-        jdbcTemplate.update(
-                """
-                INSERT INTO inspection_work (work_id, submission_id, operation_key, state, created_at)
-                VALUES (?, ?, ?, 'PENDING', ?)
-                """,
-                workId,
-                stored.submissionId(),
-                "inspect-" + workId,
-                databaseTime(now));
-        jdbcTemplate.update(
-                """
-                INSERT INTO admission_outbox (
-                    message_id, message_type, schema_version, aggregate_id, work_id, created_at
-                ) VALUES (?, 'INSPECT_SUBMISSION', 1, ?, ?, ?)
-                """,
-                messageId,
-                stored.submissionId(),
-                workId,
-                databaseTime(now));
+        inspectionWorkflowService.schedule(stored.submissionId(), stored.listenerId());
         jdbcTemplate.update(
                 """
                 UPDATE publication_submission
@@ -329,30 +316,6 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
     }
 
     @Override
-    @Transactional
-    public Delivery acceptInspectionDelivery(UUID messageId, UUID workId) {
-        Objects.requireNonNull(messageId, "messageId");
-        Objects.requireNonNull(workId, "workId");
-        Integer valid = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM admission_outbox WHERE message_id = ? AND work_id = ?",
-                Integer.class,
-                messageId,
-                workId);
-        if (valid == null || valid != 1) {
-            throw new SubmissionRejectedException("UNKNOWN_INSPECTION_DELIVERY");
-        }
-        int inserted = jdbcTemplate.update(
-                """
-                INSERT INTO inspection_inbox (message_id, work_id, accepted_at)
-                VALUES (?, ?, ?) ON CONFLICT (message_id) DO NOTHING
-                """,
-                messageId,
-                workId,
-                databaseTime(identityClock.instant()));
-        return new Delivery(workId, inserted == 0);
-    }
-
-    @Override
     public Inspection inspect(InspectionCommand command) {
         Objects.requireNonNull(command, "command");
         String workerId = requiredReference(command.workerId(), "workerId");
@@ -403,64 +366,18 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
         return new Submission(stored.submissionId(), stored.state(), stored.reasonCode(), stored.admittedConversionId());
     }
 
-    @Override
-    public List<AudiobookConversion> conversions(UUID listenerId) {
-        Objects.requireNonNull(listenerId, "listenerId");
-        return jdbcTemplate.query(
-                """
-                SELECT conversion_id, state FROM audiobook_conversion
-                WHERE listener_id = ? ORDER BY created_at, conversion_id
-                """,
-                (resultSet, row) -> new AudiobookConversion(
-                        resultSet.getObject("conversion_id", UUID.class),
-                        ConversionState.valueOf(resultSet.getString("state"))),
-                listenerId);
-    }
-
     private Claim claim(UUID workId, String workerId, Instant leaseUntil, String operationKey) {
         Objects.requireNonNull(workId, "workId");
-        StoredWork work = jdbcTemplate.queryForObject(
-                """
-                SELECT work_id, submission_id, operation_key, state, lease_owner, lease_expires_at
-                FROM inspection_work WHERE work_id = ? FOR UPDATE
-                """,
-                (resultSet, row) -> new StoredWork(
-                        resultSet.getObject("work_id", UUID.class),
-                        resultSet.getObject("submission_id", UUID.class),
-                        resultSet.getString("operation_key"),
-                        resultSet.getString("state"),
-                        resultSet.getString("lease_owner"),
-                        instant(resultSet.getObject("lease_expires_at", OffsetDateTime.class))),
-                workId);
-        if (!work.operationKey().equals(operationKey)) {
-            throw new SubmissionRejectedException("INSPECTION_OPERATION_MISMATCH");
-        }
-        StoredSubmission submission = lockSubmission(work.submissionId());
-        if ("COMPLETED".equals(work.state())) {
+        InspectionWorkflowService.Claim workflowClaim = inspectionWorkflowService.claim(
+                workId, workerId, leaseUntil, operationKey);
+        StoredSubmission submission = lockSubmission(workflowClaim.submissionId());
+        if (workflowClaim.status() == InspectionWorkflowService.ClaimStatus.COMPLETED) {
             return new Claim(submission, false, loadInspection(workId, true));
         }
-        Integer accepted = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM inspection_inbox WHERE work_id = ?",
-                Integer.class,
-                workId);
-        if (accepted == null || accepted == 0) {
-            throw new SubmissionRejectedException("INSPECTION_DELIVERY_NOT_ACCEPTED");
-        }
         Instant now = identityClock.instant();
-        if ("LEASED".equals(work.state())
-                && work.leaseExpiresAt() != null
-                && work.leaseExpiresAt().isAfter(now)
-                && !workerId.equals(work.leaseOwner())) {
+        if (workflowClaim.status() == InspectionWorkflowService.ClaimStatus.LEASED_BY_ANOTHER_WORKER) {
             return new Claim(submission, false, null);
         }
-        jdbcTemplate.update(
-                """
-                UPDATE inspection_work SET state = 'LEASED', lease_owner = ?, lease_expires_at = ?
-                WHERE work_id = ?
-                """,
-                workerId,
-                databaseTime(leaseUntil),
-                workId);
         jdbcTemplate.update(
                 """
                 UPDATE publication_submission SET state = 'INSPECTING', version = version + 1, updated_at = ?
@@ -477,24 +394,8 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
             String workerId,
             String operationKey,
             EpubInspectionService.Result inspection) {
-        StoredWork work = jdbcTemplate.queryForObject(
-                """
-                SELECT work_id, submission_id, operation_key, state, lease_owner, lease_expires_at
-                FROM inspection_work WHERE work_id = ? FOR UPDATE
-                """,
-                (resultSet, row) -> new StoredWork(
-                        resultSet.getObject("work_id", UUID.class),
-                        resultSet.getObject("submission_id", UUID.class),
-                        resultSet.getString("operation_key"),
-                        resultSet.getString("state"),
-                        resultSet.getString("lease_owner"),
-                        instant(resultSet.getObject("lease_expires_at", OffsetDateTime.class))),
-                workId);
-        if ("COMPLETED".equals(work.state())) {
+        if (!inspectionWorkflowService.complete(workId, workerId)) {
             return loadInspection(workId, true);
-        }
-        if (!workerId.equals(work.leaseOwner())) {
-            throw new SubmissionRejectedException("INSPECTION_LEASE_LOST");
         }
         StoredSubmission stored = lockSubmission(snapshot.submissionId());
         Instant now = identityClock.instant();
@@ -503,7 +404,7 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
         InspectionOutcome outcome;
         String reason = inspection.reasonCode();
         if (inspection.accepted()) {
-            sourceId = UUID.randomUUID();
+            sourceId = identifierGenerator.generate();
             conversionId = stored.plannedConversionId();
             jdbcTemplate.update(
                     """
@@ -517,16 +418,7 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                     EPUB_MEDIA_TYPE,
                     stored.declaredByteLength(),
                     databaseTime(now));
-            jdbcTemplate.update(
-                    """
-                    INSERT INTO audiobook_conversion (
-                        conversion_id, listener_id, source_publication_id, state, created_at
-                    ) VALUES (?, ?, ?, 'PREPARING', ?)
-                    """,
-                    conversionId,
-                    stored.listenerId(),
-                    sourceId,
-                    databaseTime(now));
+            audiobookConversionService.createPreparing(conversionId, stored.listenerId(), sourceId);
             jdbcTemplate.update(
                     """
                     UPDATE publication_submission
@@ -555,12 +447,13 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
         jdbcTemplate.update(
                 """
                 INSERT INTO inspection_result (
-                    result_id, work_id, submission_id, operation_key, outcome,
+                    result_id, work_id, listener_id, submission_id, operation_key, outcome,
                     reason_code, media_type, toolchain_version, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                UUID.randomUUID(),
+                identifierGenerator.generate(),
                 workId,
+                stored.listenerId(),
                 stored.submissionId(),
                 operationKey,
                 outcome.name(),
@@ -568,14 +461,6 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                 inspection.accepted() ? EPUB_MEDIA_TYPE : null,
                 INSPECTION_TOOLCHAIN,
                 databaseTime(now));
-        jdbcTemplate.update(
-                """
-                UPDATE inspection_work
-                SET state = 'COMPLETED', lease_owner = NULL, lease_expires_at = NULL, completed_at = ?
-                WHERE work_id = ?
-                """,
-                databaseTime(now),
-                workId);
         return new Inspection(stored.submissionId(), outcome, reason, sourceId, conversionId, false);
     }
 
@@ -583,10 +468,10 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
         return jdbcTemplate.queryForObject(
                 """
                 SELECT r.submission_id, r.outcome, r.reason_code,
-                       s.source_publication_id, c.conversion_id
+                       s.source_publication_id, p.planned_conversion_id AS conversion_id
                 FROM inspection_result r
                 LEFT JOIN source_publication s ON s.submission_id = r.submission_id
-                LEFT JOIN audiobook_conversion c ON c.source_publication_id = s.source_publication_id
+                JOIN publication_submission p ON p.submission_id = r.submission_id
                 WHERE r.work_id = ?
                 """,
                 (resultSet, row) -> new Inspection(
@@ -645,7 +530,7 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                 ) VALUES (?, ?, (SELECT object_id FROM quarantine_object WHERE submission_id = ?), ?, ?, ?)
                 ON CONFLICT (submission_id) DO NOTHING
                 """,
-                UUID.randomUUID(),
+                identifierGenerator.generate(),
                 submissionId,
                 submissionId,
                 reason,
@@ -679,7 +564,7 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
         try {
             return jdbcTemplate.queryForObject(
                     """
-                    SELECT s.submission_id, s.state, s.declared_byte_length,
+                    SELECT s.submission_id, s.listener_id, s.state, s.declared_byte_length,
                            u.session_id, u.capability_hash, u.next_offset,
                            u.storage_generation, u.expires_at
                     FROM publication_submission s
@@ -688,6 +573,7 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                     """,
                     (resultSet, row) -> new StoredUpload(
                             resultSet.getObject("submission_id", UUID.class),
+                            resultSet.getObject("listener_id", UUID.class),
                             SubmissionState.valueOf(resultSet.getString("state")),
                             resultSet.getLong("declared_byte_length"),
                             resultSet.getObject("session_id", UUID.class),
@@ -878,7 +764,7 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                     event_id, listener_id, submission_id, event_type, decision, reason_code, occurred_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                UUID.randomUUID(),
+                identifierGenerator.generate(),
                 listenerId,
                 submissionId,
                 eventType,
@@ -895,10 +781,6 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
 
     private static OffsetDateTime databaseTime(Instant instant) {
         return instant.atOffset(ZoneOffset.UTC);
-    }
-
-    private static Instant instant(OffsetDateTime value) {
-        return value == null ? null : value.toInstant();
     }
 
     private static String fingerprint(Object... values) {
@@ -933,6 +815,7 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
 
     private record StoredUpload(
             UUID submissionId,
+            UUID listenerId,
             SubmissionState state,
             long declaredByteLength,
             UUID sessionId,
@@ -956,15 +839,6 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
             String reasonCode,
             String storageGeneration,
             UUID admittedConversionId) {
-    }
-
-    private record StoredWork(
-            UUID workId,
-            UUID submissionId,
-            String operationKey,
-            String state,
-            String leaseOwner,
-            Instant leaseExpiresAt) {
     }
 
     private record Claim(StoredSubmission submission, boolean claimed, Inspection completed) {

@@ -20,5 +20,7 @@ public record AdmissionProperties(
         Path quarantinePath,
         String cloudProjectId,
         String workingBucket,
-        String workTopic) {
+        String workTopic,
+        String pushAudience,
+        String pushServiceAccount) {
 }

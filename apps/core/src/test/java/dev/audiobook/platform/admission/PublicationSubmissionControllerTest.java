@@ -17,7 +17,11 @@ import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import dev.audiobook.platform.identity.ListenerIdentityService;
 import dev.audiobook.platform.identity.ListenerPrincipal;
 import dev.audiobook.platform.identity.SignInProvider;
+import dev.audiobook.platform.workflow.AudiobookConversionService;
+import dev.audiobook.platform.workflow.InspectionWorkflowService;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -46,6 +50,18 @@ class PublicationSubmissionControllerTest {
     private PublicationSubmissionService submissionService;
 
     @MockitoBean
+    private AdmissionOutboxRelayService outboxRelayService;
+
+    @MockitoBean
+    private PubSubPushAuthenticator pubSubPushAuthenticator;
+
+    @MockitoBean
+    private AudiobookConversionService audiobookConversionService;
+
+    @MockitoBean
+    private InspectionWorkflowService inspectionWorkflowService;
+
+    @MockitoBean
     private ConversionEntitlementService entitlementService;
 
     @MockitoBean
@@ -56,6 +72,35 @@ class PublicationSubmissionControllerTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Test
+    void authenticatedPubSubPushAcceptsAndExecutesOpaqueInspectionCoordinates() throws Exception {
+        UUID messageId = UUID.fromString("01985f42-5f8d-7000-8000-000000000323");
+        UUID workId = UUID.fromString("01985f42-5f8d-7000-8000-000000000423");
+        String coordinates = "{\"messageId\":\"%s\",\"workId\":\"%s\"}".formatted(messageId, workId);
+        String data = Base64.getEncoder().encodeToString(coordinates.getBytes(StandardCharsets.UTF_8));
+        when(pubSubPushAuthenticator.authentic("signed-google-token")).thenReturn(true);
+
+        mockMvc.perform(post(InspectionWorkDeliveryController.DELIVERY_PATH)
+                        .header("Authorization", "Bearer signed-google-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"message":{"data":"%s","attributes":{
+                                  "messageType":"INSPECT_SUBMISSION","schemaVersion":"1"
+                                }}}
+                                """.formatted(data)))
+                .andExpect(status().isNoContent());
+
+        verify(inspectionWorkflowService).acceptDelivery(messageId, workId);
+        verify(submissionService).inspect(any(PublicationSubmissionService.InspectionCommand.class));
+
+        when(pubSubPushAuthenticator.authentic("invalid-token")).thenReturn(false);
+        mockMvc.perform(post(InspectionWorkDeliveryController.DELIVERY_PATH)
+                        .header("Authorization", "Bearer invalid-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isUnauthorized());
+    }
 
     @Test
     void createAudiobookRecordsTheAttestationOnlyAfterAnAuthenticatedExplicitCommand() throws Exception {
@@ -180,6 +225,7 @@ class PublicationSubmissionControllerTest {
                 1024,
                 "d".repeat(64),
                 "confirm-epub-23"));
+        verify(outboxRelayService).relayPending();
     }
 
     private static UsernamePasswordAuthenticationToken listenerAuthentication() {

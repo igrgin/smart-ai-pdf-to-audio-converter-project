@@ -8,6 +8,8 @@ import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import dev.audiobook.platform.identity.ExternalIdentity;
 import dev.audiobook.platform.identity.ListenerIdentityService;
 import dev.audiobook.platform.identity.SignInProvider;
+import dev.audiobook.platform.workflow.AudiobookConversionService;
+import dev.audiobook.platform.workflow.InspectionWorkflowService;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -36,6 +38,8 @@ class PublicationSubmissionITest {
     private final ListenerIdentityService listenerIdentityService;
     private final JdbcTemplate jdbcTemplate;
     private final AdmissionOutboxRelayService outboxRelayService;
+    private final AudiobookConversionService audiobookConversionService;
+    private final InspectionWorkflowService inspectionWorkflowService;
 
     @MockitoBean
     private InspectionWorkPublisher inspectionWorkPublisher;
@@ -46,12 +50,16 @@ class PublicationSubmissionITest {
             ConversionEntitlementService entitlementService,
             ListenerIdentityService listenerIdentityService,
             JdbcTemplate jdbcTemplate,
-            AdmissionOutboxRelayService outboxRelayService) {
+            AdmissionOutboxRelayService outboxRelayService,
+            AudiobookConversionService audiobookConversionService,
+            InspectionWorkflowService inspectionWorkflowService) {
         this.submissionService = submissionService;
         this.entitlementService = entitlementService;
         this.listenerIdentityService = listenerIdentityService;
         this.jdbcTemplate = jdbcTemplate;
         this.outboxRelayService = outboxRelayService;
+        this.audiobookConversionService = audiobookConversionService;
+        this.inspectionWorkflowService = inspectionWorkflowService;
     }
 
     @Test
@@ -104,8 +112,8 @@ class PublicationSubmissionITest {
         assertThat(outboxRelayService.relayPending()).isEqualTo(1);
         org.mockito.Mockito.verify(inspectionWorkPublisher).publish(messageId, workId);
         assertThat(outboxRelayService.relayPending()).isZero();
-        assertThat(submissionService.acceptInspectionDelivery(messageId, workId).duplicate()).isFalse();
-        assertThat(submissionService.acceptInspectionDelivery(messageId, workId).duplicate()).isTrue();
+        assertThat(inspectionWorkflowService.acceptDelivery(messageId, workId).duplicate()).isFalse();
+        assertThat(inspectionWorkflowService.acceptDelivery(messageId, workId).duplicate()).isTrue();
 
         PublicationSubmissionService.Inspection inspected = submissionService.inspect(
                 new PublicationSubmissionService.InspectionCommand(
@@ -126,10 +134,10 @@ class PublicationSubmissionITest {
         assertThat(inspectedReplay.replayed()).isTrue();
         assertThat(submissionService.submission(listenerId, creation.submissionId()).state())
                 .isEqualTo(PublicationSubmissionService.SubmissionState.ADMITTED);
-        assertThat(submissionService.conversions(listenerId))
-                .containsExactly(new PublicationSubmissionService.AudiobookConversion(
+        assertThat(audiobookConversionService.conversions(listenerId))
+                .containsExactly(new AudiobookConversionService.AudiobookConversion(
                         inspected.conversionId(),
-                        PublicationSubmissionService.ConversionState.PREPARING));
+                        AudiobookConversionService.ConversionState.PREPARING));
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM source_publication WHERE submission_id = ?",
                 Long.class,
@@ -223,7 +231,7 @@ class PublicationSubmissionITest {
                 "SELECT work_id FROM inspection_work WHERE submission_id = ?", UUID.class, rejected.submissionId());
         UUID messageId = jdbcTemplate.queryForObject(
                 "SELECT message_id FROM admission_outbox WHERE work_id = ?", UUID.class, workId);
-        submissionService.acceptInspectionDelivery(messageId, workId);
+        inspectionWorkflowService.acceptDelivery(messageId, workId);
 
         PublicationSubmissionService.Inspection inspection = submissionService.inspect(
                 new PublicationSubmissionService.InspectionCommand(
@@ -288,7 +296,7 @@ class PublicationSubmissionITest {
                 "SELECT work_id FROM inspection_work WHERE submission_id = ?", UUID.class, leased.submissionId());
         UUID messageId = jdbcTemplate.queryForObject(
                 "SELECT message_id FROM admission_outbox WHERE work_id = ?", UUID.class, workId);
-        submissionService.acceptInspectionDelivery(messageId, workId);
+        inspectionWorkflowService.acceptDelivery(messageId, workId);
         jdbcTemplate.update(
                 "UPDATE inspection_work SET state = 'LEASED', lease_owner = ?, lease_expires_at = ? WHERE work_id = ?",
                 "another-worker",

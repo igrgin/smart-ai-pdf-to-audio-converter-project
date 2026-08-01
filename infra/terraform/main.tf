@@ -1,6 +1,7 @@
 locals {
-  prefix  = "folio-${var.environment_name}"
-  site_id = substr("${var.project_id}-${var.environment_name}", 0, 30)
+  prefix                   = "folio-${var.environment_name}"
+  site_id                  = substr("${var.project_id}-${var.environment_name}", 0, 30)
+  inspection_push_audience = "https://${var.project_id}.internal/${var.environment_name}/inspection"
   worker_stages = toset([
     "inspection",
     "extraction",
@@ -25,6 +26,10 @@ locals {
     "sqladmin.googleapis.com",
     "storage.googleapis.com"
   ])
+}
+
+data "google_project" "current" {
+  project_id = var.project_id
 }
 
 resource "google_project_service" "required" {
@@ -202,6 +207,19 @@ resource "google_pubsub_subscription" "stages" {
     minimum_backoff = "10s"
     maximum_backoff = "600s"
   }
+
+  dynamic "push_config" {
+    for_each = each.key == "inspection" ? [true] : []
+    content {
+      push_endpoint = "${google_cloud_run_v2_service.core.uri}/internal/v1/inspection-work-deliveries"
+      oidc_token {
+        service_account_email = google_service_account.worker.email
+        audience              = local.inspection_push_audience
+      }
+    }
+  }
+
+  depends_on = [google_service_account_iam_member.pubsub_push_token_creator]
 }
 
 resource "google_kms_key_ring" "capabilities" {
@@ -268,6 +286,12 @@ resource "google_project_iam_member" "worker_subscriber" {
   project = var.project_id
   role    = "roles/pubsub.subscriber"
   member  = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_service_account_iam_member" "pubsub_push_token_creator" {
+  service_account_id = google_service_account.worker.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
 
 resource "google_storage_bucket_iam_member" "worker_working_objects" {
@@ -361,6 +385,14 @@ resource "google_cloud_run_v2_service" "core" {
       env {
         name  = "WORK_TOPIC"
         value = google_pubsub_topic.work.name
+      }
+      env {
+        name  = "PUBSUB_PUSH_AUDIENCE"
+        value = local.inspection_push_audience
+      }
+      env {
+        name  = "PUBSUB_PUSH_SERVICE_ACCOUNT"
+        value = google_service_account.worker.email
       }
       env {
         name  = "TRACING_SAMPLE_RATE"
@@ -479,6 +511,14 @@ resource "google_cloud_run_v2_service_iam_member" "public_core" {
   name     = google_cloud_run_v2_service.core.name
   role     = "roles/run.invoker"
   member   = "allUsers"
+}
+
+resource "google_cloud_run_v2_service_iam_member" "inspection_push_core" {
+  project  = var.project_id
+  location = google_cloud_run_v2_service.core.location
+  name     = google_cloud_run_v2_service.core.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.worker.email}"
 }
 
 resource "google_cloud_run_v2_job" "workers" {
