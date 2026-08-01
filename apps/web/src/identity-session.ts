@@ -26,8 +26,8 @@ export interface Library {
 
 export interface AudiobookConversion {
   conversionId: string;
-  state: "PREPARING" | "PAUSED" | "AWAITING_REVIEW" | "GENERATING";
-  reasonCode: "EXTRACTION_PENDING" | "NARRATION_PLAN_PENDING" | "NARRATION_PLAN_REQUIRES_INTERVENTION" | "SOURCE_TOO_DAMAGED" | "NARRATION_REVIEW_AVAILABLE" | "NARRATION_REVIEW_APPROVED" | "NARRATION_RECOMMENDATIONS_ACCEPTED" | "GENERATION_IN_PROGRESS";
+  state: "PREPARING" | "PAUSED" | "AWAITING_REVIEW" | "GENERATING" | "FINALIZING" | "FINALIZED" | "FAILED";
+  reasonCode: "EXTRACTION_PENDING" | "NARRATION_PLAN_PENDING" | "NARRATION_PLAN_REQUIRES_INTERVENTION" | "SOURCE_TOO_DAMAGED" | "NARRATION_REVIEW_AVAILABLE" | "NARRATION_REVIEW_APPROVED" | "NARRATION_RECOMMENDATIONS_ACCEPTED" | "GENERATION_IN_PROGRESS" | "FINAL_AUDIOBOOK_VALIDATION" | "PRIVATE_AUDIOBOOK_AVAILABLE" | "CONVERSION_FAILED";
   allowedActions: AllowedAction[];
   version: number;
   recovery?: { resumeFromPage: number; listenerGuidance: string };
@@ -36,6 +36,15 @@ export interface AudiobookConversion {
   voiceDisplayName?: string;
   pace?: "MEASURED" | "NATURAL" | "BRISK";
   explicitNarrationChoiceRequired: boolean;
+  privateAudiobook?: PrivateAudiobookSummary;
+}
+
+export interface PrivateAudiobookSummary {
+  audiobookId: string;
+  assetVersionId: string;
+  availability: "AVAILABLE" | "RIGHTS_QUARANTINED" | "TECHNICALLY_UNAVAILABLE" | "DELETING" | "ERASED";
+  totalDurationMs: number;
+  manifestUrl: string;
 }
 
 export type AllowedAction = "REVIEW_NARRATION_PLAN" | "ACCEPT_RECOMMENDATIONS" | "RETRY_NARRATION_PLAN";

@@ -189,6 +189,162 @@ describe("public sample", () => {
     });
   });
 
+  it("plays a finalized audiobook through one persistent chaptered audio element", async () => {
+    let paused = true;
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => {
+      paused = false;
+      return Promise.resolve();
+    });
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {
+      paused = true;
+    });
+    vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(() => paused);
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:continuous-private-audiobook"),
+      revokeObjectURL: vi.fn()
+    });
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            authenticated: true,
+            listener: { displayName: "Mara", signInMethods: ["google"] },
+            csrf: { headerName: "X-CSRF-TOKEN", parameterName: "_csrf", token: "private-csrf" }
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/library")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            displayName: "Mara",
+            signInMethods: ["google"],
+            audiobooks: [{
+              conversionId: "01985f42-5f8d-7000-8000-000000000032",
+              state: "FINALIZED",
+              reasonCode: "PRIVATE_AUDIOBOOK_AVAILABLE",
+              allowedActions: [],
+              version: 3,
+              voiceDisplayName: "Rowan",
+              pace: "NATURAL",
+              explicitNarrationChoiceRequired: false,
+              privateAudiobook: {
+                audiobookId: "01985f42-5f8d-7000-8000-000000000132",
+                assetVersionId: "01985f42-5f8d-7000-8000-000000000232",
+                availability: "AVAILABLE",
+                totalDurationMs: 20000,
+                manifestUrl: "/api/v1/audiobooks/01985f42-5f8d-7000-8000-000000000132/asset-versions/01985f42-5f8d-7000-8000-000000000232/manifest"
+              }
+            }],
+            conversionEntitlement: {
+              status: "EXHAUSTED",
+              grantedCharacters: 500000,
+              availableCharacters: 0,
+              reservedCharacters: 0,
+              committedCharacters: 500000,
+              canStartConversion: false
+            }
+          })
+        });
+      }
+      if (url.endsWith("/manifest")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            audiobookId: "01985f42-5f8d-7000-8000-000000000132",
+            assetVersionId: "01985f42-5f8d-7000-8000-000000000232",
+            conversionId: "01985f42-5f8d-7000-8000-000000000032",
+            sourceMediaType: "application/pdf",
+            narratorVoice: "Rowan",
+            manifestDigest: "a".repeat(64),
+            totalDurationMs: 20000,
+            resume: { positionMs: 4000, version: 0 },
+            chapters: [{
+              chapterId: "01985f42-5f8d-7000-8000-000000000332",
+              ordinal: 0,
+              title: "First light",
+              startMs: 0,
+              durationMs: 10000,
+              parts: [{
+                partId: "01985f42-5f8d-7000-8000-000000000432",
+                ordinal: 0,
+                byteLength: 100,
+                durationMs: 10000,
+                mimeType: "audio/mpeg",
+                entityTag: "sha256:" + "b".repeat(64),
+                mediaUrl: "/api/v1/media/first"
+              }]
+            }, {
+              chapterId: "01985f42-5f8d-7000-8000-000000000532",
+              ordinal: 1,
+              title: "Second dawn",
+              startMs: 10000,
+              durationMs: 10000,
+              parts: [{
+                partId: "01985f42-5f8d-7000-8000-000000000632",
+                ordinal: 0,
+                byteLength: 100,
+                durationMs: 10000,
+                mimeType: "audio/mpeg",
+                entityTag: "sha256:" + "c".repeat(64),
+                mediaUrl: "/api/v1/media/second"
+              }]
+            }]
+          })
+        });
+      }
+      if (url.startsWith("/api/v1/media/")) {
+        return Promise.resolve({ ok: true, arrayBuffer: async () => new ArrayBuffer(100) });
+      }
+      if (url.endsWith("/playback-position") && init?.method === "PUT") {
+        return Promise.resolve({
+          ok: true,
+          headers: { get: (name: string) => name === "ETag" ? '"1"' : null },
+          json: async () => ({ positionMs: 10000, version: 1 })
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<App />);
+    expect(await screen.findByRole("heading", { name: "First light" })).toBeVisible();
+    expect(screen.getByText(/pdf publication · narrated by rowan/i)).toBeVisible();
+    expect(container.querySelectorAll("audio")).toHaveLength(1);
+    const audio = container.querySelector("audio")!;
+    await waitFor(() => expect(audio.getAttribute("src")).toBe("blob:continuous-private-audiobook"));
+
+    fireEvent.click(screen.getByRole("button", { name: /play first light/i }));
+    await waitFor(() => expect(play).toHaveBeenCalled());
+    fireEvent.change(screen.getByRole("combobox", { name: /playback speed/i }), {
+      target: { value: "1.5" }
+    });
+    expect(container.querySelector("audio")?.playbackRate).toBe(1.5);
+
+    audio.currentTime = 12;
+    fireEvent.timeUpdate(audio);
+    expect(container.querySelectorAll("audio")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "Second dawn" })).toBeVisible();
+    expect(audio.getAttribute("src")).toBe("blob:continuous-private-audiobook");
+
+    fireEvent.change(screen.getByRole("slider", { name: /audiobook position/i }), {
+      target: { value: "12000" }
+    });
+    fireEvent.pause(audio);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/audiobooks/01985f42-5f8d-7000-8000-000000000132/asset-versions/01985f42-5f8d-7000-8000-000000000232/playback-position",
+      expect.objectContaining({
+        method: "PUT",
+        headers: expect.objectContaining({
+          "If-Match": '"0"',
+          "X-CSRF-TOKEN": "private-csrf"
+        })
+      })
+    ));
+  });
+
   it("clearly denies conversion when the Listener has no free Conversion Entitlement", async () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

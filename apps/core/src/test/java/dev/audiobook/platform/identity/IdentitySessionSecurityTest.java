@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import dev.audiobook.platform.admission.PublicationSubmissionService;
+import dev.audiobook.platform.library.PrivateAudiobookLibraryService;
 import dev.audiobook.platform.narration.NarrationSelectionService;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
 import java.time.Instant;
@@ -67,6 +68,9 @@ class IdentitySessionSecurityTest {
 
     @MockitoBean
     private NarrationSelectionService narrationSelectionService;
+
+    @MockitoBean
+    private PrivateAudiobookLibraryService privateAudiobookLibraryService;
 
     @MockitoBean
     private DataSource dataSource;
@@ -175,6 +179,43 @@ class IdentitySessionSecurityTest {
                 .andReturn();
 
         assertThat(result.getResponse().getContentAsString()).doesNotContain("openai", "modelSnapshot", "providerVoice");
+    }
+
+    @Test
+    void privateLibraryExposesTheListenersFinalizedAudiobookForPlayback() throws Exception {
+        UUID conversionId = UUID.fromString("01985f42-5f8d-7000-8000-000000000032");
+        UUID audiobookId = UUID.fromString("01985f42-5f8d-7000-8000-000000000132");
+        UUID assetVersionId = UUID.fromString("01985f42-5f8d-7000-8000-000000000232");
+        when(conversionEntitlementService.allowance(LISTENER_ONE)).thenReturn(noGrantAllowance());
+        when(audiobookConversionService.conversions(LISTENER_ONE)).thenReturn(List.of(
+                new AudiobookConversionService.AudiobookConversion(
+                        conversionId, AudiobookConversionService.ConversionState.FINALIZED)));
+        when(narrationSelectionService.narrationChoice(LISTENER_ONE, conversionId)).thenReturn(
+                new NarrationSelectionService.NarrationChoiceStatus(
+                        3,
+                        UUID.fromString("01985f42-5f8d-7000-8000-000000000332"),
+                        UUID.fromString("10000000-0000-7000-8000-000000000001"),
+                        "Rowan",
+                        NarrationSelectionService.NarrationPace.NATURAL,
+                        false));
+        when(privateAudiobookLibraryService.find(LISTENER_ONE, conversionId)).thenReturn(
+                new PrivateAudiobookLibraryService.PrivateAudiobook(
+                        audiobookId,
+                        assetVersionId,
+                        "AVAILABLE",
+                        "a".repeat(64),
+                        186000));
+
+        mockMvc.perform(get("/api/v1/library").with(authentication(listenerAuthentication(
+                        LISTENER_ONE, "First Listener", null))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.audiobooks[0].state").value("FINALIZED"))
+                .andExpect(jsonPath("$.audiobooks[0].privateAudiobook.audiobookId").value(audiobookId.toString()))
+                .andExpect(jsonPath("$.audiobooks[0].privateAudiobook.assetVersionId").value(assetVersionId.toString()))
+                .andExpect(jsonPath("$.audiobooks[0].privateAudiobook.totalDurationMs").value(186000))
+                .andExpect(jsonPath("$.audiobooks[0].privateAudiobook.manifestUrl")
+                        .value("/api/v1/audiobooks/" + audiobookId
+                                + "/asset-versions/" + assetVersionId + "/manifest"));
     }
 
     private static ConversionEntitlementService.Allowance noGrantAllowance() {
