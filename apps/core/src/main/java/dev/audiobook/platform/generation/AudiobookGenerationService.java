@@ -7,7 +7,7 @@ public interface AudiobookGenerationService {
 
     GenerationManifest prepare(UUID listenerId, UUID conversionId);
 
-    AcceptedSegment generateSegment(UUID listenerId, UUID conversionId, String operationKey);
+    AcceptedSegment generateSegment(ProviderCallCommand command);
 
     void packageAudiobook(UUID listenerId, UUID conversionId);
 
@@ -34,6 +34,13 @@ public interface AudiobookGenerationService {
             String pcmSha256,
             long durationMs,
             boolean replayed) {
+    }
+
+    record ProviderCallCommand(
+            UUID listenerId,
+            UUID conversionId,
+            String operationKey,
+            UUID workflowMessageId) {
     }
 
     record PrivateAudiobook(

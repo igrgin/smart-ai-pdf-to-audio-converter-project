@@ -17,9 +17,7 @@ public interface AudiobookConversionService {
 
     int relayNarrationPlanWork(BiConsumer<UUID, UUID> publisher);
 
-    List<UUID> narrationPlanRecoveryCandidates();
-
-    int applyNarrationPlanResults(List<UUID> planPresentConversionIds);
+    int applyNarrationPlanResults();
 
     List<AudiobookConversion> conversions(UUID listenerId);
 
@@ -49,6 +47,7 @@ public interface AudiobookConversionService {
                         case FINALIZED -> "PRIVATE_AUDIOBOOK_AVAILABLE";
                         case PAUSED -> "SOURCE_TOO_DAMAGED";
                         case FAILED -> "CONVERSION_FAILED";
+                        case CANCELLED -> "LISTENER_CANCELLED";
                     },
                     state == ConversionState.AWAITING_REVIEW
                             ? List.of(AllowedAction.REVIEW_NARRATION_PLAN, AllowedAction.ACCEPT_RECOMMENDATIONS)
@@ -80,7 +79,8 @@ public interface AudiobookConversionService {
         FINALIZING,
         FINALIZED,
         FAILED,
-        PAUSED
+        PAUSED,
+        CANCELLED
     }
 
     enum PreparationReason {

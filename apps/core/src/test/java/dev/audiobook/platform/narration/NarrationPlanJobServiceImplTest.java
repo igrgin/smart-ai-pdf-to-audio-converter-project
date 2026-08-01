@@ -13,6 +13,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import dev.audiobook.platform.admission.QuarantineObjectStore;
+import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
+import dev.audiobook.platform.workflow.ConversionLifecycleService;
+import dev.audiobook.platform.workflow.ConversionWorkflowService;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.sql.ResultSet;
@@ -36,13 +39,23 @@ class NarrationPlanJobServiceImplTest {
     private final NarrationPlanService narrationPlanService = mock(NarrationPlanService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-08-01T10:00:00Z"), ZoneOffset.UTC);
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+    private final ConversionWorkflowService workflowService = mock(ConversionWorkflowService.class);
+    private final ConversionLifecycleService lifecycleService = mock(ConversionLifecycleService.class);
+    private final PlatformIdentifierGenerator identifierGenerator = mock(PlatformIdentifierGenerator.class);
     private NarrationPlanJobService service;
 
     @BeforeEach
     void setUp() {
         given(transactionManager.getTransaction(any())).willReturn(new SimpleTransactionStatus());
         service = new NarrationPlanJobServiceImpl(
-                jdbcTemplate, objectStore, narrationPlanService, clock, transactionManager);
+                jdbcTemplate,
+                objectStore,
+                narrationPlanService,
+                clock,
+                transactionManager,
+                workflowService,
+                lifecycleService,
+                identifierGenerator);
     }
 
     @Test
@@ -129,9 +142,11 @@ class NarrationPlanJobServiceImplTest {
     }
 
     @Test
-    void duplicateDeliveryCannotClaimCompletedOrActivelyLeasedWork() {
+    void duplicateDeliveryCannotClaimCompletedOrActivelyLeasedWork() throws Exception {
         UUID messageId = UUID.randomUUID();
         UUID workId = UUID.randomUUID();
+        stubPending(
+                messageId, workId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), false);
                 given(jdbcTemplate.update(
                         contains("SET state = 'CLAIMED'"),
                         any(UUID.class),
@@ -182,13 +197,38 @@ class NarrationPlanJobServiceImplTest {
                         any(Timestamp.class)))
                 .willReturn(claimable ? 1 : 0);
         given(jdbcTemplate.queryForObject(
-                        contains("SELECT listener_id"), any(RowMapper.class), eq(workId)))
+                        contains("SELECT w.listener_id"), any(RowMapper.class), eq(workId), eq(messageId)))
                 .willAnswer(invocation -> {
                     RowMapper mapper = invocation.getArgument(1);
                     ResultSet resultSet = mock(ResultSet.class);
                     given(resultSet.getObject("listener_id", UUID.class)).willReturn(listenerId);
                     given(resultSet.getObject("conversion_id", UUID.class)).willReturn(conversionId);
                     given(resultSet.getObject("submission_id", UUID.class)).willReturn(submissionId);
+                    given(resultSet.getInt("schema_version")).willReturn(1);
+                    given(resultSet.getLong("expected_conversion_version")).willReturn(0L);
+                    return mapper.mapRow(resultSet, 0);
+                });
+        given(workflowService.claimDelivery(any()))
+                .willReturn(new ConversionWorkflowService.DeliveryDecision(
+                        ConversionWorkflowService.DeliveryDisposition.CLAIMED,
+                        UUID.randomUUID(),
+                        null));
+        given(workflowService.acceptResult(any()))
+                .willReturn(new ConversionWorkflowService.ResultDecision(
+                        ConversionWorkflowService.ResultDisposition.ACCEPTED,
+                        UUID.randomUUID(),
+                        null));
+        given(jdbcTemplate.queryForObject(
+                        contains("SELECT working_asset_ref"),
+                        any(RowMapper.class),
+                        eq(listenerId),
+                        eq(conversionId)))
+                .willAnswer(invocation -> {
+                    RowMapper mapper = invocation.getArgument(1);
+                    ResultSet resultSet = mock(ResultSet.class);
+                    given(resultSet.getString("working_asset_ref"))
+                            .willReturn("working/narration/plan.json");
+                    given(resultSet.getString("asset_sha256")).willReturn("a".repeat(64));
                     return mapper.mapRow(resultSet, 0);
                 });
     }

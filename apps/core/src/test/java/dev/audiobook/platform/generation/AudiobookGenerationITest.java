@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.audiobook.platform.PlatformApplication;
@@ -21,6 +22,7 @@ import dev.audiobook.platform.narration.PublicationNarrationPlanInterpreter;
 import dev.audiobook.platform.provider.ProviderSpeechAdapter;
 import dev.audiobook.platform.provider.ProviderUsage;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
+import dev.audiobook.platform.workflow.ConversionWorkflowService;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -28,6 +30,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.time.OffsetDateTime;
+import java.time.Duration;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
@@ -58,6 +61,7 @@ class AudiobookGenerationITest {
     private final AudiobookAssetStore audiobookAssetStore;
     private final AudiobookGenerationWorkerService workerService;
     private final JdbcTemplate jdbcTemplate;
+    private final ConversionWorkflowService workflowService;
 
     @MockitoBean(name = "openAiProviderSpeechAdapterImpl")
     private ProviderSpeechAdapter openAiSpeechAdapter;
@@ -75,7 +79,8 @@ class AudiobookGenerationITest {
             NarrationPlanAssetStore planAssetStore,
             AudiobookAssetStore audiobookAssetStore,
             AudiobookGenerationWorkerService workerService,
-            JdbcTemplate jdbcTemplate) {
+            JdbcTemplate jdbcTemplate,
+            ConversionWorkflowService workflowService) {
         this.generationService = generationService;
         this.listenerIdentityService = listenerIdentityService;
         this.narrationReviewService = narrationReviewService;
@@ -85,6 +90,7 @@ class AudiobookGenerationITest {
         this.audiobookAssetStore = audiobookAssetStore;
         this.workerService = workerService;
         this.jdbcTemplate = jdbcTemplate;
+        this.workflowService = workflowService;
     }
 
     @BeforeEach
@@ -108,13 +114,14 @@ class AudiobookGenerationITest {
                 generationService.prepare(conversion.listenerId(), conversion.conversionId());
         List<AudiobookGenerationService.Segment> reverse = manifest.segments().reversed();
         for (AudiobookGenerationService.Segment segment : reverse) {
-            generationService.generateSegment(
-                    conversion.listenerId(), conversion.conversionId(), segment.operationKey());
+            generateSegment(conversion, segment.operationKey());
         }
-        AudiobookGenerationService.AcceptedSegment replay = generationService.generateSegment(
-                conversion.listenerId(), conversion.conversionId(), reverse.getFirst().operationKey());
+        AudiobookGenerationService.AcceptedSegment replay =
+                generateSegment(conversion, reverse.getFirst().operationKey());
+        acceptSpeechStage(conversion, manifest);
 
-        generationService.packageAudiobook(conversion.listenerId(), conversion.conversionId());
+        assertThat(workerService.packagePending()).isOne();
+        assertThat(workerService.packagePending()).isOne();
         AudiobookGenerationService.PrivateAudiobook finalized =
                 generationService.finalizeAudiobook(conversion.listenerId(), conversion.conversionId());
         AudiobookGenerationService.PrivateAudiobook finalizationReplay =
@@ -193,11 +200,8 @@ class AudiobookGenerationITest {
                     wav(sine(1_000, 220)));
         });
 
-        generationService.generateSegment(
-                conversion.listenerId(), conversion.conversionId(), original.segments().getFirst().operationKey());
-        assertThatThrownBy(() -> generationService.generateSegment(
-                        conversion.listenerId(), conversion.conversionId(),
-                        original.segments().get(1).operationKey()))
+        generateSegment(conversion, original.segments().getFirst().operationKey());
+        assertThatThrownBy(() -> generateSegment(conversion, original.segments().get(1).operationKey()))
                 .isInstanceOf(GenerationRestartedException.class);
 
         AudiobookGenerationService.GenerationManifest replacement =
@@ -228,8 +232,7 @@ class AudiobookGenerationITest {
                 "provider-failover", "Neural2", "eu", "en-GB-Neural2-F",
                 wav(sine(1_000, 330))));
         for (AudiobookGenerationService.Segment segment : replacement.segments()) {
-            generationService.generateSegment(
-                    conversion.listenerId(), conversion.conversionId(), segment.operationKey());
+            generateSegment(conversion, segment.operationKey());
         }
 
         assertThat(jdbcTemplate.queryForObject(
@@ -286,8 +289,7 @@ class AudiobookGenerationITest {
         given(openAiSpeechAdapter.synthesize(any())).willReturn(speechResult(
                 "provider-drift", "unapproved-model", "eu", "cedar", wav(sine(3_000, 220))));
 
-        assertThatThrownBy(() -> generationService.generateSegment(
-                        drift.listenerId(), drift.conversionId(), manifest.segments().getFirst().operationKey()))
+        assertThatThrownBy(() -> generateSegment(drift, manifest.segments().getFirst().operationKey()))
                 .isInstanceOf(SpeechProviderException.class);
         assertThat(jdbcTemplate.queryForObject(
                         "SELECT state FROM generation.speech_attempt WHERE conversion_id = ?",
@@ -295,6 +297,31 @@ class AudiobookGenerationITest {
                         drift.conversionId()))
                 .isEqualTo("FAILED");
         assertThat(audiobookCount(drift.conversionId())).isZero();
+    }
+
+    @Test
+    void providerCallRequiresTheActiveAuthoritativeSpeechLease() throws Exception {
+        Conversion conversion = approvedGeneratingConversion("expired-workflow-lease");
+        AudiobookGenerationService.GenerationManifest manifest =
+                generationService.prepare(conversion.listenerId(), conversion.conversionId());
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.conversion_stage_run
+                SET lease_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 second'
+                WHERE conversion_id = ? AND stage = 'SPEECH'
+                """,
+                conversion.conversionId());
+
+        assertThatThrownBy(() -> generateSegment(
+                        conversion, manifest.segments().getFirst().operationKey()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("workflow lease");
+        verifyNoInteractions(openAiSpeechAdapter, googleSpeechAdapter);
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM generation.speech_attempt WHERE conversion_id = ?",
+                        Integer.class,
+                        conversion.conversionId()))
+                .isZero();
     }
 
     @AfterAll
@@ -355,16 +382,38 @@ class AudiobookGenerationITest {
         jdbcTemplate.update(
                 "UPDATE workflow.audiobook_conversion SET state = 'FAILED' WHERE conversion_id <> ? AND state IN ('GENERATING', 'FINALIZING')",
                 conversion.conversionId());
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.conversion_stage_run
+                SET state = 'READY', attempt_count = 0, lease_owner = NULL,
+                    lease_message_id = NULL, lease_expires_at = NULL
+                WHERE conversion_id = ? AND stage = 'SPEECH'
+                """,
+                conversion.conversionId());
         given(openAiSpeechAdapter.synthesize(any())).willReturn(speechResult(
                 "provider-worker", "gpt-4o-mini-tts-2025-12-15", "eu", "cedar",
                 wav(sine(1_000, 330))));
 
         assertThat(workerService.generatePending()).isOne();
         assertThat(workerService.packagePending()).isOne();
+        assertThatThrownBy(() -> generationService.finalizeAudiobook(
+                        conversion.listenerId(), conversion.conversionId()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("authoritatively accepted");
+        assertThat(workerService.packagePending()).isOne();
         generationService.finalizeAudiobook(conversion.listenerId(), conversion.conversionId());
         assertThat(workerService.generatePending()).isZero();
         assertThat(workerService.packagePending()).isZero();
         assertThat(audiobookCount(conversion.conversionId())).isOne();
+        assertThat(jdbcTemplate.queryForList(
+                        """
+                        SELECT stage, state FROM workflow.conversion_stage_run
+                        WHERE conversion_id = ? AND stage IN ('SPEECH', 'ASSEMBLY', 'PACKAGING')
+                        ORDER BY stage
+                        """,
+                        conversion.conversionId()))
+                .extracting(row -> row.get("stage") + ":" + row.get("state"))
+                .containsExactly("ASSEMBLY:SUCCEEDED", "PACKAGING:SUCCEEDED", "SPEECH:SUCCEEDED");
     }
 
     @Test
@@ -528,7 +577,45 @@ class AudiobookGenerationITest {
                         review.conversionVersion(),
                         "recipe-" + suffix + "-29"));
         conversionService.beginSpeechGeneration(listenerId, conversionId);
-        return new Conversion(listenerId, conversionId, recipe.recipeId());
+        UUID workflowMessageId = UUID.randomUUID();
+        long version = jdbcTemplate.queryForObject(
+                "SELECT version FROM workflow.audiobook_conversion WHERE conversion_id = ?",
+                Long.class,
+                conversionId);
+        assertThat(workflowService.claimDelivery(new ConversionWorkflowService.WorkDelivery(
+                        workflowMessageId,
+                        conversionId,
+                        ConversionWorkflowService.Stage.SPEECH,
+                        1,
+                        version,
+                        "generation-itest",
+                        Duration.ofHours(1))).disposition())
+                .isEqualTo(ConversionWorkflowService.DeliveryDisposition.CLAIMED);
+        return new Conversion(listenerId, conversionId, recipe.recipeId(), workflowMessageId);
+    }
+
+    private AudiobookGenerationService.AcceptedSegment generateSegment(
+            Conversion conversion, String operationKey) {
+        return generationService.generateSegment(new AudiobookGenerationService.ProviderCallCommand(
+                conversion.listenerId(),
+                conversion.conversionId(),
+                operationKey,
+                conversion.workflowMessageId()));
+    }
+
+    private void acceptSpeechStage(
+            Conversion conversion, AudiobookGenerationService.GenerationManifest manifest) {
+        assertThat(workflowService.acceptResult(new ConversionWorkflowService.StageResult(
+                        conversion.workflowMessageId(),
+                        conversion.conversionId(),
+                        ConversionWorkflowService.Stage.SPEECH,
+                        "speech-stage:" + conversion.conversionId(),
+                        "generation/manifests/" + manifest.manifestId(),
+                        manifest.manifestDigest(),
+                        true)).disposition())
+                .isIn(
+                        ConversionWorkflowService.ResultDisposition.ACCEPTED,
+                        ConversionWorkflowService.ResultDisposition.REPLAYED);
     }
 
     private int audiobookCount(UUID conversionId) {
@@ -560,6 +647,10 @@ class AudiobookGenerationITest {
         return pcm;
     }
 
-    private record Conversion(UUID listenerId, UUID conversionId, UUID recipeId) {
+    private record Conversion(
+            UUID listenerId,
+            UUID conversionId,
+            UUID recipeId,
+            UUID workflowMessageId) {
     }
 }
