@@ -43,6 +43,9 @@ blob-report/
 playwright-report/
 test-results/
 
+# Local publication fixtures (public-domain test inputs)
+local-test-publications/
+
 # Terraform local state and cache
 .terraform/
 *.tfstate
