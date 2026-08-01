@@ -24,6 +24,13 @@ spring:
             jwk-set-uri: ${ZITADEL_JWK_SET_URI}
 
 platform:
+  admission:
+    upload-token-secret: ${UPLOAD_TOKEN_SECRET}
+    cloud-project-id: ${GOOGLE_CLOUD_PROJECT}
+    working-bucket: ${WORKING_BUCKET}
+    work-topic: ${WORK_TOPIC}
+    push-audience: ${PUBSUB_PUSH_AUDIENCE}
+    push-service-account: ${PUBSUB_PUSH_SERVICE_ACCOUNT}
   build:
     version: ${BUILD_VERSION}
     revision: ${BUILD_REVISION}

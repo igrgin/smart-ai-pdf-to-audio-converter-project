@@ -20,8 +20,13 @@ export interface Library {
   displayName: string;
   contactEmail?: string;
   signInMethods: string[];
-  audiobooks: unknown[];
+  audiobooks: AudiobookConversion[];
   conversionEntitlement: ConversionEntitlement;
+}
+
+export interface AudiobookConversion {
+  conversionId: string;
+  state: "PREPARING";
 }
 
 export interface ConversionEntitlement {

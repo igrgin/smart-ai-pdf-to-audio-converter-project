@@ -21,6 +21,9 @@
         <maven.compiler.release>${java.version}</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <postgresql.version>42.7.12</postgresql.version>
+        <google-cloud-pubsub.version>1.151.0</google-cloud-pubsub.version>
+        <google-cloud-storage.version>2.69.0</google-cloud-storage.version>
+        <google-auth-library.version>1.48.0</google-auth-library.version>
         <spring-boot.version>4.1.0</spring-boot.version>
     </properties>
 
@@ -37,6 +40,21 @@
                 <groupId>org.postgresql</groupId>
                 <artifactId>postgresql</artifactId>
                 <version>${postgresql.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.cloud</groupId>
+                <artifactId>google-cloud-pubsub</artifactId>
+                <version>${google-cloud-pubsub.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.auth</groupId>
+                <artifactId>google-auth-library-oauth2-http</artifactId>
+                <version>${google-auth-library.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.cloud</groupId>
+                <artifactId>google-cloud-storage</artifactId>
+                <version>${google-cloud-storage.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
