@@ -58,7 +58,42 @@ class OidcLoginSuccessHandlerTest {
                 .containsExactly("ROLE_LISTENER");
     }
 
+    @Test
+    void namedStaffReceivesOnlyExplicitlyConfiguredTrustOperationsRoles() throws Exception {
+        Authentication authentication = authenticate(
+                Set.of(),
+                Set.of(OPERATOR_ID),
+                Set.of(),
+                Set.of(),
+                Set.of(),
+                Set.of(OPERATOR_ID),
+                Set.of());
+
+        assertThat(authentication.getAuthorities())
+                .extracting(Object::toString)
+                .containsExactly("ROLE_LISTENER", "ROLE_SUPPORT", "ROLE_INCIDENT_RESPONDER")
+                .doesNotContain("ROLE_OPERATOR");
+    }
+
     private Authentication authenticate(Set<UUID> operatorListenerIds) throws Exception {
+        return authenticate(
+                operatorListenerIds,
+                Set.of(),
+                Set.of(),
+                Set.of(),
+                Set.of(),
+                Set.of(),
+                Set.of());
+    }
+
+    private Authentication authenticate(
+            Set<UUID> operatorListenerIds,
+            Set<UUID> supportStaffListenerIds,
+            Set<UUID> reliabilityStaffListenerIds,
+            Set<UUID> entitlementStaffListenerIds,
+            Set<UUID> voiceStaffListenerIds,
+            Set<UUID> incidentResponderListenerIds,
+            Set<UUID> securityReviewerListenerIds) throws Exception {
         ListenerIdentityService identityService = mock(ListenerIdentityService.class);
         SecurityContextRepository contextRepository = mock(SecurityContextRepository.class);
         ExternalIdentity externalIdentity = new ExternalIdentity(
@@ -78,6 +113,12 @@ class OidcLoginSuccessHandlerTest {
                 URI.create("https://login.eu.example/ui/v2/login"),
                 Map.of(SignInProvider.GOOGLE, "google-idp"),
                 operatorListenerIds,
+                supportStaffListenerIds,
+                reliabilityStaffListenerIds,
+                entitlementStaffListenerIds,
+                voiceStaffListenerIds,
+                incidentResponderListenerIds,
+                securityReviewerListenerIds,
                 false,
                 Duration.ofMinutes(5),
                 Duration.ofHours(8),

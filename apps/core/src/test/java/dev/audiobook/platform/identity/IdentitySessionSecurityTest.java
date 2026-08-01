@@ -125,6 +125,34 @@ class IdentitySessionSecurityTest {
     }
 
     @Test
+    void namedStaffSessionExposesOnlyAssignedDeskRolesWithoutAnIdentifierOrSuperAdminFlag() throws Exception {
+        ListenerPrincipal principal = new ListenerPrincipal(
+                LISTENER_ONE,
+                "Named staff",
+                null,
+                Set.of(SignInProvider.GOOGLE),
+                SignInProvider.GOOGLE,
+                Instant.now());
+        var staffAuthentication = UsernamePasswordAuthenticationToken.authenticated(
+                principal,
+                null,
+                List.of(
+                        new SimpleGrantedAuthority("ROLE_LISTENER"),
+                        new SimpleGrantedAuthority("ROLE_SUPPORT"),
+                        new SimpleGrantedAuthority("ROLE_INCIDENT_RESPONDER")));
+
+        MvcResult result = mockMvc.perform(get("/api/v1/auth/session")
+                        .with(authentication(staffAuthentication)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.staff.roles[0]").value("INCIDENT_RESPONDER"))
+                .andExpect(jsonPath("$.staff.roles[1]").value("SUPPORT"))
+                .andExpect(jsonPath("$.staff.superAdmin").doesNotExist())
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString()).doesNotContain(LISTENER_ONE.toString());
+    }
+
+    @Test
     void privateLibraryRequiresAListenerSessionAndNeverExposesListenerIds() throws Exception {
         when(conversionEntitlementService.allowance(LISTENER_ONE))
                 .thenReturn(noGrantAllowance());

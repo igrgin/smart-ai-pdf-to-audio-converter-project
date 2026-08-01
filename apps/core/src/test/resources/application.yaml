@@ -139,6 +139,11 @@ platform:
     fresh-authentication-max-age: 5m
     session-absolute-timeout: 8h
     session-rotation-interval: 10m
+  trust-operations:
+    delegated-access-maximum-duration: 24h
+    emergency-access-maximum-duration: 30m
+    emergency-review-deadline: 24h
+    fresh-mfa-maximum-age: 5m
 
 management:
   tracing:

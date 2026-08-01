@@ -43,6 +43,14 @@ import {
   type NarratorVoice,
   type VoiceCatalog
 } from "./narration-selection";
+import {
+  fetchActionQueue,
+  fetchListenerAccess,
+  SupportAccessActivity,
+  TrustOperationsDesk,
+  type ActionQueue,
+  type ListenerAccessSummary
+} from "./trust-operations";
 
 type Theme = "light" | "dark";
 
@@ -57,6 +65,8 @@ function App() {
   const [statusDelayed, setStatusDelayed] = useState(false);
   const [identitySession, setIdentitySession] = useState<IdentitySession | null>(null);
   const [library, setLibrary] = useState<Library | null>(null);
+  const [actionQueue, setActionQueue] = useState<ActionQueue | null>(null);
+  const [listenerAccess, setListenerAccess] = useState<ListenerAccessSummary | null>(null);
   const [signInOpen, setSignInOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -75,7 +85,12 @@ function App() {
     fetchIdentitySession(controller.signal)
       .then((session) => {
         setIdentitySession(session);
-        if (session.authenticated) return fetchLibrary(controller.signal).then(setLibrary);
+        if (!session.authenticated) return;
+        void fetchLibrary(controller.signal).then(setLibrary).catch(() => undefined);
+        void fetchListenerAccess(controller.signal).then(setListenerAccess).catch(() => undefined);
+        if (session.staff?.roles.length) {
+          void fetchActionQueue(controller.signal).then(setActionQueue).catch(() => undefined);
+        }
       })
       .catch(() => undefined);
     return () => controller.abort();
@@ -119,7 +134,15 @@ function App() {
 
       <main id="top">
         {authenticated ? (
-          library ? <PrivateLibrary library={library} csrf={identitySession.csrf} /> : <LibraryLoading />
+          <>
+            {actionQueue && <TrustOperationsDesk
+              queue={actionQueue}
+              csrf={identitySession.csrf}
+              staffRoles={identitySession.staff?.roles ?? []}
+            />}
+            {library ? <PrivateLibrary library={library} csrf={identitySession.csrf} /> : <LibraryLoading />}
+            {listenerAccess && <SupportAccessActivity summary={listenerAccess} csrf={identitySession.csrf} />}
+          </>
         ) : (
           <PublicStudio
             audioRef={audioRef}

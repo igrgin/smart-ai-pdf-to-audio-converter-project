@@ -99,6 +99,9 @@ final class OidcLoginSuccessHandler implements AuthenticationSuccessHandler {
         if (securityProperties.isOperator(listener.listenerId())) {
             authorities.add(new SimpleGrantedAuthority("ROLE_OPERATOR"));
         }
+        securityProperties.staffAuthorities(listener.listenerId()).stream()
+                .map(SimpleGrantedAuthority::new)
+                .forEach(authorities::add);
         UsernamePasswordAuthenticationToken listenerAuthentication =
                 UsernamePasswordAuthenticationToken.authenticated(principal, null, authorities);
         SecurityContext context = SecurityContextHolder.createEmptyContext();

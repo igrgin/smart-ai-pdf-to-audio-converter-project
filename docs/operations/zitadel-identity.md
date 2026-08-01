@@ -3,10 +3,14 @@
 Folio uses one EU-hosted ZITADEL instance as its only OIDC broker. The application never talks to
 Google, Apple, or Facebook directly and never receives an upstream provider token in the browser.
 
-Operator access is an explicit local allowlist layered on top of the same broker authentication.
-After an operator establishes a Listener Identity, set `OPERATOR_LISTENER_IDS` to the
-comma-separated local Listener UUIDs allowed to use `/api/v1/operator/**`, redeploy, and have those
-operators authenticate again. Social-provider claims never grant operator access on their own.
+Staff access is an explicit local allowlist layered on top of the same broker authentication.
+After a staff member establishes a local identity, assign only the required comma-separated UUID
+allowlists: `SUPPORT_STAFF_LISTENER_IDS`, `RELIABILITY_STAFF_LISTENER_IDS`,
+`ENTITLEMENT_STAFF_LISTENER_IDS`, `VOICE_STAFF_LISTENER_IDS`,
+`INCIDENT_RESPONDER_LISTENER_IDS`, and `SECURITY_REVIEWER_LISTENER_IDS`. The legacy
+`OPERATOR_LISTENER_IDS` allowlist remains limited to the existing entitlement demonstration
+operations. Redeploy and have staff authenticate again after changing an assignment. Social-provider
+claims never grant staff access on their own, and no single super-admin authority exists.
 
 ## Broker configuration gate
 
