@@ -24,6 +24,7 @@
         <google-cloud-pubsub.version>1.151.0</google-cloud-pubsub.version>
         <google-cloud-storage.version>2.69.0</google-cloud-storage.version>
         <google-auth-library.version>1.48.0</google-auth-library.version>
+        <pdfbox.version>3.0.8</pdfbox.version>
         <spring-boot.version>4.1.0</spring-boot.version>
     </properties>
 
@@ -55,6 +56,11 @@
                 <groupId>com.google.cloud</groupId>
                 <artifactId>google-cloud-storage</artifactId>
                 <version>${google-cloud-storage.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.pdfbox</groupId>
+                <artifactId>pdfbox</artifactId>
+                <version>${pdfbox.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

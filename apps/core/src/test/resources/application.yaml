@@ -60,6 +60,20 @@ platform:
     rate-card-version: preinspection-v1
     upload-token-secret: test-only-upload-capability-secret
     quarantine-path: ${java.io.tmpdir}/folio-quarantine-tests
+    inspection:
+      maximum-input-bytes: 262144000
+      maximum-pdf-pages: 2000
+      maximum-epub-entries: 10000
+      maximum-epub-expanded-bytes: 1073741824
+      maximum-compression-ratio: 100
+      maximum-xml-bytes: 26214400
+      maximum-rendered-pixels: 40000000
+      command-timeout: 30s
+      runtime: 9m
+      maximum-attempts: 3
+      scratch-path: ${java.io.tmpdir}/folio-inspection-tests
+      malware-command: /usr/bin/clamscan
+      qpdf-command: /usr/bin/qpdf
   entitlement:
     free-grant-characters: 500000
     free-grant-validity: 365d

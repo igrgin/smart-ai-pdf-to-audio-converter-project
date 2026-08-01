@@ -32,12 +32,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class PublicationSubmissionServiceImpl implements PublicationSubmissionService {
 
     private static final String EPUB_MEDIA_TYPE = "application/epub+zip";
-    private static final String INSPECTION_TOOLCHAIN = "epub-structural-v1";
+    private static final String PDF_MEDIA_TYPE = "application/pdf";
 
     private final JdbcTemplate jdbcTemplate;
     private final ConversionEntitlementService entitlementService;
     private final QuarantineObjectStore objectStore;
-    private final EpubInspectionService epubInspectionService;
     private final AdmissionProperties properties;
     private final Clock identityClock;
     private final org.springframework.transaction.PlatformTransactionManager transactionManager;
@@ -316,46 +315,26 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
     }
 
     @Override
-    public Inspection inspect(InspectionCommand command) {
-        Objects.requireNonNull(command, "command");
-        String workerId = requiredReference(command.workerId(), "workerId");
-        String operationKey = requiredReference(command.operationKey(), "operationKey");
-        Instant now = identityClock.instant();
-        if (command.leaseUntil() == null || !command.leaseUntil().isAfter(now)
-                || command.leaseUntil().isAfter(now.plusSeconds(600))) {
-            throw new IllegalArgumentException("Inspection lease must be a future instant within ten minutes");
-        }
+    public int applyInspectionResults() {
+        List<UUID> pending = jdbcTemplate.queryForList(
+                """
+                SELECT r.work_id
+                FROM inspection_result r
+                JOIN publication_submission p ON p.submission_id = r.submission_id
+                WHERE p.state = 'UPLOADED'
+                ORDER BY r.created_at, r.work_id
+                LIMIT 10
+                """,
+                UUID.class);
         TransactionTemplate transactions = transactionTemplate();
-        Claim claim = transactions.execute(status -> claim(command.workId(), workerId, command.leaseUntil(), operationKey));
-        if (claim == null) {
-            throw new IllegalStateException("Inspection claim transaction did not return a result");
+        int applied = 0;
+        for (UUID workId : pending) {
+            Boolean changed = transactions.execute(status -> applyInspectionResult(workId));
+            if (Boolean.TRUE.equals(changed)) {
+                applied++;
+            }
         }
-        if (claim.completed() != null) {
-            return claim.completed();
-        }
-        if (!claim.claimed()) {
-            return new Inspection(
-                    claim.submission().submissionId(),
-                    InspectionOutcome.LEASED_BY_ANOTHER_WORKER,
-                    null,
-                    null,
-                    null,
-                    false);
-        }
-
-        EpubInspectionService.Result inspection;
-        try (var publication = objectStore.read(claim.submission().submissionId())) {
-            inspection = epubInspectionService.inspect(publication);
-        } catch (IOException exception) {
-            inspection = EpubInspectionService.Result.rejected("INSPECTION_DEPENDENCY_FAILED");
-        }
-        EpubInspectionService.Result completedInspection = inspection;
-        Inspection completed = transactions.execute(status -> completeInspection(
-                claim.submission(), command.workId(), workerId, operationKey, completedInspection));
-        if (completed == null) {
-            throw new IllegalStateException("Inspection completion transaction did not return a result");
-        }
-        return completed;
+        return applied;
     }
 
     @Override
@@ -366,46 +345,25 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
         return new Submission(stored.submissionId(), stored.state(), stored.reasonCode(), stored.admittedConversionId());
     }
 
-    private Claim claim(UUID workId, String workerId, Instant leaseUntil, String operationKey) {
-        Objects.requireNonNull(workId, "workId");
-        InspectionWorkflowService.Claim workflowClaim = inspectionWorkflowService.claim(
-                workId, workerId, leaseUntil, operationKey);
-        StoredSubmission submission = lockSubmission(workflowClaim.submissionId());
-        if (workflowClaim.status() == InspectionWorkflowService.ClaimStatus.COMPLETED) {
-            return new Claim(submission, false, loadInspection(workId, true));
-        }
-        Instant now = identityClock.instant();
-        if (workflowClaim.status() == InspectionWorkflowService.ClaimStatus.LEASED_BY_ANOTHER_WORKER) {
-            return new Claim(submission, false, null);
-        }
-        jdbcTemplate.update(
+    private boolean applyInspectionResult(UUID workId) {
+        StoredInspectionResult result = jdbcTemplate.queryForObject(
                 """
-                UPDATE publication_submission SET state = 'INSPECTING', version = version + 1, updated_at = ?
-                WHERE submission_id = ? AND state = 'UPLOADED'
+                SELECT r.submission_id, r.outcome, r.reason_code, r.media_type
+                FROM inspection_result r WHERE r.work_id = ?
                 """,
-                databaseTime(now),
-                submission.submissionId());
-        return new Claim(submission, true, null);
-    }
-
-    private Inspection completeInspection(
-            StoredSubmission snapshot,
-            UUID workId,
-            String workerId,
-            String operationKey,
-            EpubInspectionService.Result inspection) {
-        if (!inspectionWorkflowService.complete(workId, workerId)) {
-            return loadInspection(workId, true);
+                (resultSet, row) -> new StoredInspectionResult(
+                        resultSet.getObject("submission_id", UUID.class),
+                        InspectionOutcomeRecordingService.InspectionOutcome.valueOf(resultSet.getString("outcome")),
+                        resultSet.getString("reason_code"),
+                        resultSet.getString("media_type")),
+                workId);
+        StoredSubmission stored = lockSubmission(result.submissionId());
+        if (stored.state() != SubmissionState.UPLOADED) {
+            return false;
         }
-        StoredSubmission stored = lockSubmission(snapshot.submissionId());
         Instant now = identityClock.instant();
-        UUID sourceId = null;
-        UUID conversionId = null;
-        InspectionOutcome outcome;
-        String reason = inspection.reasonCode();
-        if (inspection.accepted()) {
-            sourceId = identifierGenerator.generate();
-            conversionId = stored.plannedConversionId();
+        if (result.outcome() == InspectionOutcomeRecordingService.InspectionOutcome.ADMITTED) {
+            UUID sourceId = identifierGenerator.generate();
             jdbcTemplate.update(
                     """
                     INSERT INTO source_publication (
@@ -415,10 +373,10 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                     sourceId,
                     stored.listenerId(),
                     stored.submissionId(),
-                    EPUB_MEDIA_TYPE,
+                    result.mediaType(),
                     stored.declaredByteLength(),
                     databaseTime(now));
-            audiobookConversionService.createPreparing(conversionId, stored.listenerId(), sourceId);
+            audiobookConversionService.createPreparing(stored.plannedConversionId(), stored.listenerId(), sourceId);
             jdbcTemplate.update(
                     """
                     UPDATE publication_submission
@@ -427,7 +385,6 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                     """,
                     databaseTime(now),
                     stored.submissionId());
-            outcome = InspectionOutcome.ADMITTED;
             audit(stored.listenerId(), stored.submissionId(), "SOURCE_PUBLICATION_ADMITTED", "ADMITTED", null, now);
         } else {
             releaseReservation(stored);
@@ -437,51 +394,14 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                     SET state = 'REJECTED', reason_code = ?, version = version + 1, updated_at = ?
                     WHERE submission_id = ?
                     """,
-                    reason,
+                    result.reasonCode(),
                     databaseTime(now),
                     stored.submissionId());
-            createCleanup(stored.submissionId(), reason, now);
-            outcome = InspectionOutcome.REJECTED;
-            audit(stored.listenerId(), stored.submissionId(), "PUBLICATION_INSPECTION", "REJECTED", reason, now);
+            createCleanup(stored.submissionId(), result.reasonCode(), now);
+            audit(stored.listenerId(), stored.submissionId(),
+                    "PUBLICATION_INSPECTION", "REJECTED", result.reasonCode(), now);
         }
-        jdbcTemplate.update(
-                """
-                INSERT INTO inspection_result (
-                    result_id, work_id, listener_id, submission_id, operation_key, outcome,
-                    reason_code, media_type, toolchain_version, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                identifierGenerator.generate(),
-                workId,
-                stored.listenerId(),
-                stored.submissionId(),
-                operationKey,
-                outcome.name(),
-                reason,
-                inspection.accepted() ? EPUB_MEDIA_TYPE : null,
-                INSPECTION_TOOLCHAIN,
-                databaseTime(now));
-        return new Inspection(stored.submissionId(), outcome, reason, sourceId, conversionId, false);
-    }
-
-    private Inspection loadInspection(UUID workId, boolean replayed) {
-        return jdbcTemplate.queryForObject(
-                """
-                SELECT r.submission_id, r.outcome, r.reason_code,
-                       s.source_publication_id, p.planned_conversion_id AS conversion_id
-                FROM inspection_result r
-                LEFT JOIN source_publication s ON s.submission_id = r.submission_id
-                JOIN publication_submission p ON p.submission_id = r.submission_id
-                WHERE r.work_id = ?
-                """,
-                (resultSet, row) -> new Inspection(
-                        resultSet.getObject("submission_id", UUID.class),
-                        InspectionOutcome.valueOf(resultSet.getString("outcome")),
-                        resultSet.getString("reason_code"),
-                        resultSet.getObject("source_publication_id", UUID.class),
-                        resultSet.getObject("conversion_id", UUID.class),
-                        replayed),
-                workId);
+        return true;
     }
 
     private Submission rejectUpload(
@@ -598,7 +518,7 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
             return jdbcTemplate.queryForObject(
                     """
                     SELECT s.submission_id, s.listener_id, s.entitlement_reservation_id,
-                           s.planned_conversion_id, s.state, s.declared_byte_length,
+                           s.planned_conversion_id, s.state, s.declared_media_type, s.declared_byte_length,
                            s.declared_sha256, s.reason_code, u.storage_generation,
                            c.conversion_id AS admitted_conversion_id
                     FROM publication_submission s
@@ -613,6 +533,7 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                             resultSet.getObject("entitlement_reservation_id", UUID.class),
                             resultSet.getObject("planned_conversion_id", UUID.class),
                             SubmissionState.valueOf(resultSet.getString("state")),
+                            resultSet.getString("declared_media_type"),
                             resultSet.getLong("declared_byte_length"),
                             resultSet.getString("declared_sha256"),
                             resultSet.getString("reason_code"),
@@ -700,8 +621,8 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
         Objects.requireNonNull(command, "command");
         Objects.requireNonNull(command.listenerId(), "listenerId");
         String mediaType = requiredReference(command.mediaType(), "mediaType").toLowerCase(Locale.ROOT);
-        if (!EPUB_MEDIA_TYPE.equals(mediaType)) {
-            throw new IllegalArgumentException("Only application/epub+zip is accepted by this submission flow");
+        if (!EPUB_MEDIA_TYPE.equals(mediaType) && !PDF_MEDIA_TYPE.equals(mediaType)) {
+            throw new IllegalArgumentException("Only application/pdf and application/epub+zip are accepted");
         }
         if (command.byteLength() <= 0 || command.byteLength() > properties.maximumUploadBytes()) {
             throw new IllegalArgumentException("Publication byte length is outside the allowed range");
@@ -834,6 +755,7 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
             UUID reservationId,
             UUID plannedConversionId,
             SubmissionState state,
+            String declaredMediaType,
             long declaredByteLength,
             String declaredSha256,
             String reasonCode,
@@ -841,7 +763,11 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
             UUID admittedConversionId) {
     }
 
-    private record Claim(StoredSubmission submission, boolean claimed, Inspection completed) {
+    private record StoredInspectionResult(
+            UUID submissionId,
+            InspectionOutcomeRecordingService.InspectionOutcome outcome,
+            String reasonCode,
+            String mediaType) {
     }
 
     public static class SubmissionRejectedException extends RuntimeException {
