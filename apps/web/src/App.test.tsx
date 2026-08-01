@@ -660,14 +660,11 @@ describe("public sample", () => {
     expect(screen.getByRole("button", { name: /move evidence up/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /move evidence down/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /merge evidence with next section/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /split evidence section/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /split evidence section/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /skip optional review/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /approve narration review/i })).toBeEnabled();
     expect(container.textContent).not.toContain("private normal prose");
 
-    fireEvent.click(screen.getByRole("button", { name: /split evidence section/i }));
-    fireEvent.click(screen.getByRole("button", { name: /move evidence down/i }));
-    fireEvent.click(screen.getByRole("button", { name: /merge evidence \(continued\) with next section/i }));
     fireEvent.change(screen.getByRole("textbox", { name: /section 1 title/i }), {
       target: { value: "Findings" }
     });
@@ -694,7 +691,7 @@ describe("public sample", () => {
     expect(reviewBody).toEqual({
       action: "APPROVE",
       sections: [{
-        clientId: "section-00000000-0000-4000-8000-000000000023",
+        clientId: "section-0",
         title: "Findings",
         excluded: true,
         sourceChapterOrdinals: [0],

@@ -40,30 +40,20 @@ export async function submitNarrationReview(
   version: number,
   action: NarrationReviewAction,
   sections: NarrationSectionDecision[],
-  csrf: CsrfProof
+  csrf: CsrfProof,
+  operationKey: string
 ): Promise<NarrationReviewResult> {
-  const boundedSections = sections.map((section) => ({
-    clientId: section.clientId,
-    title: section.title,
-    excluded: section.excluded,
-    sourceChapterOrdinals: [...section.sourceChapterOrdinals],
-    reviewItems: section.reviewItems.map((item) => ({
-      sourceChapterOrdinal: item.sourceChapterOrdinal,
-      ordinal: item.ordinal,
-      treatment: item.treatment,
-      narrationSnippet: item.narrationSnippet
-    }))
-  }));
+  const body = boundedReviewRequest(action, sections);
   const response = await fetch(`/api/v1/audiobook-conversions/${conversionId}/narration-review`, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "Idempotency-Key": `narration-review:${conversionId}:${crypto.randomUUID()}`,
+      "Idempotency-Key": operationKey,
       "If-Match": `"${version}"`,
       [csrf.headerName]: csrf.token
     },
-    body: JSON.stringify({ action, sections: action === "APPROVE" ? boundedSections : [] })
+    body: JSON.stringify(body)
   });
   if (!response.ok) {
     const problem = await response.json().catch(() => ({})) as {
@@ -80,4 +70,28 @@ export async function submitNarrationReview(
     );
   }
   return response.json() as Promise<NarrationReviewResult>;
+}
+
+export function narrationReviewRequestFingerprint(
+  version: number,
+  action: NarrationReviewAction,
+  sections: NarrationSectionDecision[]
+): string {
+  return JSON.stringify({ version, ...boundedReviewRequest(action, sections) });
+}
+
+function boundedReviewRequest(action: NarrationReviewAction, sections: NarrationSectionDecision[]) {
+  const boundedSections = sections.map((section) => ({
+    clientId: section.clientId,
+    title: section.title,
+    excluded: section.excluded,
+    sourceChapterOrdinals: [...section.sourceChapterOrdinals],
+    reviewItems: section.reviewItems.map((item) => ({
+      sourceChapterOrdinal: item.sourceChapterOrdinal,
+      ordinal: item.ordinal,
+      treatment: item.treatment,
+      narrationSnippet: item.narrationSnippet
+    }))
+  }));
+  return { action, sections: action === "APPROVE" ? boundedSections : [] };
 }

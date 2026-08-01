@@ -116,7 +116,7 @@ footer { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 26px 0 
 .narration-plan-card { padding: clamp(26px, 4vw, 42px); }
 .narration-chapters { display: grid; gap: 16px; margin-top: 26px; }
 .narration-chapter { padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--canvas) 55%, var(--folio)); }
-.narration-chapter h3 { margin: 0; font-family: Georgia, serif; font-size: 1.3rem; font-weight: 500; }
+.narration-chapter h4 { margin: 0; font-family: Georgia, serif; font-size: 1.3rem; font-weight: 500; }
 .narration-chapter .narration-provenance { margin: 6px 0 16px; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
 .narration-gap { padding: 10px 12px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); font-size: .84rem; }
 .narration-review-item { display: grid; gap: 6px; margin-top: 12px; padding: 14px; border-radius: 10px; background: var(--canvas); }
@@ -124,6 +124,8 @@ footer { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 26px 0 
 .narration-review-item span, .narration-review-item small { color: var(--muted); font-size: .75rem; }
 .narration-review-item blockquote { margin: 4px 0 0; padding-left: 12px; border-left: 2px solid var(--accent); color: var(--ink); }
 .narration-review-editor { margin-top: 18px; }
+.narration-review-items, .narration-structure { margin-top: 22px; }
+.narration-review-items > h3, .narration-structure > h3 { margin: 0; font-family: Georgia, serif; font-size: 1.25rem; font-weight: 500; }
 .review-guidance, .review-error { display: grid; gap: 5px; margin-bottom: 16px; padding: 14px 16px; border-left: 4px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .review-guidance span, .review-error span { color: var(--muted); font-size: .78rem; line-height: 1.5; }
 .review-error { border: 1px solid var(--accent); border-left-width: 4px; border-radius: 10px; }

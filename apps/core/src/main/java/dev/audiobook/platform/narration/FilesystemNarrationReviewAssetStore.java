@@ -23,8 +23,8 @@ public class FilesystemNarrationReviewAssetStore implements NarrationReviewAsset
 
     @Override
     public StoredAsset write(UUID conversionId, UUID decisionId, byte[] content) throws IOException {
-        String reference = NarrationReviewAssetStore.reference(conversionId, decisionId);
-        String digest = NarrationPlanAssetIdentity.sha256(content);
+        NarrationReviewAssetIdentity.Identity identity =
+                NarrationReviewAssetIdentity.identify(conversionId, decisionId, content);
         Path target = path(conversionId, decisionId);
         Files.createDirectories(target.getParent());
         if (Files.exists(target)) {
@@ -32,7 +32,7 @@ public class FilesystemNarrationReviewAssetStore implements NarrationReviewAsset
             if (!MessageDigest.isEqual(existing, content)) {
                 throw new IllegalStateException("Narration Review Working Asset already has different content");
             }
-            return new StoredAsset(reference, digest);
+            return new StoredAsset(identity.reference(), identity.sha256());
         }
         Path temporary = Files.createTempFile(target.getParent(), "review-", ".pending");
         try {
@@ -45,14 +45,12 @@ public class FilesystemNarrationReviewAssetStore implements NarrationReviewAsset
         } finally {
             Files.deleteIfExists(temporary);
         }
-        return new StoredAsset(reference, digest);
+        return new StoredAsset(identity.reference(), identity.sha256());
     }
 
     @Override
     public byte[] read(UUID conversionId, UUID decisionId, String reference) throws IOException {
-        if (!NarrationReviewAssetStore.reference(conversionId, decisionId).equals(reference)) {
-            throw new IllegalArgumentException("Narration Review Working Asset reference does not match its decision");
-        }
+        NarrationReviewAssetIdentity.requireReference(conversionId, decisionId, reference);
         return Files.readAllBytes(path(conversionId, decisionId));
     }
 

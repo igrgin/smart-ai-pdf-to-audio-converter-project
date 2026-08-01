@@ -162,7 +162,7 @@ public class NarrationReviewServiceImpl implements NarrationReviewService {
                 .toList();
     }
 
-    private List<SectionDecision> validatedSubmittedSections(
+    static List<SectionDecision> validatedSubmittedSections(
             NarrationPlanService.PlanView plan, List<SectionDecision> sections) {
         if (sections == null || sections.isEmpty() || sections.size() > MAX_SECTIONS) {
             throw rejected(NarrationReviewRejectionReason.INVALID_REVIEW);
@@ -203,7 +203,9 @@ public class NarrationReviewServiceImpl implements NarrationReviewService {
                     throw rejected(NarrationReviewRejectionReason.INVALID_REVIEW);
                 }
                 ItemKey key = new ItemKey(item.sourceChapterOrdinal(), item.ordinal());
-                if (!expectedItems.containsKey(key) || !representedItems.add(key)) {
+                if (!section.sourceChapterOrdinals().contains(item.sourceChapterOrdinal())
+                        || !expectedItems.containsKey(key)
+                        || !representedItems.add(key)) {
                     throw rejected(NarrationReviewRejectionReason.INVALID_REVIEW);
                 }
             }

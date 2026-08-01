@@ -21,32 +21,31 @@ public class GoogleCloudNarrationReviewAssetStore implements NarrationReviewAsse
 
     @Override
     public StoredAsset write(UUID conversionId, UUID decisionId, byte[] content) throws IOException {
-        String reference = NarrationReviewAssetStore.reference(conversionId, decisionId);
-        String digest = NarrationPlanAssetIdentity.sha256(content);
+        NarrationReviewAssetIdentity.Identity identity =
+                NarrationReviewAssetIdentity.identify(conversionId, decisionId, content);
         try {
             storage.create(
-                    BlobInfo.newBuilder(properties.workingBucket(), reference)
+                    BlobInfo.newBuilder(properties.workingBucket(), identity.reference())
                             .setContentType("application/json")
-                            .setMetadata(java.util.Map.of("sha256", digest, "schema", "narration-review-v1"))
+                            .setMetadata(java.util.Map.of(
+                                    "sha256", identity.sha256(), "schema", "narration-review-v1"))
                             .build(),
                     content,
                     Storage.BlobTargetOption.doesNotExist());
         } catch (StorageException exception) {
-            Blob existing = storage.get(properties.workingBucket(), reference);
+            Blob existing = storage.get(properties.workingBucket(), identity.reference());
             if (exception.getCode() != 412
                     || existing == null
                     || !MessageDigest.isEqual(existing.getContent(), content)) {
                 throw new IOException("Unable to store the Narration Review Working Asset", exception);
             }
         }
-        return new StoredAsset(reference, digest);
+        return new StoredAsset(identity.reference(), identity.sha256());
     }
 
     @Override
     public byte[] read(UUID conversionId, UUID decisionId, String reference) throws IOException {
-        if (!NarrationReviewAssetStore.reference(conversionId, decisionId).equals(reference)) {
-            throw new IllegalArgumentException("Narration Review Working Asset reference does not match its decision");
-        }
+        NarrationReviewAssetIdentity.requireReference(conversionId, decisionId, reference);
         Blob asset = storage.get(properties.workingBucket(), reference);
         if (asset == null) {
             throw new IOException("Narration Review Working Asset is unavailable");
