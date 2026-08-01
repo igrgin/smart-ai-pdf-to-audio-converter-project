@@ -25,10 +25,12 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.annotation.Transactional;
 
 @ActiveProfiles("itest")
 @AutoConfigureMockMvc
 @SpringBootTest(classes = PlatformApplication.class)
+@Transactional
 class DemonstrationSubscriptionProjectionITest {
 
     private static final String WEBHOOK_PATH = "/api/v1/integrations/stripe/events";

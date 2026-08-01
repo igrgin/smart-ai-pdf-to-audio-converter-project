@@ -52,7 +52,7 @@ platform:
     monthly-price-id: price_folio_demo_monthly
     monthly-grant-characters: 500000
     signature-tolerance: 5m
-    projector-enabled: true
+    projector-enabled: false
   narration:
     working-asset-path: ${java.io.tmpdir}/folio-working-tests/narration-plans
     working-bucket: local-working-test
