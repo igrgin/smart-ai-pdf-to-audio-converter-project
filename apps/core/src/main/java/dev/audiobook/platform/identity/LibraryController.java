@@ -1,6 +1,7 @@
 package dev.audiobook.platform.identity;
 
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
+import dev.audiobook.platform.library.PrivateAudiobookLibraryService;
 import dev.audiobook.platform.narration.NarrationSelectionService;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
 import java.util.List;
@@ -21,6 +22,7 @@ public class LibraryController {
     private final ConversionEntitlementService entitlementService;
     private final AudiobookConversionService audiobookConversionService;
     private final NarrationSelectionService narrationSelectionService;
+    private final PrivateAudiobookLibraryService privateAudiobookLibraryService;
 
     @GetMapping
     public ResponseEntity<LibraryView> library(@AuthenticationPrincipal ListenerPrincipal principal) {
@@ -38,7 +40,11 @@ public class LibraryController {
                                 .map(conversion -> AudiobookView.from(
                                         conversion,
                                         narrationSelectionService.narrationChoice(
-                                                principal.listenerId(), conversion.conversionId())))
+                                                principal.listenerId(), conversion.conversionId()),
+                                        conversion.state() == AudiobookConversionService.ConversionState.FINALIZED
+                                                ? privateAudiobookLibraryService.find(
+                                                        principal.listenerId(), conversion.conversionId())
+                                                : null))
                                 .toList(),
                         ConversionEntitlementView.from(entitlementService.allowance(principal.listenerId()))));
     }
@@ -61,11 +67,13 @@ public class LibraryController {
             java.util.UUID voiceId,
             String voiceDisplayName,
             NarrationSelectionService.NarrationPace pace,
-            boolean explicitNarrationChoiceRequired) {
+            boolean explicitNarrationChoiceRequired,
+            PrivateAudiobookView privateAudiobook) {
 
         static AudiobookView from(
                 AudiobookConversionService.AudiobookConversion conversion,
-                NarrationSelectionService.NarrationChoiceStatus choice) {
+                NarrationSelectionService.NarrationChoiceStatus choice,
+                PrivateAudiobookLibraryService.PrivateAudiobook privateAudiobook) {
             return new AudiobookView(
                     conversion.conversionId(),
                     conversion.state(),
@@ -76,7 +84,29 @@ public class LibraryController {
                     choice.voiceId(),
                     choice.voiceDisplayName(),
                     choice.pace(),
-                    choice.explicitChoiceRequired());
+                    choice.explicitChoiceRequired(),
+                    PrivateAudiobookView.from(privateAudiobook));
+        }
+    }
+
+    public record PrivateAudiobookView(
+            java.util.UUID audiobookId,
+            java.util.UUID assetVersionId,
+            String availability,
+            long totalDurationMs,
+            String manifestUrl) {
+
+        static PrivateAudiobookView from(PrivateAudiobookLibraryService.PrivateAudiobook audiobook) {
+            if (audiobook == null) {
+                return null;
+            }
+            return new PrivateAudiobookView(
+                    audiobook.audiobookId(),
+                    audiobook.assetVersionId(),
+                    audiobook.availability(),
+                    audiobook.totalDurationMs(),
+                    "/api/v1/audiobooks/" + audiobook.audiobookId()
+                            + "/asset-versions/" + audiobook.assetVersionId() + "/manifest");
         }
     }
 

@@ -27,6 +27,7 @@ import {
   type Library
 } from "./identity-session";
 import { NarrationReviewEditor } from "./NarrationReviewEditor";
+import { PrivateAudiobookPlayer } from "./PrivateAudiobookPlayer";
 import { fetchPlatformStatus, type PlatformStatus } from "./platform-status";
 import {
   publicationMediaType,
@@ -235,6 +236,15 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
   const [creationTarget, setCreationTarget] = useState<AudiobookConversion | null | undefined>(undefined);
   const availableProviders = providers.filter((provider) => !library.signInMethods.includes(provider));
   const canStartConversion = library.conversionEntitlement.canStartConversion;
+  const playable = library.audiobooks.filter((conversion) =>
+    conversion.state === "FINALIZED"
+    && conversion.privateAudiobook?.availability === "AVAILABLE"
+  );
+  const unfinished = library.audiobooks.filter((conversion) => conversion.state !== "FINALIZED");
+  const unavailable = library.audiobooks.filter((conversion) =>
+    conversion.state === "FINALIZED"
+    && conversion.privateAudiobook?.availability !== "AVAILABLE"
+  );
   return (
     <section className="library-studio" aria-labelledby="library-title">
       <div className="library-heading">
@@ -256,13 +266,22 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
           </article>
         ) : (
           <div className="conversion-list" aria-label="Private audiobooks">
-            {library.audiobooks.map((conversion) => (
+            {playable.length > 0 && <PrivateAudiobookPlayer audiobooks={playable} csrf={csrf} />}
+            {unfinished.map((conversion) => (
               <ConversionCard
                 conversion={conversion}
                 csrf={csrf}
                 key={conversion.conversionId}
                 onChooseNarrator={() => setCreationTarget(conversion)}
               />
+            ))}
+            {unavailable.map((conversion) => (
+              <article className="preparing-audiobook" key={conversion.conversionId}>
+                <span className="empty-mark" aria-hidden="true"><ShieldCheck size={28} /></span>
+                <span className="card-kicker">{conversion.privateAudiobook?.availability ?? "UNAVAILABLE"}</span>
+                <h2>Private Audiobook unavailable</h2>
+                <p>Playback is denied while this audiobook is unavailable. No media coordinates are exposed.</p>
+              </article>
             ))}
           </div>
         )}
