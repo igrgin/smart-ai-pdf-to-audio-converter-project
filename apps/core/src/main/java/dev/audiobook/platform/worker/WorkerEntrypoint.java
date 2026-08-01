@@ -1,6 +1,8 @@
 package dev.audiobook.platform.worker;
 
+import dev.audiobook.platform.narration.NarrationPlanJobService;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -15,6 +17,7 @@ import org.springframework.stereotype.Component;
 public class WorkerEntrypoint implements ApplicationRunner {
 
     private final WorkerProperties workerProperties;
+    private final NarrationPlanJobService narrationPlanJobService;
 
     @Override
     public void run(ApplicationArguments arguments) throws InterruptedException {
@@ -23,6 +26,19 @@ public class WorkerEntrypoint implements ApplicationRunner {
         }
 
         log.info("worker_ready stage={}", workerProperties.stage());
+        if (workerProperties.stage() == WorkerProperties.Stage.NARRATION_ANALYSIS) {
+            if (workerProperties.messageId() != null && workerProperties.workId() != null) {
+                narrationPlanJobService.processDelivery(
+                        workerProperties.messageId(), workerProperties.workId());
+                return;
+            }
+            do {
+                narrationPlanJobService.processPending();
+                if (!workerProperties.idle()) {
+                    return;
+                }
+            } while (!new CountDownLatch(1).await(1, TimeUnit.SECONDS));
+        }
         if (workerProperties.idle()) {
             new CountDownLatch(1).await();
         }

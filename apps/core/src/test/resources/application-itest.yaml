@@ -1,6 +1,6 @@
 spring:
   datasource:
-    url: "jdbc:tc:postgresql:17.6-alpine:///audiobook?user=audiobook&password=integration-test-only"
+    url: "jdbc:tc:postgresql:17.6-alpine:///audiobook?TC_INITSCRIPT=database/itest-init.sql&user=audiobook&password=integration-test-only"
     username: audiobook
     password: integration-test-only
     driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver

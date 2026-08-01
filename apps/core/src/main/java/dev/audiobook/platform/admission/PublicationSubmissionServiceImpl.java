@@ -4,7 +4,6 @@ import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
 import dev.audiobook.platform.workflow.InspectionWorkflowService;
-import dev.audiobook.platform.narration.NarrationPlanService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -45,7 +44,6 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
     private final PlatformIdentifierGenerator identifierGenerator;
     private final AudiobookConversionService audiobookConversionService;
     private final InspectionWorkflowService inspectionWorkflowService;
-    private final NarrationPlanService narrationPlanService;
 
     @Override
     @Transactional
@@ -357,16 +355,6 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
         if (completed == null) {
             throw new IllegalStateException("Inspection completion transaction did not return a result");
         }
-        if (completed.outcome() == InspectionOutcome.ADMITTED) {
-            try (var publication = objectStore.read(completed.submissionId())) {
-                narrationPlanService.prepare(
-                        claim.submission().listenerId(),
-                        completed.conversionId(),
-                        publication);
-            } catch (IOException exception) {
-                throw new IllegalStateException("Narration Plan source Working Asset is unavailable", exception);
-            }
-        }
         return completed;
     }
 
@@ -431,6 +419,28 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                     stored.declaredByteLength(),
                     databaseTime(now));
             audiobookConversionService.createPreparing(conversionId, stored.listenerId(), sourceId);
+            UUID narrationWorkId = identifierGenerator.generate();
+            jdbcTemplate.update(
+                    """
+                    INSERT INTO workflow.narration_plan_work (
+                        work_id, listener_id, conversion_id, submission_id, operation_key, state, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 'READY', ?)
+                    """,
+                    narrationWorkId,
+                    stored.listenerId(),
+                    conversionId,
+                    stored.submissionId(),
+                    "narration-plan:" + conversionId,
+                    databaseTime(now));
+            jdbcTemplate.update(
+                    """
+                    INSERT INTO workflow.narration_plan_outbox (
+                        message_id, work_id, message_type, schema_version, created_at
+                    ) VALUES (?, ?, 'PREPARE_NARRATION_PLAN', 1, ?)
+                    """,
+                    identifierGenerator.generate(),
+                    narrationWorkId,
+                    databaseTime(now));
             jdbcTemplate.update(
                     """
                     UPDATE publication_submission

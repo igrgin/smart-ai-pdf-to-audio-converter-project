@@ -27,7 +27,7 @@ export interface Library {
 export interface AudiobookConversion {
   conversionId: string;
   state: "PREPARING" | "AWAITING_REVIEW";
-  reasonCode: "NARRATION_PLAN_PENDING" | "NARRATION_REVIEW_AVAILABLE";
+  reasonCode: "NARRATION_PLAN_PENDING" | "NARRATION_PLAN_REQUIRES_INTERVENTION" | "NARRATION_REVIEW_AVAILABLE";
   allowedActions: AllowedAction[];
   version: number;
 }
@@ -62,6 +62,7 @@ export interface SourceProvenance {
 
 export interface NarrationReviewItem {
   ordinal: number;
+  sourceOrdinal: number;
   type: string;
   provenance: SourceProvenance;
   extractionConfidence: number;

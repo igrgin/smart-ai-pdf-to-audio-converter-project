@@ -6,8 +6,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
@@ -25,8 +23,8 @@ public class FilesystemNarrationPlanAssetStore implements NarrationPlanAssetStor
 
     @Override
     public StoredAsset write(UUID conversionId, byte[] content) throws IOException {
-        String reference = reference(conversionId);
-        String digest = sha256(content);
+        String reference = NarrationPlanAssetIdentity.reference(conversionId);
+        String digest = NarrationPlanAssetIdentity.sha256(content);
         Path target = path(conversionId);
         Files.createDirectories(target.getParent());
         if (Files.exists(target)) {
@@ -52,7 +50,7 @@ public class FilesystemNarrationPlanAssetStore implements NarrationPlanAssetStor
 
     @Override
     public byte[] read(UUID conversionId, String reference) throws IOException {
-        if (!reference(conversionId).equals(reference)) {
+        if (!NarrationPlanAssetIdentity.reference(conversionId).equals(reference)) {
             throw new IllegalArgumentException("Narration Plan Working Asset reference does not match its conversion");
         }
         return Files.readAllBytes(path(conversionId));
@@ -62,15 +60,4 @@ public class FilesystemNarrationPlanAssetStore implements NarrationPlanAssetStor
         return root.resolve(conversionId.toString()).resolve("plan-v1.json");
     }
 
-    private static String reference(UUID conversionId) {
-        return "narration-plans/" + conversionId + "/plan-v1.json";
-    }
-
-    private static String sha256(byte[] value) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is unavailable", exception);
-        }
-    }
 }

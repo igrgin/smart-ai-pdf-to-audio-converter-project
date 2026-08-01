@@ -1,9 +1,14 @@
 package dev.audiobook.platform.narration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.admission.InspectionWorkPublisher;
+import dev.audiobook.platform.admission.AdmissionOutboxRelayService;
 import dev.audiobook.platform.admission.PublicationSubmissionService;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import dev.audiobook.platform.identity.ExternalIdentity;
@@ -13,6 +18,7 @@ import dev.audiobook.platform.workflow.AudiobookConversionService;
 import dev.audiobook.platform.workflow.InspectionWorkflowService;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
+import java.sql.DriverManager;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -27,6 +33,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.annotation.Transactional;
 
 @ActiveProfiles("itest")
@@ -43,10 +50,15 @@ class NarrationPlanITest {
     private final AudiobookConversionService conversionService;
     private final NarrationPlanService narrationPlanService;
     private final NarrationPlanAssetStore assetStore;
+    private final NarrationPlanJobService narrationPlanJobService;
+    private final AdmissionOutboxRelayService outboxRelayService;
     private final JdbcTemplate jdbcTemplate;
 
     @MockitoBean
     private InspectionWorkPublisher inspectionWorkPublisher;
+
+    @MockitoSpyBean
+    private NarrationPlanAssetStore spiedAssetStore;
 
     @Autowired
     NarrationPlanITest(
@@ -57,6 +69,8 @@ class NarrationPlanITest {
             AudiobookConversionService conversionService,
             NarrationPlanService narrationPlanService,
             NarrationPlanAssetStore assetStore,
+            NarrationPlanJobService narrationPlanJobService,
+            AdmissionOutboxRelayService outboxRelayService,
             JdbcTemplate jdbcTemplate) {
         this.submissionService = submissionService;
         this.entitlementService = entitlementService;
@@ -65,6 +79,8 @@ class NarrationPlanITest {
         this.conversionService = conversionService;
         this.narrationPlanService = narrationPlanService;
         this.assetStore = assetStore;
+        this.narrationPlanJobService = narrationPlanJobService;
+        this.outboxRelayService = outboxRelayService;
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -106,6 +122,7 @@ class NarrationPlanITest {
                 "SELECT message_id FROM workflow.admission_outbox WHERE work_id = ?",
                 UUID.class,
                 workId);
+        assertThat(outboxRelayService.relayPending()).isEqualTo(1);
         inspectionWorkflowService.acceptDelivery(messageId, workId);
 
         PublicationSubmissionService.Inspection inspection = submissionService.inspect(
@@ -114,6 +131,20 @@ class NarrationPlanITest {
                         "narration-inspection-worker",
                         Instant.now().plusSeconds(60),
                         "inspect-" + workId));
+
+        assertThat(conversionService.conversion(listenerId, inspection.conversionId()).state())
+                .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
+        assertThat(outboxRelayService.relayPending()).isZero();
+        assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                        """
+                        SELECT count(*) FROM workflow.narration_plan_work w
+                        JOIN workflow.narration_plan_outbox o ON o.work_id = w.work_id
+                        WHERE w.conversion_id = ? AND w.state = 'SUCCEEDED' AND o.published_at IS NULL
+                        """,
+                        Integer.class,
+                        inspection.conversionId()))
+                .isEqualTo(1);
 
         AudiobookConversionService.AudiobookConversion conversion =
                 conversionService.conversion(listenerId, inspection.conversionId());
@@ -128,6 +159,7 @@ class NarrationPlanITest {
         assertThat(view.chapters()).extracting(NarrationPlanService.ChapterView::title)
                 .containsExactly("Evidence");
         assertThat(view.chapters().getFirst().reviewItems()).singleElement().satisfies(item -> {
+            assertThat(item.sourceOrdinal()).isEqualTo(1);
             assertThat(item.type()).isEqualTo("TABLE");
             assertThat(item.recommendedTreatment()).isEqualTo("READ_VERBATIM");
             assertThat(item.narrationSnippet()).isEqualTo("Year 2026");
@@ -150,6 +182,209 @@ class NarrationPlanITest {
         assertThat(sha256(workingAsset)).isEqualTo(stored.sha256());
         assertThat(new String(workingAsset, StandardCharsets.UTF_8))
                 .contains(PRIVATE_PROSE, "Year 2026", "Evidence");
+    }
+
+    @Test
+    void narrationWorkerRetriesDurablePreparingWorkAfterWorkingAssetFailure() throws Exception {
+        UUID listenerId = entitledListener();
+        PublicationSubmissionService.Inspection inspection = admit(listenerId, "retry");
+
+        doThrow(new java.io.IOException("working asset unavailable"))
+                .doCallRealMethod()
+                .when(spiedAssetStore)
+                .write(eq(inspection.conversionId()), any(byte[].class));
+
+        assertThatThrownBy(narrationPlanJobService::processPending)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Narration Plan Working Asset storage is unavailable");
+        assertThat(conversionService.conversion(listenerId, inspection.conversionId()).state())
+                .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
+
+        assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
+        assertThat(conversionService.conversion(listenerId, inspection.conversionId()).state())
+                .isEqualTo(AudiobookConversionService.ConversionState.AWAITING_REVIEW);
+    }
+
+    @Test
+    void duplicateDeliveryRespectsActiveAndExpiredLeasesWithoutDuplicatingTheInbox() throws Exception {
+        UUID listenerId = entitledListener();
+        PublicationSubmissionService.Inspection inspection = admit(listenerId, "leases");
+        WorkCoordinates coordinates = narrationWork(inspection.conversionId());
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.narration_plan_work
+                SET state = 'CLAIMED', attempt_count = 1, lease_owner = ?,
+                    lease_expires_at = CURRENT_TIMESTAMP + INTERVAL '5 minutes'
+                WHERE work_id = ?
+                """,
+                coordinates.messageId(),
+                coordinates.workId());
+
+        assertThat(narrationPlanJobService.processDelivery(coordinates.messageId(), coordinates.workId()))
+                .isFalse();
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.narration_plan_work
+                SET lease_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 second'
+                WHERE work_id = ?
+                """,
+                coordinates.workId());
+
+        assertThat(narrationPlanJobService.processDelivery(coordinates.messageId(), coordinates.workId()))
+                .isTrue();
+        assertThat(narrationPlanJobService.processDelivery(coordinates.messageId(), coordinates.workId()))
+                .isFalse();
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM workflow.narration_plan_inbox WHERE message_id = ?",
+                        Integer.class,
+                        coordinates.messageId()))
+                .isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT attempt_count FROM workflow.narration_plan_work WHERE work_id = ?",
+                        Integer.class,
+                        coordinates.workId()))
+                .isEqualTo(2);
+    }
+
+    @Test
+    void repeatedDependencyFailureExhaustsDurableWorkAtTheAttemptBoundary() throws Exception {
+        UUID listenerId = entitledListener();
+        PublicationSubmissionService.Inspection inspection = admit(listenerId, "exhaustion");
+        WorkCoordinates coordinates = narrationWork(inspection.conversionId());
+        doThrow(new java.io.IOException("working asset unavailable"))
+                .when(spiedAssetStore)
+                .write(eq(inspection.conversionId()), any(byte[].class));
+
+        for (int attempt = 0; attempt < 4; attempt++) {
+            assertThatThrownBy(narrationPlanJobService::processPending)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("Narration Plan Working Asset storage is unavailable");
+        }
+
+        assertThat(narrationPlanJobService.processPending()).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                        """
+                        SELECT state || ':' || attempt_count
+                        FROM workflow.narration_plan_work WHERE work_id = ?
+                        """,
+                        String.class,
+                        coordinates.workId()))
+                .isEqualTo("EXHAUSTED:4");
+        assertThat(conversionService.conversion(listenerId, inspection.conversionId())).satisfies(conversion -> {
+            assertThat(conversion.state()).isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
+            assertThat(conversion.reasonCode()).isEqualTo("NARRATION_PLAN_REQUIRES_INTERVENTION");
+            assertThat(conversion.allowedActions()).isEmpty();
+        });
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM workflow.narration_plan_inbox WHERE message_id = ?",
+                        Integer.class,
+                        coordinates.messageId()))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void narrationWorkerDatabaseRoleHasOnlyItsRequiredTablesAndNoCloudAdminMembership() throws Exception {
+        String databaseUrl;
+        try (var connection = jdbcTemplate.getDataSource().getConnection()) {
+            databaseUrl = connection.getMetaData().getURL().split("\\?", 2)[0];
+        }
+
+        try (var connection = DriverManager.getConnection(
+                databaseUrl, "folio_narration_worker", "narration-integration-test-only");
+                var statement = connection.createStatement()) {
+            try (var grants = statement.executeQuery(
+                    """
+                    SELECT
+                      has_table_privilege(current_user, 'workflow.narration_plan_work', 'SELECT'),
+                      has_table_privilege(current_user, 'workflow.narration_plan_work', 'UPDATE'),
+                      has_table_privilege(current_user, 'workflow.narration_plan_work', 'DELETE'),
+                      has_schema_privilege(current_user, 'admission', 'USAGE'),
+                      pg_has_role(current_user, 'cloudsqlsuperuser', 'member'),
+                      (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
+                    """)) {
+                assertThat(grants.next()).isTrue();
+                assertThat(java.util.List.of(
+                                grants.getBoolean(1),
+                                grants.getBoolean(2),
+                                grants.getBoolean(3),
+                                grants.getBoolean(4),
+                                grants.getBoolean(5),
+                                grants.getBoolean(6)))
+                        .containsExactly(true, true, false, false, false, false);
+            }
+            try (var rowLevelSecurity = statement.executeQuery(
+                    """
+                    SELECT bool_and(c.relrowsecurity)
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE (n.nspname, c.relname) IN (
+                      ('workflow', 'narration_plan_work'),
+                      ('workflow', 'audiobook_conversion'),
+                      ('narration', 'narration_plan')
+                    )
+                    """)) {
+                assertThat(rowLevelSecurity.next()).isTrue();
+                assertThat(rowLevelSecurity.getBoolean(1)).isTrue();
+            }
+        }
+    }
+
+    private PublicationSubmissionService.Inspection admit(UUID listenerId, String operationSuffix) throws Exception {
+        byte[] source = epub();
+        String digest = sha256(source);
+        PublicationSubmissionService.Creation creation = submissionService.create(
+                new PublicationSubmissionService.CreateCommand(
+                        listenerId,
+                        "application/epub+zip",
+                        source.length,
+                        digest,
+                        "rights-v1",
+                        "notice-v1",
+                        "narration-plan-create-" + operationSuffix));
+        PublicationSubmissionService.UploadProgress upload = submissionService.upload(
+                new PublicationSubmissionService.UploadCommand(
+                        creation.submissionId(),
+                        creation.uploadSession().token(),
+                        0,
+                        source.length,
+                        digest,
+                        source));
+        submissionService.confirm(new PublicationSubmissionService.ConfirmCommand(
+                listenerId,
+                creation.submissionId(),
+                upload.storageGeneration(),
+                source.length,
+                digest,
+                "narration-plan-confirm-" + operationSuffix));
+        UUID workId = jdbcTemplate.queryForObject(
+                "SELECT work_id FROM workflow.inspection_work WHERE submission_id = ?",
+                UUID.class,
+                creation.submissionId());
+        UUID messageId = jdbcTemplate.queryForObject(
+                "SELECT message_id FROM workflow.admission_outbox WHERE work_id = ?",
+                UUID.class,
+                workId);
+        assertThat(outboxRelayService.relayPending()).isEqualTo(1);
+        inspectionWorkflowService.acceptDelivery(messageId, workId);
+        return submissionService.inspect(new PublicationSubmissionService.InspectionCommand(
+                workId,
+                "narration-inspection-worker",
+                Instant.now().plusSeconds(60),
+                "inspect-" + workId));
+    }
+
+    private WorkCoordinates narrationWork(UUID conversionId) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT o.message_id, w.work_id
+                FROM workflow.narration_plan_work w
+                JOIN workflow.narration_plan_outbox o ON o.work_id = w.work_id
+                WHERE w.conversion_id = ?
+                """,
+                (resultSet, row) -> new WorkCoordinates(
+                        resultSet.getObject("message_id", UUID.class),
+                        resultSet.getObject("work_id", UUID.class)),
+                conversionId);
     }
 
     private UUID entitledListener() {
@@ -225,5 +460,8 @@ class NarrationPlanITest {
     }
 
     private record StoredPlan(String reference, String sha256, String relationalValue) {
+    }
+
+    private record WorkCoordinates(UUID messageId, UUID workId) {
     }
 }

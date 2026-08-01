@@ -1,7 +1,10 @@
 package dev.audiobook.platform.narration;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonValue;
 import java.io.InputStream;
 import java.util.List;
+import java.util.Objects;
 
 public interface EpubNarrationPlanInterpreter {
 
@@ -27,15 +30,20 @@ public interface EpubNarrationPlanInterpreter {
     }
 
     record StructuralProvenance(
-            String source,
+            ProvenanceSource source,
             int spineIndex,
             String spineItem,
             String anchor,
             boolean sourceDeclared,
-            double confidence) {
+            Confidence confidence) {
+        public StructuralProvenance {
+            Objects.requireNonNull(source, "source");
+            Objects.requireNonNull(spineItem, "spineItem");
+            Objects.requireNonNull(confidence, "confidence");
+        }
     }
 
-    record NormalProse(String text, StructuralProvenance provenance) {
+    record NormalProse(int sourceOrdinal, String text, StructuralProvenance provenance) {
     }
 
     record Gap(String sourceUnit, String reasonCode) {
@@ -44,14 +52,40 @@ public interface EpubNarrationPlanInterpreter {
     record ReviewItem(
             int ordinal,
             int chapterOrdinal,
+            int sourceOrdinal,
             ReviewItemType type,
             StructuralProvenance provenance,
-            double extractionConfidence,
-            double classificationConfidence,
-            double treatmentConfidence,
+            Confidence extractionConfidence,
+            Confidence classificationConfidence,
+            Confidence treatmentConfidence,
             NarrationTreatment recommendedTreatment,
             String narrationSnippet,
             String reasonCode) {
+        public ReviewItem {
+            Objects.requireNonNull(type, "type");
+            Objects.requireNonNull(provenance, "provenance");
+            Objects.requireNonNull(extractionConfidence, "extractionConfidence");
+            Objects.requireNonNull(classificationConfidence, "classificationConfidence");
+            Objects.requireNonNull(treatmentConfidence, "treatmentConfidence");
+            Objects.requireNonNull(recommendedTreatment, "recommendedTreatment");
+            Objects.requireNonNull(reasonCode, "reasonCode");
+        }
+    }
+
+    record Confidence(@JsonValue double value) {
+        @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+        public Confidence {
+            if (!Double.isFinite(value) || value < 0.0 || value > 1.0) {
+                throw new IllegalArgumentException("Confidence must be between zero and one");
+            }
+        }
+    }
+
+    enum ProvenanceSource {
+        EPUB_NAVIGATION,
+        EPUB_HEADING,
+        EPUB_SPINE,
+        EPUB_XHTML
     }
 
     enum ReviewItemType {
@@ -63,6 +97,7 @@ public interface EpubNarrationPlanInterpreter {
         SIDEBAR_OR_ASIDE,
         BIBLIOGRAPHY,
         PAGE_HEADER_FOOTER,
+        UNCERTAIN_TEXT,
         UNREADABLE_SPINE_GAP
     }
 

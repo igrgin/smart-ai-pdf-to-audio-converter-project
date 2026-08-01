@@ -95,6 +95,7 @@ class AudiobookConversionControllerTest {
                                 List.of(),
                                 List.of(new NarrationPlanService.ReviewItemView(
                                         0,
+                                        1,
                                         "TABLE",
                                         new NarrationPlanService.ProvenanceView(
                                                 "EPUB_XHTML", 0, "OPS/chapter.xhtml", "facts", true, 1.0),
@@ -115,6 +116,7 @@ class AudiobookConversionControllerTest {
                 .andExpect(jsonPath("$.reasonCode").value("NARRATION_REVIEW_AVAILABLE"))
                 .andExpect(jsonPath("$.allowedActions[0]").value("REVIEW_NARRATION_PLAN"))
                 .andExpect(jsonPath("$.narrationPlan.normalProseEditable").value(false))
+                .andExpect(jsonPath("$.narrationPlan.chapters[0].reviewItems[0].sourceOrdinal").value(1))
                 .andExpect(jsonPath("$.narrationPlan.chapters[0].reviewItems[0].extractionConfidence").value(0.99))
                 .andExpect(jsonPath("$.narrationPlan.chapters[0].reviewItems[0].classificationConfidence").value(0.98))
                 .andExpect(jsonPath("$.narrationPlan.chapters[0].reviewItems[0].treatmentConfidence").value(0.93))

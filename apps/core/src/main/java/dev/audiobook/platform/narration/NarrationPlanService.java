@@ -42,6 +42,7 @@ public interface NarrationPlanService {
 
     record ReviewItemView(
             int ordinal,
+            int sourceOrdinal,
             String type,
             ProvenanceView provenance,
             double extractionConfidence,

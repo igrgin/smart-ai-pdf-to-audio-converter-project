@@ -313,12 +313,15 @@ function ConversionCard({ conversion }: { conversion: AudiobookConversion }) {
   }, [conversion.conversionId]);
 
   if (progress.state === "PREPARING") {
+    const requiresIntervention = progress.reasonCode === "NARRATION_PLAN_REQUIRES_INTERVENTION";
     return (
       <article className="preparing-audiobook" aria-live="polite">
         <span className="empty-mark" aria-hidden="true"><Sparkles size={28} /></span>
         <span className="card-kicker">{progress.reasonCode}</span>
-        <h2>Preparing your private audiobook</h2>
-        <p>The publication passed quarantine inspection. Folio is preparing its Narration Plan.</p>
+        <h2>{requiresIntervention ? "Narration Plan needs attention" : "Preparing your private audiobook"}</h2>
+        <p>{requiresIntervention
+          ? "Preparation could not finish. No further automatic attempts are scheduled."
+          : "The publication passed quarantine inspection. Folio is preparing its Narration Plan."}</p>
       </article>
     );
   }
@@ -347,10 +350,15 @@ function ConversionCard({ conversion }: { conversion: AudiobookConversion }) {
               <div className="narration-review-item" key={item.ordinal}>
                 <strong>{label(item.type)} · {label(item.recommendedTreatment)}</strong>
                 <span>
-                  Extraction {percent(item.extractionConfidence)} · classification {percent(item.classificationConfidence)}
+                  Source position {item.sourceOrdinal + 1} · extraction {percent(item.extractionConfidence)}
+                  {` · classification ${percent(item.classificationConfidence)}`}
                   {` · treatment ${percent(item.treatmentConfidence)}`}
                 </span>
-                <small>{item.reasonCode} · {label(item.provenance.source)}</small>
+                <small>
+                  {item.reasonCode} · Source: {label(item.provenance.source)}
+                  {` · spine ${item.provenance.spineIndex + 1} · ${item.provenance.spineItem}`}
+                  {item.provenance.anchor ? ` · anchor ${item.provenance.anchor}` : ""}
+                </small>
                 {item.narrationSnippet && <blockquote>{item.narrationSnippet}</blockquote>}
               </div>
             ))}

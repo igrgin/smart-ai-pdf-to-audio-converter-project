@@ -8,7 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -71,24 +71,42 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
             Document packageDocument = parse(epub, requiredEntry(epub, packagePath));
             String packageBase = directory(packagePath);
             Map<String, ManifestItem> manifest = manifest(packageDocument, packageBase);
-            Map<String, NavigationEntry> navigation = navigation(epub, manifest);
+            NavigationCatalog navigation = navigation(epub, packageDocument, manifest);
 
             List<Chapter> chapters = new ArrayList<>();
             List<ReviewItem> reviewItems = new ArrayList<>();
             int chapterOrdinal = 0;
+            int spineIndex = 0;
             for (Element itemref : elements(packageDocument, "itemref")) {
                 if ("no".equalsIgnoreCase(itemref.getAttribute("linear"))) {
                     continue;
                 }
-                ManifestItem item = manifest.get(itemref.getAttribute("idref"));
+                String idref = itemref.getAttribute("idref").strip();
+                ManifestItem item = manifest.get(idref);
                 if (item == null) {
-                    chapters.add(gapChapter(chapterOrdinal++, "UNKNOWN_SPINE_ITEM", reviewItems));
+                    chapters.add(gapChapter(
+                            chapterOrdinal++, spineIndex++, "manifest-idref:" + idref, reviewItems));
                     continue;
                 }
-                chapters.add(chapter(epub, item, navigation.get(item.path()), chapterOrdinal++, reviewItems));
+                List<Chapter> itemChapters = chapters(
+                        epub,
+                        item,
+                        navigation.entries().getOrDefault(item.path(), List.of()),
+                        chapterOrdinal,
+                        spineIndex++,
+                        reviewItems);
+                chapters.addAll(itemChapters);
+                chapterOrdinal += itemChapters.size();
             }
             if (chapters.isEmpty()) {
                 throw new NarrationPlanException("The admitted EPUB has no linear reading order");
+            }
+            if (navigation.failure() != null) {
+                Chapter first = chapters.getFirst();
+                List<Gap> gaps = new ArrayList<>(first.gaps());
+                gaps.add(navigation.failure());
+                chapters.set(0, new Chapter(
+                        first.ordinal(), first.title(), first.provenance(), first.normalProse(), gaps));
             }
             return new NarrationPlan(chapters, reviewItems);
         }
@@ -111,25 +129,43 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
         return manifest;
     }
 
-    private static Map<String, NavigationEntry> navigation(
+    private static NavigationCatalog navigation(
             ZipFile epub,
+            Document packageDocument,
             Map<String, ManifestItem> manifest) {
         ManifestItem navigationItem = manifest.values().stream()
                 .filter(item -> tokens(item.properties()).contains("nav"))
                 .findFirst()
                 .orElse(null);
+        boolean epub3Navigation = navigationItem != null;
         if (navigationItem == null) {
-            return Map.of();
+            String tocId = elements(packageDocument, "spine").stream()
+                    .findFirst()
+                    .map(spine -> spine.getAttribute("toc").strip())
+                    .orElse("");
+            navigationItem = tocId.isEmpty()
+                    ? manifest.values().stream()
+                            .filter(item -> item.mediaType().equals("application/x-dtbncx+xml"))
+                            .findFirst()
+                            .orElse(null)
+                    : manifest.get(tocId);
+        }
+        if (navigationItem == null) {
+            return new NavigationCatalog(Map.of(), null);
         }
         try {
             Document document = parse(epub, requiredEntry(epub, navigationItem.path()));
-            Map<String, NavigationEntry> entries = new HashMap<>();
-            for (Element anchor : elements(document, "a")) {
-                if (!insideTableOfContents(anchor)) {
+            Map<String, List<NavigationEntry>> entries = new LinkedHashMap<>();
+            for (Element navigationElement : elements(document, epub3Navigation ? "a" : "navPoint")) {
+                if (epub3Navigation && !insideTableOfContents(navigationElement)) {
                     continue;
                 }
-                String href = anchor.getAttribute("href").strip();
-                String label = normalizedText(anchor);
+                String href = epub3Navigation
+                        ? navigationElement.getAttribute("href").strip()
+                        : childAttribute(navigationElement, "content", "src");
+                String label = epub3Navigation
+                        ? normalizedText(navigationElement)
+                        : childText(navigationElement, "navLabel");
                 if (href.isEmpty() || label.isEmpty() || isExternal(href)) {
                     continue;
                 }
@@ -137,57 +173,149 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
                 String path = target[0].isBlank()
                         ? navigationItem.path()
                         : normalizePath(directory(navigationItem.path()) + target[0]);
-                entries.putIfAbsent(path, new NavigationEntry(label, target.length == 2 ? target[1] : null));
+                entries.computeIfAbsent(path, ignored -> new ArrayList<>())
+                        .add(new NavigationEntry(label, target.length == 2 ? target[1] : null));
             }
-            return Map.copyOf(entries);
+            Map<String, List<NavigationEntry>> immutable = new LinkedHashMap<>();
+            entries.forEach((path, pathEntries) -> immutable.put(path, List.copyOf(pathEntries)));
+            return new NavigationCatalog(Map.copyOf(immutable), null);
         } catch (Exception exception) {
-            return Map.of();
+            return new NavigationCatalog(
+                    Map.of(), new Gap(navigationItem.path(), "UNREADABLE_NAVIGATION_RESOURCE"));
         }
     }
 
-    private static Chapter chapter(
+    private static List<Chapter> chapters(
             ZipFile epub,
             ManifestItem item,
-            NavigationEntry navigation,
-            int ordinal,
+            List<NavigationEntry> navigation,
+            int firstOrdinal,
+            int spineIndex,
             List<ReviewItem> allReviewItems) {
         try {
             Document xhtml = parse(epub, requiredEntry(epub, item.path()));
             ensureBoundedDepth(xhtml.getDocumentElement(), 1);
-            Element heading = firstHeading(xhtml);
-            String title = navigation == null ? nullableText(heading) : navigation.label();
-            String anchor = navigation != null && navigation.anchor() != null
-                    ? navigation.anchor()
-                    : heading == null ? null : nullable(heading.getAttribute("id"));
-            String source = navigation != null ? "EPUB_NAVIGATION" : heading != null ? "EPUB_HEADING" : "EPUB_SPINE";
-            double confidence = navigation != null ? 1.0 : heading != null ? 0.9 : 0.7;
-            StructuralProvenance chapterProvenance = new StructuralProvenance(
-                    source, ordinal, item.path(), anchor, navigation != null || heading != null, confidence);
-
-            List<NormalProse> normalProse = new ArrayList<>();
-            List<ReviewItem> chapterReviewItems = new ArrayList<>();
-            Element body = elements(xhtml, "body").stream().findFirst().orElse(xhtml.getDocumentElement());
-            collectSemantics(body, ordinal, item.path(), false, false, normalProse, chapterReviewItems);
-            for (ReviewItem reviewItem : chapterReviewItems) {
-                allReviewItems.add(withOrdinal(reviewItem, allReviewItems.size()));
+            Map<Element, Integer> positions = elementPositions(xhtml.getDocumentElement());
+            if (navigation.isEmpty()) {
+                List<Element> headings = headingBoundaries(positions);
+                if (headings.isEmpty()) {
+                    return List.of(chapter(
+                            xhtml,
+                            item,
+                            null,
+                            firstOrdinal,
+                            spineIndex,
+                            positions,
+                            0,
+                            Integer.MAX_VALUE,
+                            allReviewItems));
+                }
+                List<Chapter> headingChapters = new ArrayList<>(headings.size());
+                for (int index = 0; index < headings.size(); index++) {
+                    int start = index == 0 ? 0 : positions.get(headings.get(index));
+                    int end = index + 1 == headings.size()
+                            ? Integer.MAX_VALUE
+                            : positions.get(headings.get(index + 1));
+                    headingChapters.add(chapter(
+                            xhtml,
+                            item,
+                            null,
+                            firstOrdinal + index,
+                            spineIndex,
+                            positions,
+                            start,
+                            end,
+                            allReviewItems));
+                }
+                return headingChapters;
             }
-            return new Chapter(ordinal, title, chapterProvenance, normalProse, List.of());
+            List<Chapter> chapters = new ArrayList<>(navigation.size());
+            for (int index = 0; index < navigation.size(); index++) {
+                NavigationEntry entry = navigation.get(index);
+                Element anchor = entry.anchor() == null ? xhtml.getDocumentElement() : elementById(xhtml, entry.anchor());
+                Element nextBoundary = null;
+                if (index + 1 < navigation.size()) {
+                    String nextAnchor = navigation.get(index + 1).anchor();
+                    nextBoundary = nextAnchor == null ? null : elementById(xhtml, nextAnchor);
+                }
+                if (anchor == null || (index + 1 < navigation.size() && nextBoundary == null)) {
+                    chapters.add(navigationGapChapter(
+                            firstOrdinal + index, spineIndex, item, entry, allReviewItems));
+                    continue;
+                }
+                int start = index == 0 ? 0 : positions.get(anchor);
+                int end = nextBoundary == null ? Integer.MAX_VALUE : positions.get(nextBoundary);
+                chapters.add(chapter(
+                        xhtml,
+                        item,
+                        entry,
+                        firstOrdinal + index,
+                        spineIndex,
+                        positions,
+                        start,
+                        end,
+                        allReviewItems));
+            }
+            return chapters;
         } catch (Exception exception) {
-            return gapChapter(ordinal, item.path(), allReviewItems);
+            return List.of(gapChapter(firstOrdinal, spineIndex, item.path(), allReviewItems));
         }
     }
 
-    private static Chapter gapChapter(int ordinal, String sourceUnit, List<ReviewItem> allReviewItems) {
+    private static Chapter chapter(
+            Document xhtml,
+            ManifestItem item,
+            NavigationEntry navigation,
+            int ordinal,
+            int spineIndex,
+            Map<Element, Integer> positions,
+            int start,
+            int end,
+            List<ReviewItem> allReviewItems) {
+        Element heading = firstHeading(positions, start, end);
+        String title = navigation == null ? nullableText(heading) : navigation.label();
+        String anchor = navigation != null && navigation.anchor() != null
+                ? navigation.anchor()
+                : heading == null ? null : nullable(heading.getAttribute("id"));
+        ProvenanceSource source = navigation != null
+                ? ProvenanceSource.EPUB_NAVIGATION
+                : heading != null ? ProvenanceSource.EPUB_HEADING : ProvenanceSource.EPUB_SPINE;
+        double confidence = navigation != null ? 1.0 : heading != null ? 0.9 : 0.7;
+        StructuralProvenance chapterProvenance = new StructuralProvenance(
+                source, spineIndex, item.path(), anchor, navigation != null || heading != null, confidence(confidence));
+
+        List<NormalProse> normalProse = new ArrayList<>();
+        List<ReviewItem> chapterReviewItems = new ArrayList<>();
+        TraversalContext context = new TraversalContext(
+                ordinal, spineIndex, item.path(), positions, start, end);
+        SemanticAccumulator accumulator = new SemanticAccumulator(normalProse, chapterReviewItems);
+        Element body = elements(xhtml, "body").stream().findFirst().orElse(xhtml.getDocumentElement());
+        collectSemantics(
+                body,
+                false,
+                false,
+                false,
+                context,
+                accumulator);
+        for (ReviewItem reviewItem : chapterReviewItems) {
+            allReviewItems.add(withOrdinal(reviewItem, allReviewItems.size()));
+        }
+        return new Chapter(ordinal, title, chapterProvenance, normalProse, List.of());
+    }
+
+    private static Chapter gapChapter(
+            int ordinal, int spineIndex, String sourceUnit, List<ReviewItem> allReviewItems) {
         StructuralProvenance provenance = new StructuralProvenance(
-                "EPUB_SPINE", ordinal, sourceUnit, null, true, 0.0);
+                ProvenanceSource.EPUB_SPINE, spineIndex, sourceUnit, null, true, confidence(0.0));
         allReviewItems.add(new ReviewItem(
                 allReviewItems.size(),
                 ordinal,
+                0,
                 ReviewItemType.UNREADABLE_SPINE_GAP,
                 provenance,
-                0.0,
-                1.0,
-                1.0,
+                confidence(0.0),
+                confidence(1.0),
+                confidence(1.0),
                 NarrationTreatment.OMIT,
                 null,
                 "UNREADABLE_LINEAR_SPINE_RESOURCE"));
@@ -199,14 +327,51 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
                 List.of(new Gap(sourceUnit, "UNREADABLE_LINEAR_SPINE_RESOURCE")));
     }
 
+    private static Chapter navigationGapChapter(
+            int ordinal,
+            int spineIndex,
+            ManifestItem item,
+            NavigationEntry entry,
+            List<ReviewItem> allReviewItems) {
+        String sourceUnit = item.path() + "#" + entry.anchor();
+        StructuralProvenance provenance = new StructuralProvenance(
+                ProvenanceSource.EPUB_NAVIGATION,
+                spineIndex,
+                item.path(),
+                entry.anchor(),
+                true,
+                confidence(0.0));
+        allReviewItems.add(new ReviewItem(
+                allReviewItems.size(),
+                ordinal,
+                0,
+                ReviewItemType.UNREADABLE_SPINE_GAP,
+                provenance,
+                confidence(0.0),
+                confidence(1.0),
+                confidence(1.0),
+                NarrationTreatment.OMIT,
+                null,
+                "UNRESOLVED_NAVIGATION_TARGET"));
+        return new Chapter(
+                ordinal,
+                entry.label(),
+                provenance,
+                List.of(),
+                List.of(new Gap(sourceUnit, "UNRESOLVED_NAVIGATION_TARGET")));
+    }
+
     private static void collectSemantics(
             Element element,
-            int chapterOrdinal,
-            String spineItem,
             boolean insideReviewItem,
             boolean insideNormalProse,
-            List<NormalProse> normalProse,
-            List<ReviewItem> reviewItems) {
+            boolean insideUncertainText,
+            TraversalContext context,
+            SemanticAccumulator accumulator) {
+        int position = context.positions().get(element);
+        if (position >= context.end()) {
+            return;
+        }
         if (ignoredElement(localName(element))) {
             return;
         }
@@ -214,33 +379,36 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
         boolean review = insideReviewItem || reviewType != null;
         String tag = localName(element);
         boolean prose = insideNormalProse || isNormalProse(tag);
-        if (reviewType != null) {
-            reviewItems.add(reviewItem(chapterOrdinal, spineItem, element, reviewType));
-        } else if (!insideReviewItem && !insideNormalProse && isNormalProse(tag)) {
-            String text = normalizedText(element);
-            if (!text.isEmpty()) {
-                normalProse.add(new NormalProse(
-                        text,
-                        new StructuralProvenance(
-                                "EPUB_XHTML",
-                                chapterOrdinal,
-                                spineItem,
-                                nullable(element.getAttribute("id")),
-                                true,
-                                0.99)));
-            }
+        boolean uncertain = insideUncertainText;
+        if (position >= context.start() && reviewType != null) {
+            accumulator.reviewItems().add(reviewItem(
+                    context, accumulator.sourceSequence().next(), element, reviewType));
+        } else if (position >= context.start()
+                && !insideReviewItem && !insideNormalProse && isNormalProse(tag)) {
+            collectNormalProse(element, context, accumulator);
+            return;
+        } else if (!review && !prose && !uncertain
+                && canContainUncertainFlow(tag) && hasDirectText(element)) {
+            collectUncertainFlow(element, context, accumulator);
+            return;
         }
         NodeList children = element.getChildNodes();
         for (int index = 0; index < children.getLength(); index++) {
             if (children.item(index) instanceof Element child) {
-                collectSemantics(child, chapterOrdinal, spineItem, review, prose, normalProse, reviewItems);
+                collectSemantics(
+                        child,
+                        review,
+                        prose,
+                        uncertain,
+                        context,
+                        accumulator);
             }
         }
     }
 
     private static ReviewItem reviewItem(
-            int chapterOrdinal,
-            String spineItem,
+            TraversalContext context,
+            int sourceOrdinal,
             Element element,
             ReviewItemType type) {
         String text = normalizedText(element);
@@ -256,9 +424,9 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
                 reason = "TABLE_DETECTED";
             }
             case FIGURE -> {
-                String caption = childText(element, "figcaption");
+                String caption = imageDescription(element);
                 treatment = caption == null ? NarrationTreatment.OMIT : NarrationTreatment.DESCRIBE;
-                snippet = caption == null ? null : "Figure: " + caption;
+                snippet = caption == null ? null : (localName(element).equals("img") ? "Image: " : "Figure: ") + caption;
                 treatmentConfidence = caption == null ? 0.95 : 0.93;
                 reason = "FIGURE_DETECTED";
             }
@@ -293,31 +461,59 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
                 treatmentConfidence = 0.9;
                 reason = "PREFORMATTED_TEXT_DETECTED";
             }
+            case UNCERTAIN_TEXT -> throw new IllegalArgumentException("Uncertain text items are created separately");
             case UNREADABLE_SPINE_GAP -> throw new IllegalArgumentException("Gap review items are created separately");
         }
         return new ReviewItem(
                 -1,
-                chapterOrdinal,
+                context.chapterOrdinal(),
+                sourceOrdinal,
                 type,
                 new StructuralProvenance(
-                        "EPUB_XHTML",
-                        chapterOrdinal,
-                        spineItem,
+                        ProvenanceSource.EPUB_XHTML,
+                        context.spineIndex(),
+                        context.spineItem(),
                         nullable(element.getAttribute("id")),
                         true,
-                        0.99),
-                0.99,
-                0.99,
-                treatmentConfidence,
+                        confidence(0.99)),
+                confidence(0.98),
+                confidence(type == ReviewItemType.FIGURE || type == ReviewItemType.FORMULA_OR_MATH ? 0.9 : 0.96),
+                confidence(treatmentConfidence),
                 treatment,
                 snippet,
                 reason);
+    }
+
+    private static ReviewItem uncertainReviewItem(
+            TraversalContext context,
+            int sourceOrdinal,
+            Element element,
+            String text) {
+        return new ReviewItem(
+                -1,
+                context.chapterOrdinal(),
+                sourceOrdinal,
+                ReviewItemType.UNCERTAIN_TEXT,
+                new StructuralProvenance(
+                        ProvenanceSource.EPUB_XHTML,
+                        context.spineIndex(),
+                        context.spineItem(),
+                        nullable(element.getAttribute("id")),
+                        true,
+                        confidence(0.7)),
+                confidence(0.75),
+                confidence(0.35),
+                confidence(0.45),
+                NarrationTreatment.READ_VERBATIM,
+                text,
+                "UNCERTAIN_XHTML_TEXT_STRUCTURE");
     }
 
     private static ReviewItem withOrdinal(ReviewItem item, int ordinal) {
         return new ReviewItem(
                 ordinal,
                 item.chapterOrdinal(),
+                item.sourceOrdinal(),
                 item.type(),
                 item.provenance(),
                 item.extractionConfidence(),
@@ -326,6 +522,10 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
                 item.recommendedTreatment(),
                 item.narrationSnippet(),
                 item.reasonCode());
+    }
+
+    private static Confidence confidence(double value) {
+        return new Confidence(value);
     }
 
     private static ReviewItemType reviewType(Element element) {
@@ -340,7 +540,7 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
         }
         return switch (tag) {
             case "table" -> ReviewItemType.TABLE;
-            case "figure" -> ReviewItemType.FIGURE;
+            case "figure", "img", "svg" -> ReviewItemType.FIGURE;
             case "math" -> ReviewItemType.FORMULA_OR_MATH;
             case "pre", "code" -> ReviewItemType.CODE_OR_PREFORMATTED;
             case "aside" -> ReviewItemType.SIDEBAR_OR_ASIDE;
@@ -353,6 +553,193 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
         return tag.equals("p") || tag.equals("li") || tag.equals("blockquote");
     }
 
+    private static boolean canContainUncertainFlow(String tag) {
+        return switch (tag) {
+            case "head", "title", "nav", "h1", "h2", "h3", "h4", "h5", "h6" -> false;
+            default -> true;
+        };
+    }
+
+    private static boolean hasDirectText(Element element) {
+        NodeList children = element.getChildNodes();
+        for (int index = 0; index < children.getLength(); index++) {
+            Node child = children.item(index);
+            if (child.getNodeType() == Node.TEXT_NODE && !child.getNodeValue().isBlank()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void collectNormalProse(
+            Element proseElement,
+            TraversalContext context,
+            SemanticAccumulator accumulator) {
+        StructuralProvenance provenance = new StructuralProvenance(
+                ProvenanceSource.EPUB_XHTML,
+                context.spineIndex(),
+                context.spineItem(),
+                nullable(proseElement.getAttribute("id")),
+                true,
+                confidence(0.99));
+        StringBuilder text = new StringBuilder();
+        appendNormalProse(proseElement, provenance, context, accumulator, text);
+        flushNormalProse(text, provenance, accumulator);
+    }
+
+    private static void appendNormalProse(
+            Node node,
+            StructuralProvenance provenance,
+            TraversalContext context,
+            SemanticAccumulator accumulator,
+            StringBuilder text) {
+        NodeList children = node.getChildNodes();
+        for (int index = 0; index < children.getLength(); index++) {
+            Node child = children.item(index);
+            if (child.getNodeType() == Node.TEXT_NODE) {
+                text.append(child.getNodeValue());
+            } else if (child instanceof Element childElement) {
+                ReviewItemType type = reviewType(childElement);
+                if (type != null) {
+                    flushNormalProse(text, provenance, accumulator);
+                    accumulator.reviewItems().add(reviewItem(
+                            context, accumulator.sourceSequence().next(), childElement, type));
+                } else if (!ignoredElement(localName(childElement))) {
+                    appendNormalProse(childElement, provenance, context, accumulator, text);
+                    if (separatesText(localName(childElement))) {
+                        text.append(' ');
+                    }
+                }
+            }
+        }
+    }
+
+    private static void flushNormalProse(
+            StringBuilder text,
+            StructuralProvenance provenance,
+            SemanticAccumulator accumulator) {
+        String normalized = text.toString().replaceAll("\\s+", " ").strip();
+        text.setLength(0);
+        if (!normalized.isEmpty()) {
+            accumulator.normalProse().add(new NormalProse(
+                    accumulator.sourceSequence().next(), normalized, provenance));
+        }
+    }
+
+    private static void collectUncertainFlow(
+            Element flowElement,
+            TraversalContext context,
+            SemanticAccumulator accumulator) {
+        StringBuilder text = new StringBuilder();
+        FlowWindow window = new FlowWindow(
+                context.positions().get(flowElement) >= context.start());
+        appendUncertainFlow(
+                flowElement,
+                flowElement,
+                context,
+                accumulator,
+                window,
+                text);
+        flushUncertainFlow(text, flowElement, context, accumulator);
+    }
+
+    private static void appendUncertainFlow(
+            Node node,
+            Element provenanceElement,
+            TraversalContext context,
+            SemanticAccumulator accumulator,
+            FlowWindow window,
+            StringBuilder text) {
+        NodeList children = node.getChildNodes();
+        for (int index = 0; index < children.getLength(); index++) {
+            Node child = children.item(index);
+            if (child.getNodeType() == Node.TEXT_NODE) {
+                if (window.active()) {
+                    text.append(child.getNodeValue());
+                }
+            } else if (child instanceof Element childElement) {
+                int childPosition = context.positions().get(childElement);
+                if (childPosition >= context.end()) {
+                    window.stop();
+                    return;
+                }
+                if (!window.active() && childPosition >= context.start()) {
+                    window.activate();
+                }
+                String tag = localName(childElement);
+                ReviewItemType type = reviewType(childElement);
+                if (window.active() && (type != null || isNormalProse(tag))) {
+                    flushUncertainFlow(text, provenanceElement, context, accumulator);
+                    collectSemantics(
+                            childElement,
+                            false,
+                            false,
+                            false,
+                            context,
+                            accumulator);
+                } else if (!ignoredElement(tag) && canContainUncertainFlow(tag)) {
+                    appendUncertainFlow(
+                            childElement,
+                            provenanceElement,
+                            context,
+                            accumulator,
+                            window,
+                            text);
+                    if (window.stopped()) {
+                        return;
+                    }
+                }
+                if (window.active() && separatesText(tag)) {
+                    text.append(' ');
+                }
+            }
+        }
+    }
+
+    private static void flushUncertainFlow(
+            StringBuilder text,
+            Element provenanceElement,
+            TraversalContext context,
+            SemanticAccumulator accumulator) {
+        String normalized = text.toString().replaceAll("\\s+", " ").strip();
+        text.setLength(0);
+        if (!normalized.isEmpty()) {
+            accumulator.reviewItems().add(uncertainReviewItem(
+                    context,
+                    accumulator.sourceSequence().next(),
+                    provenanceElement,
+                    normalized));
+        }
+    }
+
+    private static String imageDescription(Element element) {
+        String tag = localName(element);
+        if (tag.equals("img")) {
+            return nullable(element.getAttribute("alt"));
+        }
+        if (tag.equals("svg")) {
+            String title = childText(element, "title");
+            return title == null ? childText(element, "desc") : title;
+        }
+        String caption = childText(element, "figcaption");
+        if (caption != null) {
+            return caption;
+        }
+        String imageAlt = elements(element, "img").stream()
+                .map(image -> nullable(image.getAttribute("alt")))
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+        if (imageAlt != null) {
+            return imageAlt;
+        }
+        return elements(element, "svg").stream()
+                .map(EpubNarrationPlanInterpreterImpl::imageDescription)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+    }
+
     private static boolean ignoredElement(String tag) {
         return switch (tag) {
             case "script", "style", "form", "audio", "video", "object", "embed" -> true;
@@ -360,11 +747,52 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
         };
     }
 
-    private static Element firstHeading(Document document) {
-        for (int level = 1; level <= 6; level++) {
-            List<Element> headings = elements(document, "h" + level);
-            if (!headings.isEmpty() && !normalizedText(headings.getFirst()).isEmpty()) {
-                return headings.getFirst();
+    private static Element firstHeading(Map<Element, Integer> positions, int start, int end) {
+        return headingBoundaries(positions).stream()
+                .filter(heading -> positions.get(heading) >= start && positions.get(heading) < end)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private static List<Element> headingBoundaries(Map<Element, Integer> positions) {
+        return positions.entrySet().stream()
+                .filter(entry -> isHeading(localName(entry.getKey())))
+                .filter(entry -> !normalizedText(entry.getKey()).isEmpty())
+                .sorted(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
+    private static boolean isHeading(String tag) {
+        return switch (tag) {
+            case "h1", "h2", "h3", "h4", "h5", "h6" -> true;
+            default -> false;
+        };
+    }
+
+    private static Map<Element, Integer> elementPositions(Element root) {
+        Map<Element, Integer> positions = new IdentityHashMap<>();
+        indexElements(root, positions, new int[] {0});
+        return positions;
+    }
+
+    private static void indexElements(Element element, Map<Element, Integer> positions, int[] next) {
+        positions.put(element, next[0]++);
+        NodeList children = element.getChildNodes();
+        for (int index = 0; index < children.getLength(); index++) {
+            if (children.item(index) instanceof Element child) {
+                indexElements(child, positions, next);
+            }
+        }
+    }
+
+    private static Element elementById(Document document, String id) {
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        for (Element element : elements(document, "*")) {
+            if (id.equals(element.getAttribute("id"))) {
+                return element;
             }
         }
         return null;
@@ -399,6 +827,14 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
         }
         String text = normalizedText(child);
         return text.isEmpty() ? null : text;
+    }
+
+    private static String childAttribute(Element element, String localName, String attribute) {
+        NodeList nodes = element.getElementsByTagNameNS("*", localName);
+        if (nodes.getLength() == 0 || !(nodes.item(0) instanceof Element child)) {
+            return "";
+        }
+        return child.getAttribute(attribute).strip();
     }
 
     private static void ensureBoundedDepth(Element element, int depth) {
@@ -454,7 +890,7 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
     private static List<Element> elements(Element root, String localName) {
         NodeList nodes = root.getElementsByTagNameNS("*", localName);
         List<Element> matches = new ArrayList<>(nodes.getLength());
-        if (localName(root).equals(localName)) {
+        if (localName.equals("*") || localName(root).equals(localName)) {
             matches.add(root);
         }
         for (int index = 0; index < nodes.getLength(); index++) {
@@ -494,7 +930,7 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
 
     private static boolean separatesText(String tag) {
         return switch (tag) {
-            case "p", "li", "blockquote", "td", "th", "tr", "caption", "figcaption", "div", "section" -> true;
+            case "br", "p", "li", "blockquote", "td", "th", "tr", "caption", "figcaption", "div", "section" -> true;
             default -> false;
         };
     }
@@ -537,6 +973,74 @@ public class EpubNarrationPlanInterpreterImpl implements EpubNarrationPlanInterp
     }
 
     private record NavigationEntry(String label, String anchor) {
+    }
+
+    private record NavigationCatalog(Map<String, List<NavigationEntry>> entries, Gap failure) {
+    }
+
+    private record TraversalContext(
+            int chapterOrdinal,
+            int spineIndex,
+            String spineItem,
+            Map<Element, Integer> positions,
+            int start,
+            int end) {
+    }
+
+    private static final class SemanticAccumulator {
+        private final SourceSequence sourceSequence = new SourceSequence();
+        private final List<NormalProse> normalProse;
+        private final List<ReviewItem> reviewItems;
+
+        private SemanticAccumulator(List<NormalProse> normalProse, List<ReviewItem> reviewItems) {
+            this.normalProse = normalProse;
+            this.reviewItems = reviewItems;
+        }
+
+        SourceSequence sourceSequence() {
+            return sourceSequence;
+        }
+
+        List<NormalProse> normalProse() {
+            return normalProse;
+        }
+
+        List<ReviewItem> reviewItems() {
+            return reviewItems;
+        }
+    }
+
+    private static final class FlowWindow {
+        private boolean active;
+        private boolean stopped;
+
+        private FlowWindow(boolean active) {
+            this.active = active;
+        }
+
+        boolean active() {
+            return active;
+        }
+
+        void activate() {
+            active = true;
+        }
+
+        boolean stopped() {
+            return stopped;
+        }
+
+        void stop() {
+            stopped = true;
+        }
+    }
+
+    private static final class SourceSequence {
+        private int next;
+
+        int next() {
+            return next++;
+        }
     }
 
     private static final class SilentErrorHandler implements ErrorHandler {

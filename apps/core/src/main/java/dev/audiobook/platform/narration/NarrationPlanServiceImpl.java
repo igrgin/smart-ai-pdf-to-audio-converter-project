@@ -8,11 +8,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -105,7 +103,7 @@ public class NarrationPlanServiceImpl implements NarrationPlanService {
             throw new IllegalStateException("Narration Plan Working Asset storage is unavailable", exception);
         }
         if (!MessageDigest.isEqual(
-                sha256(serialized).getBytes(StandardCharsets.US_ASCII),
+                NarrationPlanAssetIdentity.sha256(serialized).getBytes(StandardCharsets.US_ASCII),
                 stored.getFirst().sha256().getBytes(StandardCharsets.US_ASCII))) {
             throw new IllegalStateException("Narration Plan Working Asset integrity check failed");
         }
@@ -153,33 +151,26 @@ public class NarrationPlanServiceImpl implements NarrationPlanService {
 
     private static ProvenanceView provenance(EpubNarrationPlanInterpreter.StructuralProvenance provenance) {
         return new ProvenanceView(
-                provenance.source(),
+                provenance.source().name(),
                 provenance.spineIndex(),
                 provenance.spineItem(),
                 provenance.anchor(),
                 provenance.sourceDeclared(),
-                provenance.confidence());
+                provenance.confidence().value());
     }
 
     private static ReviewItemView reviewItem(EpubNarrationPlanInterpreter.ReviewItem item) {
         return new ReviewItemView(
                 item.ordinal(),
+                item.sourceOrdinal(),
                 item.type().name(),
                 provenance(item.provenance()),
-                item.extractionConfidence(),
-                item.classificationConfidence(),
-                item.treatmentConfidence(),
+                item.extractionConfidence().value(),
+                item.classificationConfidence().value(),
+                item.treatmentConfidence().value(),
                 item.recommendedTreatment().name(),
                 item.narrationSnippet(),
                 item.reasonCode());
-    }
-
-    private static String sha256(byte[] value) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is unavailable", exception);
-        }
     }
 
     private record StoredPlan(String reference, String sha256, String schemaVersion) {

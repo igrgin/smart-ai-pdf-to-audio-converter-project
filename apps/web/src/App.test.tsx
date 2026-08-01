@@ -383,6 +383,7 @@ describe("public sample", () => {
                 gaps: [],
                 reviewItems: [{
                   ordinal: 0,
+                  sourceOrdinal: 1,
                   type: "TABLE",
                   provenance: {
                     source: "EPUB_XHTML",
@@ -414,7 +415,9 @@ describe("public sample", () => {
     expect(screen.getByRole("heading", { name: "Evidence" })).toBeVisible();
     expect(screen.getByText(/source: epub navigation · spine 1/i)).toBeVisible();
     expect(screen.getByText(/table · read verbatim/i)).toBeVisible();
-    expect(screen.getByText(/extraction 99% · classification 98% · treatment 88%/i)).toBeVisible();
+    expect(screen.getByText(/source position 2 · extraction 99% · classification 98% · treatment 88%/i)).toBeVisible();
+    expect(screen.getByText(/table_detected · source: epub xhtml · spine 1 · ops\/chapter.xhtml · anchor facts/i))
+      .toBeVisible();
     expect(screen.getByText("Year 2026")).toBeVisible();
     expect(screen.getByText(/review narration plan/i)).toBeVisible();
     expect(container.textContent).not.toContain("private normal prose");
@@ -422,5 +425,67 @@ describe("public sample", () => {
       "/api/v1/audiobook-conversions/01985f42-5f8d-7000-8000-000000000125",
       { headers: { Accept: "application/json" }, signal: expect.any(AbortSignal) }
     );
+  });
+
+  it("shows exhausted preparation as requiring intervention instead of pending", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            authenticated: true,
+            listener: { displayName: "Mara", signInMethods: ["google"] },
+            csrf: { headerName: "X-CSRF-TOKEN", parameterName: "_csrf", token: "private-csrf" }
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/library")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            displayName: "Mara",
+            signInMethods: ["google"],
+            audiobooks: [{
+              conversionId: "01985f42-5f8d-7000-8000-000000000126",
+              state: "PREPARING",
+              reasonCode: "NARRATION_PLAN_REQUIRES_INTERVENTION",
+              allowedActions: [],
+              version: 4
+            }],
+            conversionEntitlement: {
+              status: "EXHAUSTED",
+              grantedCharacters: 500000,
+              availableCharacters: 0,
+              reservedCharacters: 500000,
+              committedCharacters: 0,
+              canStartConversion: false,
+              denialReason: "ACTIVE_CONVERSION_LIMIT"
+            }
+          })
+        });
+      }
+      if (url.includes("/api/v1/audiobook-conversions/")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: () => '"4"' },
+          json: async () => ({
+            conversionId: "01985f42-5f8d-7000-8000-000000000126",
+            state: "PREPARING",
+            reasonCode: "NARRATION_PLAN_REQUIRES_INTERVENTION",
+            allowedActions: [],
+            version: 4
+          })
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: /narration plan needs attention/i })).toBeVisible();
+    expect(screen.getByText(/no further automatic attempts are scheduled/i)).toBeVisible();
   });
 });
