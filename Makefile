@@ -14,6 +14,7 @@ typecheck:
 verify:
 	./mvnw --batch-mode --no-transfer-progress verify
 	npm test
+	npm run test:browser
 	npm run typecheck
 	npm run build
 	./scripts/verify-local-environment.sh

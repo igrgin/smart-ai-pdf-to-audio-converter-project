@@ -20,6 +20,9 @@ spring:
     timeout: 8s
 
 platform:
+  offline-access:
+    authorization-validity: 30d
+    chunk-bytes: 4
   generation:
     ffmpeg-command: ${java.io.tmpdir}/folio-ffmpeg-itest/ffmpeg-container
   build:

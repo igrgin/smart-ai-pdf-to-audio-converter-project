@@ -1,6 +1,10 @@
 const CACHE_NAME = "folio-shell-v1";
 const SHELL_URLS = ["/", "/manifest.webmanifest", "/brand-mark.svg"];
 
+function isVersionedShellRequest(url) {
+  return SHELL_URLS.includes(url.pathname) || url.pathname.startsWith("/assets/");
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_URLS)));
   self.skipWaiting();
@@ -22,8 +26,7 @@ self.addEventListener("fetch", (event) => {
   if (
     request.method !== "GET" ||
     url.origin !== self.location.origin ||
-    url.pathname.startsWith("/api/") ||
-    url.pathname.startsWith("/samples/")
+    !isVersionedShellRequest(url)
   ) {
     return;
   }

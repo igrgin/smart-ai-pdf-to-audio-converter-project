@@ -13,7 +13,7 @@ import {
   Sun,
   Upload
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Button } from "./components/ui/button";
 import {
   fetchConversionProgress,
@@ -28,6 +28,16 @@ import {
 } from "./identity-session";
 import { NarrationReviewEditor } from "./NarrationReviewEditor";
 import { PrivateAudiobookPlayer } from "./PrivateAudiobookPlayer";
+import {
+  ManagedOfflineLibrary,
+  browserSupportsManagedOfflineCopies,
+  createBrowserOfflineCopyManager,
+  createOfflinePlaybackManager,
+  monitorConnectedPrivateAccess,
+  resolvePrivateAccess,
+  type OfflineCopyCapability,
+  type OfflineCopyRecord
+} from "./offline-copy";
 import { fetchPlatformStatus, type PlatformStatus } from "./platform-status";
 import {
   publicationMediaType,
@@ -67,6 +77,12 @@ function App() {
   const [library, setLibrary] = useState<Library | null>(null);
   const [actionQueue, setActionQueue] = useState<ActionQueue | null>(null);
   const [listenerAccess, setListenerAccess] = useState<ListenerAccessSummary | null>(null);
+  const [offlineLibrary, setOfflineLibrary] = useState<{
+    records: OfflineCopyRecord[];
+    capability: OfflineCopyCapability;
+  } | null>(null);
+  const [signOutError, setSignOutError] = useState(false);
+  const [offlineAccessNotice, setOfflineAccessNotice] = useState<string>();
   const [signInOpen, setSignInOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -82,18 +98,46 @@ function App() {
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) setStatusDelayed(true);
       });
-    fetchIdentitySession(controller.signal)
-      .then((session) => {
-        setIdentitySession(session);
-        if (!session.authenticated) return;
-        void fetchLibrary(controller.signal).then(setLibrary).catch(() => undefined);
-        void fetchListenerAccess(controller.signal).then(setListenerAccess).catch(() => undefined);
-        if (session.staff?.roles.length) {
-          void fetchActionQueue(controller.signal).then(setActionQueue).catch(() => undefined);
+    const offlineCapable = browserSupportsManagedOfflineCopies();
+    let refreshing = false;
+    const loadPrivateAccess = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const result = await resolvePrivateAccess(controller.signal, {
+          offlineCapable,
+          fetchSession: fetchIdentitySession,
+          fetchLibrary,
+          playbackManager: createOfflinePlaybackManager,
+          connectedManager: createBrowserOfflineCopyManager
+        });
+        setIdentitySession(result.session ?? null);
+        setLibrary(result.library ?? null);
+        setOfflineLibrary(result.offline ?? null);
+        if (result.session?.authenticated) {
+          void fetchListenerAccess(controller.signal).then(setListenerAccess).catch(() => undefined);
+          if (result.session.staff?.roles.length) {
+            void fetchActionQueue(controller.signal).then(setActionQueue).catch(() => undefined);
+          }
         }
-      })
-      .catch(() => undefined);
-    return () => controller.abort();
+        if (result.evictedCount > 0) {
+          setOfflineAccessNotice(
+            `${result.evictedCount} Offline ${result.evictedCount === 1 ? "Copy was" : "Copies were"} removed because access changed.`
+          );
+        }
+      } finally {
+        refreshing = false;
+      }
+    };
+    void loadPrivateAccess().catch(() => undefined);
+    const reconnect = async () => {
+      await loadPrivateAccess();
+    };
+    const stopMonitoring = monitorConnectedPrivateAccess(reconnect);
+    return () => {
+      controller.abort();
+      stopMonitoring();
+    };
   }, []);
 
   const toggleSample = () => {
@@ -123,7 +167,18 @@ function App() {
             {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
           </Button>
           {authenticated ? (
-            <CsrfForm action="/api/v1/auth/logout" csrf={identitySession.csrf} className="inline-form">
+            <CsrfForm
+              action="/api/v1/auth/logout"
+              csrf={identitySession.csrf}
+              className="inline-form"
+              beforeSubmit={async () => {
+                setSignOutError(false);
+                if (browserSupportsManagedOfflineCopies()) {
+                  await createOfflinePlaybackManager().purgeAll();
+                }
+              }}
+              onSubmitError={() => setSignOutError(true)}
+            >
               <Button variant="outline" type="submit"><LogOut size={16} /> Sign out</Button>
             </CsrfForm>
           ) : (
@@ -133,6 +188,8 @@ function App() {
       </header>
 
       <main id="top">
+        {signOutError && <p className="global-alert" role="alert">Offline Copy keys could not be purged. Sign out was stopped.</p>}
+        {offlineAccessNotice && <p className="global-alert" role="status">{offlineAccessNotice}</p>}
         {authenticated ? (
           <>
             {actionQueue && <TrustOperationsDesk
@@ -143,6 +200,8 @@ function App() {
             {library ? <PrivateLibrary library={library} csrf={identitySession.csrf} /> : <LibraryLoading />}
             {listenerAccess && <SupportAccessActivity summary={listenerAccess} csrf={identitySession.csrf} />}
           </>
+        ) : offlineLibrary ? (
+          <ManagedOfflineLibrary records={offlineLibrary.records} capability={offlineLibrary.capability} />
         ) : (
           <PublicStudio
             audioRef={audioRef}
@@ -793,9 +852,29 @@ function SignInDialog({ csrf, onClose }: { csrf?: CsrfProof; onClose: () => void
   );
 }
 
-function CsrfForm({ action, csrf, className, children }: { action: string; csrf: CsrfProof; className?: string; children: ReactNode }) {
+export function CsrfForm({
+  action,
+  csrf,
+  className,
+  children,
+  beforeSubmit,
+  onSubmitError
+}: {
+  action: string;
+  csrf: CsrfProof;
+  className?: string;
+  children: ReactNode;
+  beforeSubmit?: () => Promise<void>;
+  onSubmitError?: () => void;
+}) {
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    if (!beforeSubmit) return;
+    event.preventDefault();
+    const form = event.currentTarget;
+    void beforeSubmit().then(() => form.submit()).catch(() => onSubmitError?.());
+  };
   return (
-    <form action={action} method="post" className={className}>
+    <form action={action} method="post" className={className} onSubmit={submit}>
       <input type="hidden" name={csrf.parameterName} value={csrf.token} />
       {children}
     </form>

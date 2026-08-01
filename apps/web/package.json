@@ -7,6 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "test": "vitest run",
+    "test:browser": "vitest run --config vite.browser.config.ts",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
@@ -22,10 +23,13 @@
   "devDependencies": {
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.2",
+    "@types/node": "24.13.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.0.5",
+    "@vitest/browser-playwright": "4.1.10",
     "jsdom": "30.0.1",
+    "playwright": "1.62.1",
     "typescript": "7.0.2",
     "vite": "8.2.0",
     "vitest": "4.1.10"

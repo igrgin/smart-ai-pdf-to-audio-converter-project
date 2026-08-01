@@ -73,6 +73,11 @@ server:
       tracking-modes: cookie
 
 platform:
+  offline-access:
+    authorization-validity: 30d
+    chunk-bytes: 1048576
+    signing-private-key: ${OFFLINE_AUTHORIZATION_PRIVATE_KEY:}
+    signing-public-key: ${OFFLINE_AUTHORIZATION_PUBLIC_KEY:}
   provider:
     google-cloud-project: ${GOOGLE_CLOUD_PROJECT:local-audiobook}
   generation:

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
+import App, { CsrfForm } from "./App";
 
 describe("public sample", () => {
   afterEach(() => {
@@ -1334,6 +1334,31 @@ describe("public sample", () => {
     expect(await screen.findByRole("heading", { name: /source copy needs attention/i })).toBeVisible();
     expect(screen.getByText(/otherwise start a new conversion with a clearer copy/i)).toBeVisible();
     expect(screen.getByRole("button", { name: /retry bounded extraction/i })).toBeVisible();
+  });
+});
+
+describe("session teardown", () => {
+  it("does not submit sign-out until Offline Copy keys are purged", async () => {
+    let completePurge: (() => void) | undefined;
+    const beforeSubmit = vi.fn(() => new Promise<void>((resolve) => { completePurge = resolve; }));
+    const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => undefined);
+
+    render(
+      <CsrfForm
+        action="/api/v1/auth/logout"
+        csrf={{ headerName: "X-CSRF-TOKEN", parameterName: "_csrf", token: "csrf" }}
+        beforeSubmit={beforeSubmit}
+      >
+        <button type="submit">Sign out</button>
+      </CsrfForm>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(beforeSubmit).toHaveBeenCalledOnce();
+    expect(submit).not.toHaveBeenCalled();
+
+    completePurge?.();
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
   });
 });
 

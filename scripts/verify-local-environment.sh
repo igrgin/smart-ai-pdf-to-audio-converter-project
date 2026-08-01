@@ -58,4 +58,16 @@ jq -e '[.hosting.headers[].headers[] | select(.key == "Content-Security-Policy")
   exit 1
 }
 
+grep -Fq 'url.pathname.startsWith("/assets/")' apps/web/public/sw.js &&
+  ! grep -Eq '(/api/|mediaUrl|offline-copy)' apps/web/public/sw.js || {
+  echo "service worker cache must remain limited to the versioned application shell" >&2
+  exit 1
+}
+
+grep -q 'offline_authorization_public_key' .github/workflows/deploy-disposable.yaml &&
+  grep -q 'VITE_OFFLINE_AUTHORIZATION_PUBLIC_KEY' .github/workflows/deploy-disposable.yaml || {
+  echo "Firebase build must pin the deployed Cloud KMS Offline Copy public key" >&2
+  exit 1
+}
+
 echo "local environment contract is valid"

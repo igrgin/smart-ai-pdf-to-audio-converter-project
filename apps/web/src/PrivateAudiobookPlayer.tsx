@@ -4,6 +4,13 @@ import { Button } from "./components/ui/button";
 import { prepareGaplessPlayback } from "./gapless-media-source";
 import type { AudiobookConversion, CsrfProof } from "./identity-session";
 import {
+  OfflineCopyControls,
+  browserSupportsManagedOfflineCopies,
+  createBrowserOfflineCopyManager,
+  isInstalledPwa,
+  type OfflineCopyRecord
+} from "./offline-copy";
+import {
   fetchPlaybackManifest,
   updatePlaybackPosition,
   type PlaybackChapter,
@@ -39,8 +46,16 @@ export function PrivateAudiobookPlayer({
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [gaplessSourceUrl, setGaplessSourceUrl] = useState<string | null>(null);
+  const [offlineSourceUrl, setOfflineSourceUrl] = useState<string | null>(null);
+  const [offlineCopy, setOfflineCopy] = useState<OfflineCopyRecord | null>(null);
+  const [offlinePlayback, setOfflinePlayback] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const resumeVersionRef = useRef(0);
+  const continueOfflineRef = useRef(false);
+  const offlineCapability = useMemo(
+    () => browserSupportsManagedOfflineCopies() ? createBrowserOfflineCopyManager(csrf) : null,
+    [csrf.headerName, csrf.token]
+  );
 
   useEffect(() => {
     if (selected?.privateAudiobook && selected.privateAudiobook.audiobookId !== selectedId) {
@@ -74,10 +89,10 @@ export function PrivateAudiobookPlayer({
 
   const parts = useMemo(() => manifest ? positionedParts(manifest) : [], [manifest]);
   const active = parts[activePartIndex];
-  const usesGaplessSource = parts.length > 1;
+  const usesGaplessSource = parts.length > 1 && !offlinePlayback;
 
   useEffect(() => {
-    if (parts.length <= 1) {
+    if (parts.length <= 1 || offlinePlayback) {
       setGaplessSourceUrl(null);
       return;
     }
@@ -86,7 +101,29 @@ export function PrivateAudiobookPlayer({
       setGaplessSourceUrl,
       () => setUnavailable(true)
     );
-  }, [parts]);
+  }, [parts, offlinePlayback]);
+
+  useEffect(() => {
+    if (!offlinePlayback || !offlineCapability || !offlineCopy || !active) {
+      setOfflineSourceUrl(null);
+      return;
+    }
+    let disposed = false;
+    let objectUrl: string | undefined;
+    void offlineCapability.openPart({
+      audiobookId: offlineCopy.audiobookId,
+      assetVersionId: offlineCopy.assetVersionId,
+      partId: active.part.partId
+    }).then((blob) => {
+      if (disposed) return;
+      objectUrl = URL.createObjectURL(blob);
+      setOfflineSourceUrl(objectUrl);
+    }).catch(() => setUnavailable(true));
+    return () => {
+      disposed = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [offlinePlayback, offlineCapability, offlineCopy, active?.part.partId]);
 
   const persist = (nextPosition: number) => {
     if (!manifest) return;
@@ -184,6 +221,20 @@ export function PrivateAudiobookPlayer({
             </div>
           </div>
 
+          {offlineCapability && (
+            <OfflineCopyControls
+              audiobookId={manifest.audiobookId}
+              assetVersionId={manifest.assetVersionId}
+              capability={offlineCapability}
+              installed={isInstalledPwa()}
+              onPlay={(copy) => {
+                audioRef.current?.pause();
+                setOfflineCopy(copy);
+                setOfflinePlayback(true);
+              }}
+            />
+          )}
+
           <input
             className="audiobook-position"
             type="range"
@@ -206,7 +257,7 @@ export function PrivateAudiobookPlayer({
             <Button
               type="button"
               size="icon"
-              disabled={usesGaplessSource && !gaplessSourceUrl}
+              disabled={offlinePlayback ? !offlineSourceUrl : usesGaplessSource && !gaplessSourceUrl}
               aria-label={`${isPlaying ? "Pause" : "Play"} ${active.chapter.title}`}
               onClick={() => {
                 const audio = audioRef.current;
@@ -258,13 +309,19 @@ export function PrivateAudiobookPlayer({
 
           <audio
             ref={audioRef}
-            src={usesGaplessSource ? gaplessSourceUrl ?? undefined : active.part.mediaUrl}
+            src={offlinePlayback
+              ? offlineSourceUrl ?? undefined
+              : usesGaplessSource ? gaplessSourceUrl ?? undefined : active.part.mediaUrl}
             preload="metadata"
             onLoadedMetadata={(event) => {
               event.currentTarget.currentTime = usesGaplessSource
                 ? positionMs / 1000
                 : Math.max(0, (positionMs - active.startMs) / 1000);
               event.currentTarget.playbackRate = speed;
+              if (continueOfflineRef.current) {
+                continueOfflineRef.current = false;
+                void event.currentTarget.play();
+              }
             }}
             onTimeUpdate={(event) => {
               const nextPosition = Math.min(
@@ -279,12 +336,18 @@ export function PrivateAudiobookPlayer({
             onPlay={() => setIsPlaying(true)}
             onPause={() => {
               setIsPlaying(false);
-              persist(positionMs);
+              if (!offlinePlayback) persist(positionMs);
             }}
             onEnded={() => {
+              if (offlinePlayback && activePartIndex + 1 < parts.length) {
+                continueOfflineRef.current = true;
+                setActivePartIndex(activePartIndex + 1);
+                setPositionMs(parts[activePartIndex + 1].startMs);
+                return;
+              }
               setPositionMs(manifest.totalDurationMs);
               setIsPlaying(false);
-              persist(manifest.totalDurationMs);
+              if (!offlinePlayback) persist(manifest.totalDurationMs);
             }}
           />
           <span className="resume-status" aria-live="polite">Resume position version {resumeVersion}</span>

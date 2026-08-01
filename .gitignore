@@ -39,6 +39,7 @@ coverage/
 *.tsbuildinfo
 
 # Browser and test reports
+.vitest-attachments/
 blob-report/
 playwright-report/
 test-results/

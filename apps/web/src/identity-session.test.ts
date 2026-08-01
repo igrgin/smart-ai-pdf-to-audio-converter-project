@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchConversionProgress } from "./identity-session";
+import {
+  SameOriginResponseError,
+  fetchConversionProgress,
+  fetchLibrary
+} from "./identity-session";
 
 describe("Audiobook Conversion polling", () => {
   afterEach(() => {
@@ -28,5 +32,14 @@ describe("Audiobook Conversion polling", () => {
         signal: expect.any(AbortSignal)
       }
     );
+  });
+
+  it("preserves authoritative private-boundary denial status for offline purge policy", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+
+    const failure = await fetchLibrary(new AbortController().signal).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(SameOriginResponseError);
+    expect(failure).toMatchObject({ status: 404 });
   });
 });

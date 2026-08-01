@@ -25,6 +25,13 @@ export type StaffRole =
   | "INCIDENT_RESPONDER"
   | "SECURITY_REVIEWER";
 
+export class SameOriginResponseError extends Error {
+  constructor(readonly status: number, resource: string) {
+    super(`${resource} returned ${status}`);
+    this.name = "SameOriginResponseError";
+  }
+}
+
 export interface Library {
   displayName: string;
   contactEmail?: string;
@@ -119,7 +126,7 @@ export async function fetchIdentitySession(signal: AbortSignal): Promise<Identit
     headers: { Accept: "application/json" },
     signal
   });
-  if (!response.ok) throw new Error(`Identity session returned ${response.status}`);
+  if (!response.ok) throw new SameOriginResponseError(response.status, "Identity session");
   return response.json() as Promise<IdentitySession>;
 }
 
@@ -128,7 +135,7 @@ export async function fetchLibrary(signal: AbortSignal): Promise<Library> {
     headers: { Accept: "application/json" },
     signal
   });
-  if (!response.ok) throw new Error(`Library returned ${response.status}`);
+  if (!response.ok) throw new SameOriginResponseError(response.status, "Library");
   return response.json() as Promise<Library>;
 }
 
