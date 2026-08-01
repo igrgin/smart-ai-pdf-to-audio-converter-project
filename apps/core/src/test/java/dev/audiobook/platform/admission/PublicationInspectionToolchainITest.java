@@ -2,6 +2,7 @@ package dev.audiobook.platform.admission;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.File;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -42,14 +43,17 @@ class PublicationInspectionToolchainITest {
         try (var toolchain = new GenericContainer<>(TOOLCHAIN_IMAGE)
                 .withFileSystemBind(scratch.toString(), scratch.toString(), BindMode.READ_ONLY)) {
             toolchain.start();
-            Path clamscan = wrapper("clamscan", toolchain.getContainerId(), "/usr/bin/clamscan");
-            Path qpdf = wrapper("qpdf", toolchain.getContainerId(), "/usr/bin/qpdf");
+            Path docker = executableOnPath("docker");
+            Path clamscan = wrapper("clamscan", docker, toolchain.getContainerId(), "/usr/bin/clamscan");
+            Path qpdf = wrapper("qpdf", docker, toolchain.getContainerId(), "/usr/bin/qpdf");
             PublicationInspectionService service = service(clamscan, qpdf);
 
             try (InputStream input = Files.newInputStream(publication)) {
                 PublicationInspectionService.Result result = service.inspect(input, "application/pdf");
 
-                assertThat(result.accepted()).isTrue();
+                assertThat(result.accepted())
+                        .as("inspection rejected with reason %s", result.reasonCode())
+                        .isTrue();
                 assertThat(result.mediaType()).isEqualTo("application/pdf");
                 assertThat(result.toolchainVersion()).isEqualTo("qpdf-pdfbox-v1");
             }
@@ -79,13 +83,32 @@ class PublicationInspectionToolchainITest {
                 properties, malwareScanner, pdfInspection, new EpubInspectionServiceImpl(properties));
     }
 
-    private Path wrapper(String name, String containerId, String executable) throws Exception {
+    private Path wrapper(String name, Path docker, String containerId, String executable) throws Exception {
         Path wrapper = scratch.resolve(name);
         Files.writeString(
                 wrapper,
-                "#!/bin/sh\nexec /usr/local/bin/docker exec " + containerId + " " + executable + " \"$@\"\n",
+                "#!/bin/sh\nexec " + shellQuote(docker.toString()) + " exec " + shellQuote(containerId) + " "
+                        + shellQuote(executable) + " \"$@\"\n",
                 StandardCharsets.UTF_8);
         Files.setPosixFilePermissions(wrapper, PosixFilePermissions.fromString("rwx------"));
         return wrapper;
+    }
+
+    private static Path executableOnPath(String executable) {
+        String path = System.getenv("PATH");
+        if (path == null || path.isBlank()) {
+            throw new IllegalStateException("PATH is unavailable while resolving " + executable);
+        }
+        for (String directory : path.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
+            Path candidate = Path.of(directory).resolve(executable).toAbsolutePath().normalize();
+            if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException(executable + " is not available on PATH");
+    }
+
+    private static String shellQuote(String value) {
+        return "'" + value.replace("'", "'\"'\"'") + "'";
     }
 }
