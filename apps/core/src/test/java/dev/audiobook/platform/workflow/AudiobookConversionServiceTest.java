@@ -2,6 +2,7 @@ package dev.audiobook.platform.workflow;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
@@ -10,8 +11,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
-import dev.audiobook.platform.narration.NarrationSelectionService;
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
+import dev.audiobook.platform.narration.NarrationSelectionService;
 import java.time.Clock;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -72,6 +73,7 @@ class AudiobookConversionServiceTest {
 
     @Test
     void appliesCompletedAndExhaustedNarrationPlanResultsInTheCore() {
+        given(jdbcTemplate.update(anyString(), any(java.sql.Timestamp.class))).willReturn(1);
         given(jdbcTemplate.update(anyString())).willReturn(2, 1);
 
         assertThat(service.applyNarrationPlanResults()).isEqualTo(3);

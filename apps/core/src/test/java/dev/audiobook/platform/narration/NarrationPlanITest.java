@@ -228,6 +228,36 @@ class NarrationPlanITest {
     }
 
     @Test
+    void coreReconcilesAPlanPersistedBeforeTheWorkerCouldCompleteItsLease() throws Exception {
+        UUID listenerId = entitledListener();
+        UUID conversionId = admit(listenerId, "persisted-before-completion");
+        WorkCoordinates coordinates = narrationWork(conversionId);
+
+        assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.narration_plan_work
+                SET state = 'CLAIMED', completed_at = NULL, lease_owner = ?,
+                    lease_expires_at = CURRENT_TIMESTAMP + INTERVAL '5 minutes'
+                WHERE work_id = ?
+                """,
+                coordinates.messageId(),
+                coordinates.workId());
+
+        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
+        assertThat(conversionService.conversion(listenerId, conversionId).state())
+                .isEqualTo(AudiobookConversionService.ConversionState.AWAITING_REVIEW);
+        assertThat(jdbcTemplate.queryForObject(
+                        """
+                        SELECT state || ':' || (lease_owner IS NULL) || ':' || (lease_expires_at IS NULL)
+                        FROM workflow.narration_plan_work WHERE work_id = ?
+                        """,
+                        String.class,
+                        coordinates.workId()))
+                .isEqualTo("SUCCEEDED:true:true");
+    }
+
+    @Test
     void duplicateDeliveryRespectsActiveAndExpiredLeasesWithoutDuplicatingTheInbox() throws Exception {
         UUID listenerId = entitledListener();
         UUID conversionId = admit(listenerId, "leases");

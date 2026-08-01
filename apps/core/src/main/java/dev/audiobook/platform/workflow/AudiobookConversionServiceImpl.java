@@ -108,6 +108,16 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
     @Override
     @Transactional
     public int applyNarrationPlanResults() {
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.narration_plan_work w
+                SET state = 'SUCCEEDED', completed_at = ?, lease_owner = NULL, lease_expires_at = NULL
+                WHERE w.state <> 'SUCCEEDED' AND EXISTS (
+                    SELECT 1 FROM narration.narration_plan n
+                    WHERE n.conversion_id = w.conversion_id
+                )
+                """,
+                Timestamp.from(identityClock.instant()));
         int ready = jdbcTemplate.update(
                 """
                 UPDATE workflow.audiobook_conversion c
