@@ -416,6 +416,9 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
             throw new IllegalStateException("Listener has no free Conversion Entitlement");
         }
         GrantBalance current = grantBalance(grant.grantId());
+        if (current.expired() || !clock.instant().isBefore(grant.validUntil())) {
+            throw new IllegalStateException("Free Conversion Entitlement is expired");
+        }
         if (current.availableCharacters() + request.availableCharacterDelta() < 0) {
             throw new IllegalArgumentException("Correction cannot make available characters negative");
         }
@@ -468,7 +471,7 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
             throw new IllegalStateException("Listener has no free Conversion Entitlement");
         }
         GrantBalance current = grantBalance(grant.grantId());
-        if (current.expired()) {
+        if (current.expired() || !clock.instant().isBefore(grant.validUntil())) {
             throw new IllegalStateException("Free Conversion Entitlement is already expired");
         }
 

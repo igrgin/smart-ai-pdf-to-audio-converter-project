@@ -44,23 +44,17 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
                         resultSet.getString("payload_sha256")),
                 BATCH_SIZE);
         for (PendingEvent event : events) {
-            boolean projected = switch (event.eventType()) {
-                case "invoice.paid" -> projectPaidInvoice(event);
+            ProjectionOutcome outcome = switch (event.eventType()) {
+                case "invoice.paid" -> outcome(projectPaidInvoice(event));
                 case "customer.subscription.updated", "customer.subscription.deleted" ->
-                    projectSubscriptionState(event);
+                    outcome(projectSubscriptionState(event));
                 case "refund.created", "refund.updated" -> projectRefund(event);
                 case "invoice.voided", "invoice.marked_uncollectible" -> projectInvoiceCorrection(event);
-                default -> false;
+                default -> ProjectionOutcome.IGNORED;
             };
-            jdbcTemplate.update(
-                    """
-                    UPDATE stripe_demonstration_event_inbox
-                    SET projection_status = ?, projected_at = ?
-                    WHERE event_id = ?
-                    """,
-                    projected ? "PROJECTED" : "IGNORED",
-                    databaseTime(clock.instant()),
-                    event.eventId());
+            if (outcome != ProjectionOutcome.DEFERRED) {
+                completeEvent(event.eventId(), outcome);
+            }
         }
         return events.size();
     }
@@ -84,6 +78,7 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
         String subscriptionId = firstText(subscriptionDetails.path("subscription"), invoice.path("subscription"));
         String listenerReference = firstText(
                 subscriptionDetails.path("metadata").path("listener_id"),
+                invoice.path("subscription_details").path("metadata").path("listener_id"),
                 invoice.path("metadata").path("listener_id"));
         UUID listenerId;
         try {
@@ -93,16 +88,16 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
         }
         String customerId = requiredText(invoice, "customer");
         Instant now = clock.instant();
-        upsertSubscription(
+        upsertSubscription(new ProjectedSubscription(
                 subscriptionId,
                 listenerId,
                 customerId,
-                "ACTIVE",
+                DemonstrationSubscriptionStatus.ACTIVE,
                 period.start(),
                 period.end(),
                 event.eventCreated(),
                 event.eventId(),
-                now);
+                now));
 
         lockEntitlementState();
         if (exists("demonstration_subscription_invoice_grant", "stripe_invoice_id", invoiceId)) {
@@ -134,7 +129,7 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
                 invoiceId,
                 subscriptionId,
                 grantId,
-                nullableText(invoice.path("payment_intent")),
+                invoicePaymentIntent(invoice),
                 nullableText(invoice.path("charge")),
                 event.eventId(),
                 databaseTime(period.start()),
@@ -191,20 +186,20 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
         }
         String customerId = requiredText(subscription, "customer");
         String stripeStatus = text(subscription, "status");
-        String projectedStatus;
+        DemonstrationSubscriptionStatus projectedStatus;
         if ("customer.subscription.deleted".equals(event.eventType()) || "canceled".equals(stripeStatus)) {
-            projectedStatus = "CANCELED";
+            projectedStatus = DemonstrationSubscriptionStatus.CANCELED;
         } else if (subscription.path("cancel_at_period_end").asBoolean(false)) {
-            projectedStatus = "CANCEL_AT_PERIOD_END";
+            projectedStatus = DemonstrationSubscriptionStatus.CANCEL_AT_PERIOD_END;
         } else if ("past_due".equals(stripeStatus)) {
-            projectedStatus = "PAST_DUE";
+            projectedStatus = DemonstrationSubscriptionStatus.PAST_DUE;
         } else if ("unpaid".equals(stripeStatus)) {
-            projectedStatus = "UNPAID";
+            projectedStatus = DemonstrationSubscriptionStatus.UNPAID;
         } else {
-            projectedStatus = "ACTIVE";
+            projectedStatus = DemonstrationSubscriptionStatus.ACTIVE;
         }
         BillingPeriod period = subscriptionPeriod(subscription);
-        upsertSubscription(
+        upsertSubscription(new ProjectedSubscription(
                 subscriptionId,
                 listenerId,
                 customerId,
@@ -213,51 +208,90 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
                 period == null ? null : period.end(),
                 event.eventCreated(),
                 event.eventId(),
-                clock.instant());
+                clock.instant()));
         return true;
     }
 
-    private boolean projectRefund(PendingEvent event) {
+    private ProjectionOutcome projectRefund(PendingEvent event) {
         JsonNode refund = eventObject(event);
         String status = text(refund, "status");
-        if ("failed".equals(status) || "canceled".equals(status)) {
-            return false;
-        }
         String refundId = requiredText(refund, "id");
+        if ("failed".equals(status) || "canceled".equals(status)) {
+            completeOtherRefundEvents(refundId, event.eventId(), ProjectionOutcome.IGNORED);
+            return ProjectionOutcome.IGNORED;
+        }
+        if (!"succeeded".equals(status)) {
+            return ProjectionOutcome.DEFERRED;
+        }
         String paymentIntentId = nullableText(refund.path("payment_intent"));
         String chargeId = nullableText(refund.path("charge"));
         InvoiceGrant grant = findInvoiceGrant(paymentIntentId, chargeId);
         if (grant == null) {
-            return false;
+            return ProjectionOutcome.DEFERRED;
         }
-        return adjustGrant(
+        adjustGrant(
                 "stripe-refund:" + refundId,
-                "REFUND",
+                AdjustmentKind.REFUND,
                 grant,
-                event,
-                "DEMONSTRATION_GRANT_REFUNDED");
+                event);
+        completeOtherRefundEvents(refundId, event.eventId(), ProjectionOutcome.IGNORED);
+        return ProjectionOutcome.PROJECTED;
     }
 
-    private boolean projectInvoiceCorrection(PendingEvent event) {
+    private ProjectionOutcome projectInvoiceCorrection(PendingEvent event) {
         String invoiceId = requiredText(eventObject(event), "id");
         InvoiceGrant grant = findInvoiceGrant(invoiceId);
         if (grant == null) {
-            return false;
+            return ProjectionOutcome.DEFERRED;
         }
-        return adjustGrant(
+        adjustGrant(
                 "stripe-void:" + invoiceId,
-                "VOID",
+                AdjustmentKind.VOID,
                 grant,
-                event,
-                "DEMONSTRATION_GRANT_CORRECTED");
+                event);
+        return ProjectionOutcome.PROJECTED;
+    }
+
+    private void completeEvent(String eventId, ProjectionOutcome outcome) {
+        jdbcTemplate.update(
+                """
+                UPDATE stripe_demonstration_event_inbox
+                SET projection_status = ?, projected_at = ?
+                WHERE event_id = ?
+                """,
+                outcome.name(),
+                databaseTime(clock.instant()),
+                eventId);
+    }
+
+    private void completeOtherRefundEvents(
+            String refundId,
+            String currentEventId,
+            ProjectionOutcome outcome) {
+        jdbcTemplate.update(
+                """
+                UPDATE stripe_demonstration_event_inbox
+                SET projection_status = ?, projected_at = ?
+                WHERE projection_status = 'PENDING'
+                  AND event_type IN ('refund.created', 'refund.updated')
+                  AND payload #>> '{data,object,id}' = ?
+                  AND event_id <> ?
+                """,
+                outcome.name(),
+                databaseTime(clock.instant()),
+                refundId,
+                currentEventId);
+    }
+
+    private static ProjectionOutcome outcome(boolean projected) {
+        return projected ? ProjectionOutcome.PROJECTED : ProjectionOutcome.IGNORED;
     }
 
     private boolean adjustGrant(
             String adjustmentReference,
-            String adjustmentKind,
+            AdjustmentKind adjustmentKind,
             InvoiceGrant grant,
-            PendingEvent event,
-            String auditType) {
+            PendingEvent event) {
         lockEntitlementState();
         if (exists(
                 "demonstration_subscription_grant_adjustment",
@@ -284,7 +318,7 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
                 adjustmentReference,
                 grant.invoiceId(),
                 grant.grantId(),
-                adjustmentKind,
+                adjustmentKind.name(),
                 event.eventId(),
                 databaseTime(now));
         if (available > 0) {
@@ -299,7 +333,7 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
                     grant.grantId(),
                     grant.listenerId(),
                     adjustmentReference,
-                    adjustmentKind,
+                    adjustmentKind.name(),
                     -available,
                     databaseTime(now));
         }
@@ -311,7 +345,7 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
                 """,
                 adjustmentReference,
                 event.payloadSha256(),
-                adjustmentKind,
+                adjustmentKind.name(),
                 grant.grantId(),
                 databaseTime(now));
         jdbcTemplate.update(
@@ -322,8 +356,8 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
                 """,
                 UUID.randomUUID(),
                 grant.listenerId(),
-                auditType,
-                adjustmentKind,
+                adjustmentKind.auditType(),
+                adjustmentKind.name(),
                 databaseTime(now));
         return true;
     }
@@ -359,16 +393,21 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
                 : null;
     }
 
-    private void upsertSubscription(
-            String subscriptionId,
-            UUID listenerId,
-            String customerId,
-            String status,
-            Instant periodStart,
-            Instant periodEnd,
-            Instant eventCreated,
-            String eventId,
-            Instant now) {
+    private String invoicePaymentIntent(JsonNode invoice) {
+        String direct = nullableText(invoice.path("payment_intent"));
+        if (direct != null) {
+            return direct;
+        }
+        for (JsonNode payment : invoice.path("payments").path("data")) {
+            String paymentIntent = nullableText(payment.path("payment").path("payment_intent"));
+            if (paymentIntent != null) {
+                return paymentIntent;
+            }
+        }
+        return null;
+    }
+
+    private void upsertSubscription(ProjectedSubscription subscription) {
         jdbcTemplate.update(
                 """
                 INSERT INTO demonstration_subscription (
@@ -377,8 +416,6 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
                     latest_event_id, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (stripe_subscription_id) DO UPDATE SET
-                    listener_id = EXCLUDED.listener_id,
-                    stripe_customer_id = EXCLUDED.stripe_customer_id,
                     subscription_status = EXCLUDED.subscription_status,
                     current_period_start = COALESCE(EXCLUDED.current_period_start, demonstration_subscription.current_period_start),
                     current_period_end = COALESCE(EXCLUDED.current_period_end, demonstration_subscription.current_period_end),
@@ -388,15 +425,30 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
                 WHERE (demonstration_subscription.latest_event_created, demonstration_subscription.latest_event_id)
                     < (EXCLUDED.latest_event_created, EXCLUDED.latest_event_id)
                 """,
-                subscriptionId,
-                listenerId,
-                customerId,
-                status,
-                periodStart == null ? null : databaseTime(periodStart),
-                periodEnd == null ? null : databaseTime(periodEnd),
-                databaseTime(eventCreated),
-                eventId,
-                databaseTime(now));
+                subscription.subscriptionId(),
+                subscription.listenerId(),
+                subscription.customerId(),
+                subscription.status().name(),
+                subscription.periodStart() == null ? null : databaseTime(subscription.periodStart()),
+                subscription.periodEnd() == null ? null : databaseTime(subscription.periodEnd()),
+                databaseTime(subscription.eventCreated()),
+                subscription.eventId(),
+                databaseTime(subscription.projectedAt()));
+        SubscriptionOwner storedOwner = jdbcTemplate.queryForObject(
+                """
+                SELECT listener_id, stripe_customer_id
+                FROM demonstration_subscription
+                WHERE stripe_subscription_id = ?
+                """,
+                (resultSet, rowNumber) -> new SubscriptionOwner(
+                        resultSet.getObject("listener_id", UUID.class),
+                        resultSet.getString("stripe_customer_id")),
+                subscription.subscriptionId());
+        if (storedOwner == null
+                || !storedOwner.listenerId().equals(subscription.listenerId())
+                || !storedOwner.customerId().equals(subscription.customerId())) {
+            throw new IllegalArgumentException("Demonstration Subscription ownership cannot change");
+        }
     }
 
     private JsonNode eventObject(PendingEvent event) {
@@ -471,10 +523,13 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
         return value;
     }
 
-    private static String firstText(JsonNode first, JsonNode second) {
-        String value = nullableText(first);
-        if (value == null) {
-            value = nullableText(second);
+    private static String firstText(JsonNode... candidates) {
+        String value = null;
+        for (JsonNode candidate : candidates) {
+            value = nullableText(candidate);
+            if (value != null) {
+                break;
+            }
         }
         if (value == null || value.isBlank() || value.length() > 200) {
             throw new IllegalArgumentException("Stripe event reference is invalid");
@@ -506,5 +561,49 @@ public class DemonstrationSubscriptionProjectorImpl implements DemonstrationSubs
     }
 
     private record InvoiceGrant(String invoiceId, UUID grantId, UUID listenerId) {
+    }
+
+    private record ProjectedSubscription(
+            String subscriptionId,
+            UUID listenerId,
+            String customerId,
+            DemonstrationSubscriptionStatus status,
+            Instant periodStart,
+            Instant periodEnd,
+            Instant eventCreated,
+            String eventId,
+            Instant projectedAt) {
+    }
+
+    private record SubscriptionOwner(UUID listenerId, String customerId) {
+    }
+
+    private enum AdjustmentKind {
+        REFUND("DEMONSTRATION_GRANT_REFUNDED"),
+        VOID("DEMONSTRATION_GRANT_CORRECTED");
+
+        private final String auditType;
+
+        AdjustmentKind(String auditType) {
+            this.auditType = auditType;
+        }
+
+        String auditType() {
+            return auditType;
+        }
+    }
+
+    private enum DemonstrationSubscriptionStatus {
+        ACTIVE,
+        CANCEL_AT_PERIOD_END,
+        PAST_DUE,
+        UNPAID,
+        CANCELED
+    }
+
+    private enum ProjectionOutcome {
+        PROJECTED,
+        IGNORED,
+        DEFERRED
     }
 }

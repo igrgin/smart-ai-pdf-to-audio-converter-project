@@ -8,10 +8,7 @@ import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.admission.PublicationSubmissionService;
 import dev.audiobook.platform.identity.ListenerIdentityService;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -66,7 +63,7 @@ class StripeDemonstrationSubscriptionWebhookControllerTest {
                 """;
 
         mockMvc.perform(post(WEBHOOK_PATH)
-                        .header("Stripe-Signature", signature(payload, "whsec_test_webhook"))
+                        .header("Stripe-Signature", StripeWebhookTestEvents.signature(payload, "whsec_test_webhook"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(payload))
                 .andExpect(status().isAccepted());
@@ -89,7 +86,7 @@ class StripeDemonstrationSubscriptionWebhookControllerTest {
                  "type":"invoice.paid","data":{"object":{"id":"in_live"}}}
                 """;
         mockMvc.perform(post(WEBHOOK_PATH)
-                        .header("Stripe-Signature", signature(livePayload, "whsec_test_webhook"))
+                        .header("Stripe-Signature", StripeWebhookTestEvents.signature(livePayload, "whsec_test_webhook"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(livePayload))
                 .andExpect(status().isBadRequest());
@@ -97,11 +94,4 @@ class StripeDemonstrationSubscriptionWebhookControllerTest {
         verifyNoInteractions(inboxService, projector);
     }
 
-    private static String signature(String payload, String secret) throws Exception {
-        long timestamp = Instant.now().getEpochSecond();
-        Mac mac = Mac.getInstance("HmacSHA256");
-        mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-        byte[] digest = mac.doFinal((timestamp + "." + payload).getBytes(StandardCharsets.UTF_8));
-        return "t=" + timestamp + ",v1=" + java.util.HexFormat.of().formatHex(digest);
-    }
 }

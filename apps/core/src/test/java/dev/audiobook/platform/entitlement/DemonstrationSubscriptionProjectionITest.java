@@ -11,14 +11,10 @@ import dev.audiobook.platform.identity.ExternalIdentity;
 import dev.audiobook.platform.identity.ListenerIdentityService;
 import dev.audiobook.platform.identity.SignInProvider;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.HexFormat;
 import java.util.UUID;
 import java.util.List;
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -153,9 +149,19 @@ class DemonstrationSubscriptionProjectionITest {
         assertThat(entitlementService.allowance(listenerId).availableCharacters()).isEqualTo(400_000);
 
         deliver(refundEvent(
-                "evt_refund_created", "re_clock", "pi_in_clock_renewal", now.plusSeconds(30), "succeeded"));
+                "evt_refund_created",
+                "refund.created",
+                "re_clock",
+                "pi_in_clock_renewal",
+                now.plusSeconds(30),
+                "succeeded"));
         deliver(refundEvent(
-                "evt_refund_replay", "re_clock", "pi_in_clock_renewal", now.plusSeconds(31), "succeeded"));
+                "evt_refund_replay",
+                "refund.updated",
+                "re_clock",
+                "pi_in_clock_renewal",
+                now.plusSeconds(31),
+                "succeeded"));
 
         assertThat(entitlementService.allowance(listenerId))
                 .extracting(
@@ -179,9 +185,65 @@ class DemonstrationSubscriptionProjectionITest {
         assertThat(entitlementService.allowance(correctedListener).availableCharacters()).isZero();
     }
 
+    @Test
+    void outOfOrderAndFailedRefundEvidenceCannotCorruptTheGrant() throws Exception {
+        Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        UUID outOfOrderListener = listener("out-of-order-refund");
+        deliver(refundEvent(
+                "evt_refund_before_invoice",
+                "refund.created",
+                "re_before_invoice",
+                "pi_in_after_refund",
+                now.plusSeconds(10),
+                "succeeded"));
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT projection_status FROM stripe_demonstration_event_inbox WHERE event_id = 'evt_refund_before_invoice'",
+                        String.class))
+                .isEqualTo("PENDING");
+
+        deliver(paidInvoiceEvent(
+                "evt_invoice_after_refund", "in_after_refund", "sub_after_refund", outOfOrderListener, now,
+                now.minus(1, ChronoUnit.DAYS), now.plus(29, ChronoUnit.DAYS)));
+        assertThat(entitlementService.allowance(outOfOrderListener).availableCharacters()).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT projection_status FROM stripe_demonstration_event_inbox WHERE event_id = 'evt_refund_before_invoice'",
+                        String.class))
+                .isEqualTo("PROJECTED");
+
+        UUID failedRefundListener = listener("failed-refund");
+        deliver(paidInvoiceEvent(
+                "evt_failed_refund_invoice", "in_failed_refund", "sub_failed_refund", failedRefundListener, now,
+                now.minus(1, ChronoUnit.DAYS), now.plus(29, ChronoUnit.DAYS)));
+        deliver(refundEvent(
+                "evt_refund_pending",
+                "refund.created",
+                "re_eventually_failed",
+                "pi_in_failed_refund",
+                now.plusSeconds(20),
+                "pending"));
+        assertThat(entitlementService.allowance(failedRefundListener).availableCharacters()).isEqualTo(500_000);
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT projection_status FROM stripe_demonstration_event_inbox WHERE event_id = 'evt_refund_pending'",
+                        String.class))
+                .isEqualTo("PENDING");
+
+        deliver(refundEvent(
+                "evt_refund_failed",
+                "refund.updated",
+                "re_eventually_failed",
+                "pi_in_failed_refund",
+                now.plusSeconds(21),
+                "failed"));
+        assertThat(entitlementService.allowance(failedRefundListener).availableCharacters()).isEqualTo(500_000);
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT projection_status FROM stripe_demonstration_event_inbox WHERE event_id = 'evt_refund_pending'",
+                        String.class))
+                .isEqualTo("IGNORED");
+    }
+
     private void deliver(String payload) throws Exception {
         mockMvc.perform(post(WEBHOOK_PATH)
-                        .header("Stripe-Signature", signature(payload))
+                        .header("Stripe-Signature", StripeWebhookTestEvents.signature(payload, WEBHOOK_SECRET))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(payload))
                 .andExpect(status().isAccepted());
@@ -277,16 +339,23 @@ class DemonstrationSubscriptionProjectionITest {
 
     private static String refundEvent(
             String eventId,
+            String eventType,
             String refundId,
             String paymentIntentId,
             Instant eventCreated,
             String status) {
         return """
                 {"id":"%s","object":"event","created":%d,"livemode":false,
-                 "type":"refund.created","data":{"object":{
+                 "type":"%s","data":{"object":{
                    "id":"%s","object":"refund","payment_intent":"%s","status":"%s"
                  }}}
-                """.formatted(eventId, eventCreated.getEpochSecond(), refundId, paymentIntentId, status);
+                """.formatted(
+                eventId,
+                eventCreated.getEpochSecond(),
+                eventType,
+                refundId,
+                paymentIntentId,
+                status);
     }
 
     private static String invoiceCorrectionEvent(
@@ -300,11 +369,4 @@ class DemonstrationSubscriptionProjectionITest {
                 """.formatted(eventId, eventCreated.getEpochSecond(), eventType, invoiceId);
     }
 
-    private static String signature(String payload) throws Exception {
-        long timestamp = Instant.now().getEpochSecond();
-        Mac mac = Mac.getInstance("HmacSHA256");
-        mac.init(new SecretKeySpec(WEBHOOK_SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-        byte[] digest = mac.doFinal((timestamp + "." + payload).getBytes(StandardCharsets.UTF_8));
-        return "t=" + timestamp + ",v1=" + HexFormat.of().formatHex(digest);
-    }
 }
