@@ -1,12 +1,13 @@
 package dev.audiobook.platform.narration;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -65,6 +66,25 @@ class NarrationPlanServiceImplTest {
         service.prepare(listenerId, conversionId, new ByteArrayInputStream(new byte[] {1}));
 
         verifyNoInteractions(interpreter, assetStore, identifierGenerator, clock);
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void confirmsOnlyCandidateConversionsWithNarrationOwnedPlans() throws Exception {
+        UUID planned = UUID.randomUUID();
+        UUID missing = UUID.randomUUID();
+        given(jdbcTemplate.query(anyString(), any(RowMapper.class), eq(planned), eq(missing)))
+                .willAnswer(invocation -> {
+                    RowMapper mapper = invocation.getArgument(1);
+                    ResultSet resultSet = mock(ResultSet.class);
+                    given(resultSet.getObject("conversion_id", UUID.class)).willReturn(planned);
+                    return List.of(mapper.mapRow(resultSet, 0));
+                });
+
+        assertThat(service.existingPlanConversionIds(List.of(planned, missing))).containsExactly(planned);
+        assertThat(service.existingPlanConversionIds(List.of())).isEmpty();
+
+        verify(jdbcTemplate).query(anyString(), any(RowMapper.class), eq(planned), eq(missing));
     }
 
     @Test

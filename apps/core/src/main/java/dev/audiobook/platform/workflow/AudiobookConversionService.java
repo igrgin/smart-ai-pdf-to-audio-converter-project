@@ -17,7 +17,9 @@ public interface AudiobookConversionService {
 
     int relayNarrationPlanWork(BiConsumer<UUID, UUID> publisher);
 
-    int applyNarrationPlanResults();
+    List<UUID> narrationPlanRecoveryCandidates();
+
+    int applyNarrationPlanResults(List<UUID> planPresentConversionIds);
 
     List<AudiobookConversion> conversions(UUID listenerId);
 

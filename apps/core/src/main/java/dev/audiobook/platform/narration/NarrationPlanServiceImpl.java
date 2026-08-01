@@ -76,6 +76,21 @@ public class NarrationPlanServiceImpl implements NarrationPlanService {
     }
 
     @Override
+    public List<UUID> existingPlanConversionIds(List<UUID> conversionIds) {
+        Objects.requireNonNull(conversionIds, "conversionIds");
+        List<UUID> candidates = List.copyOf(conversionIds);
+        if (candidates.isEmpty()) {
+            return List.of();
+        }
+        candidates.forEach(candidate -> Objects.requireNonNull(candidate, "conversionId"));
+        String placeholders = String.join(", ", java.util.Collections.nCopies(candidates.size(), "?"));
+        return jdbcTemplate.query(
+                "SELECT conversion_id FROM narration.narration_plan WHERE conversion_id IN (" + placeholders + ")",
+                (resultSet, row) -> resultSet.getObject("conversion_id", UUID.class),
+                candidates.toArray());
+    }
+
+    @Override
     public PlanView plan(UUID listenerId, UUID conversionId) {
         Objects.requireNonNull(listenerId, "listenerId");
         Objects.requireNonNull(conversionId, "conversionId");

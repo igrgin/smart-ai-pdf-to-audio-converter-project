@@ -106,18 +106,35 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
     }
 
     @Override
-    @Transactional
-    public int applyNarrationPlanResults() {
-        jdbcTemplate.update(
+    public List<UUID> narrationPlanRecoveryCandidates() {
+        return jdbcTemplate.query(
                 """
-                UPDATE workflow.narration_plan_work w
-                SET state = 'SUCCEEDED', completed_at = ?, lease_owner = NULL, lease_expires_at = NULL
-                WHERE w.state <> 'SUCCEEDED' AND EXISTS (
-                    SELECT 1 FROM narration.narration_plan n
-                    WHERE n.conversion_id = w.conversion_id
-                )
+                SELECT w.conversion_id
+                FROM workflow.narration_plan_work w
+                JOIN workflow.audiobook_conversion c ON c.conversion_id = w.conversion_id
+                WHERE w.state IN ('READY', 'CLAIMED') AND c.state = 'PREPARING'
+                ORDER BY w.created_at, w.work_id
+                LIMIT 100
                 """,
-                Timestamp.from(identityClock.instant()));
+                (resultSet, row) -> resultSet.getObject("conversion_id", UUID.class));
+    }
+
+    @Override
+    @Transactional
+    public int applyNarrationPlanResults(List<UUID> planPresentConversionIds) {
+        Objects.requireNonNull(planPresentConversionIds, "planPresentConversionIds");
+        Timestamp now = Timestamp.from(identityClock.instant());
+        for (UUID conversionId : List.copyOf(planPresentConversionIds)) {
+            Objects.requireNonNull(conversionId, "conversionId");
+            jdbcTemplate.update(
+                    """
+                    UPDATE workflow.narration_plan_work
+                    SET state = 'SUCCEEDED', completed_at = ?, lease_owner = NULL, lease_expires_at = NULL
+                    WHERE conversion_id = ? AND state IN ('READY', 'CLAIMED')
+                    """,
+                    now,
+                    conversionId);
+        }
         int ready = jdbcTemplate.update(
                 """
                 UPDATE workflow.audiobook_conversion c
@@ -125,7 +142,6 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
                 WHERE c.state = 'PREPARING' AND EXISTS (
                     SELECT 1
                     FROM workflow.narration_plan_work w
-                    JOIN narration.narration_plan n ON n.conversion_id = w.conversion_id
                     WHERE w.conversion_id = c.conversion_id AND w.state = 'SUCCEEDED'
                 )
                 """);

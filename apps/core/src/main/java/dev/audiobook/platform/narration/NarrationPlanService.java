@@ -8,6 +8,8 @@ public interface NarrationPlanService {
 
     void prepare(UUID listenerId, UUID conversionId, InputStream admittedEpub);
 
+    List<UUID> existingPlanConversionIds(List<UUID> conversionIds);
+
     PlanView plan(UUID listenerId, UUID conversionId);
 
     record PlanView(List<ChapterView> chapters, boolean normalProseEditable) {

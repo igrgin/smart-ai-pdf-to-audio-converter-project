@@ -36,10 +36,8 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
                 SELECT o.message_id, w.work_id
                 FROM workflow.narration_plan_work w
                 JOIN workflow.narration_plan_outbox o ON o.work_id = w.work_id
-                JOIN workflow.audiobook_conversion c ON c.conversion_id = w.conversion_id
-                LEFT JOIN narration.narration_plan n ON n.conversion_id = c.conversion_id
                 WHERE (w.state = 'READY' OR (w.state = 'CLAIMED' AND w.lease_expires_at <= ?))
-                  AND w.attempt_count < ? AND c.state = 'PREPARING' AND n.conversion_id IS NULL
+                  AND w.attempt_count < ?
                 ORDER BY w.created_at, w.work_id
                 LIMIT ?
                 """,

@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.UUID;
 import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
@@ -156,7 +157,7 @@ class NarrationPlanITest {
         assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
         assertThat(conversionService.conversion(listenerId, conversionId).state())
                 .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
-        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
                         """
                         SELECT count(*) FROM workflow.narration_plan_work w
@@ -222,7 +223,7 @@ class NarrationPlanITest {
                 .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
 
         assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
-        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
         assertThat(conversionService.conversion(listenerId, conversionId).state())
                 .isEqualTo(AudiobookConversionService.ConversionState.AWAITING_REVIEW);
     }
@@ -244,7 +245,7 @@ class NarrationPlanITest {
                 coordinates.messageId(),
                 coordinates.workId());
 
-        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults(List.of(conversionId))).isEqualTo(1);
         assertThat(conversionService.conversion(listenerId, conversionId).state())
                 .isEqualTo(AudiobookConversionService.ConversionState.AWAITING_REVIEW);
         assertThat(jdbcTemplate.queryForObject(
@@ -314,7 +315,7 @@ class NarrationPlanITest {
         }
 
         assertThat(narrationPlanJobService.processPending()).isZero();
-        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
                         """
                         SELECT state || ':' || attempt_count
