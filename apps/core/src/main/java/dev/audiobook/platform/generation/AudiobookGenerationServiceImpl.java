@@ -4,10 +4,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
+import dev.audiobook.platform.library.PrivateAudiobookLibraryService;
 import dev.audiobook.platform.narration.NarrationPlanAssetStore;
 import dev.audiobook.platform.narration.NarrationReviewAssetStore;
 import dev.audiobook.platform.narration.NarrationReviewService;
+import dev.audiobook.platform.narration.NarrationSelectionService;
 import dev.audiobook.platform.narration.PublicationNarrationPlanInterpreter;
+import dev.audiobook.platform.workflow.AudiobookConversionFinalizationService;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -26,7 +29,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -46,9 +48,12 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
     private final NarrationReviewAssetStore narrationReviewAssetStore;
     private final AudiobookAssetStore audiobookAssetStore;
     private final SpeechSegmentationService segmentationService;
+    private final NarrationSelectionService narrationSelectionService;
     private final SpeechProvider speechProvider;
     private final SpeechResultValidationService validationService;
     private final AudioPackagingService packagingService;
+    private final PrivateAudiobookLibraryService privateAudiobookLibraryService;
+    private final AudiobookConversionFinalizationService conversionFinalizationService;
     private final PlatformIdentifierGenerator identifierGenerator;
     private final AudioGenerationProperties properties;
     private final Clock identityClock;
@@ -165,6 +170,12 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
             return replay;
         }
         StoredSegment segment = storedSegment(listenerId, conversionId, operationKey);
+        NarrationSelectionService.GenerationAuthorization authorization =
+                narrationSelectionService.authorizeGeneration(listenerId, conversionId);
+        if (!authorization.recipeId().equals(segment.recipeId())
+                || !authorization.recipeDigest().equals(segment.recipeDigest())) {
+            throw new IllegalStateException("Frozen Generation Recipe is no longer eligible");
+        }
         int attemptNumber = jdbcTemplate.queryForObject(
                 """
                 UPDATE generation.speech_segment
@@ -283,24 +294,20 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
         if (accepted.size() != manifest.segmentCount()) {
             throw new IllegalStateException("Speech segment manifest is not complete");
         }
+        validatePersistedManifest(manifest);
         validateGapless(accepted, manifest.segmentCount());
-        beginFinalizing(listenerId, conversionId);
+        conversionFinalizationService.beginFinalizing(listenerId, conversionId);
         List<AudioPackagingService.Chapter> chapters = packagingChapters(accepted);
         AudioPackagingService.PackagingResult packaged = packagingService.packageAudiobook(
                 new AudioPackagingService.PackagingRequest(
-                        conversionId, manifest.recipeDigest(), chapters));
+                        conversionId,
+                        manifest.recipeDigest(),
+                        manifest.audioPolicyVersion(),
+                        manifest.toolchainVersion(),
+                        chapters));
         PreparedFinalization prepared = writeAndVerifyFinalAssets(
                 listenerId, conversionId, manifest, packaged);
         return transaction().execute(status -> publishFinalization(listenerId, conversionId, prepared));
-    }
-
-    @Override
-    public PrivateAudiobook generateAndFinalize(UUID listenerId, UUID conversionId) {
-        GenerationManifest manifest = prepare(listenerId, conversionId);
-        for (Segment segment : manifest.segments()) {
-            generateSegment(listenerId, conversionId, segment.operationKey());
-        }
-        return finalizeAudiobook(listenerId, conversionId);
     }
 
     private PublicationNarrationPlanInterpreter.NarrationPlan readNarrationPlan(StoredInputs inputs) {
@@ -442,7 +449,7 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
         List<StoredSegment> matches = jdbcTemplate.query(
                 """
                 SELECT s.segment_id, s.spoken_text_ref, s.spoken_text_sha256,
-                       m.recipe_digest, gr.endpoint, gr.model_snapshot, gr.region,
+                       gr.recipe_id, m.recipe_digest, gr.endpoint, gr.model_snapshot, gr.region,
                        gr.provider_voice, gr.native_controls::text AS native_controls
                 FROM generation.speech_segment s
                 JOIN generation.segment_manifest m ON m.manifest_id = s.manifest_id
@@ -453,6 +460,7 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                         resultSet.getString("segment_id"),
                         resultSet.getString("spoken_text_ref"),
                         resultSet.getString("spoken_text_sha256"),
+                        resultSet.getObject("recipe_id", UUID.class),
                         resultSet.getString("recipe_digest"),
                         resultSet.getString("endpoint"),
                         resultSet.getString("model_snapshot"),
@@ -536,10 +544,12 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
     private StoredManifest storedManifest(UUID listenerId, UUID conversionId) {
         List<StoredManifest> matches = jdbcTemplate.query(
                 """
-                SELECT manifest_id, recipe_id, recipe_digest, manifest_digest,
-                       segment_count, created_at
-                FROM generation.segment_manifest
-                WHERE listener_id = ? AND conversion_id = ?
+                SELECT m.manifest_id, m.recipe_id, m.recipe_digest, m.manifest_digest,
+                       m.segment_count, m.created_at, m.segmentation_policy_version,
+                       gr.audio_policy_version, gr.toolchain_version
+                FROM generation.segment_manifest m
+                JOIN narration.generation_recipe gr ON gr.recipe_id = m.recipe_id
+                WHERE m.listener_id = ? AND m.conversion_id = ?
                 """,
                 (resultSet, row) -> new StoredManifest(
                         resultSet.getObject("manifest_id", UUID.class),
@@ -547,7 +557,10 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                         resultSet.getString("recipe_digest"),
                         resultSet.getString("manifest_digest"),
                         resultSet.getInt("segment_count"),
-                        resultSet.getTimestamp("created_at").toInstant()),
+                        resultSet.getTimestamp("created_at").toInstant(),
+                        resultSet.getString("segmentation_policy_version"),
+                        resultSet.getString("audio_policy_version"),
+                        resultSet.getString("toolchain_version")),
                 listenerId,
                 conversionId);
         if (matches.isEmpty()) {
@@ -582,6 +595,30 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                 conversionId);
     }
 
+    private void validatePersistedManifest(StoredManifest manifest) {
+        List<SpeechSegmentationService.ManifestEntry> entries = jdbcTemplate.query(
+                """
+                SELECT chapter_ordinal, segment_ordinal, spoken_text_sha256,
+                       boundary_kind, character_count
+                FROM generation.speech_segment
+                WHERE manifest_id = ?
+                ORDER BY chapter_ordinal, segment_ordinal
+                """,
+                (resultSet, row) -> new SpeechSegmentationService.ManifestEntry(
+                        resultSet.getInt("chapter_ordinal"),
+                        resultSet.getInt("segment_ordinal"),
+                        resultSet.getString("spoken_text_sha256"),
+                        SpeechSegmentationService.BoundaryKind.valueOf(resultSet.getString("boundary_kind")),
+                        resultSet.getInt("character_count")),
+                manifest.manifestId());
+        String actual = segmentationService.manifestDigest(manifest.segmentationPolicyVersion(), entries);
+        if (!MessageDigest.isEqual(
+                actual.getBytes(StandardCharsets.US_ASCII),
+                manifest.manifestDigest().getBytes(StandardCharsets.US_ASCII))) {
+            throw new IllegalStateException("Persisted speech segment manifest integrity check failed");
+        }
+    }
+
     private static void validateGapless(List<StoredAcceptedPcm> accepted, int expectedCount) {
         if (accepted.size() != expectedCount) {
             throw new IllegalStateException("Speech segment manifest is not complete");
@@ -595,32 +632,6 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
             }
             if (pcm.chapterOrdinal() != chapter || pcm.segmentOrdinal() != segment++) {
                 throw new IllegalStateException("Speech segment manifest is not gapless");
-            }
-        }
-    }
-
-    private void beginFinalizing(UUID listenerId, UUID conversionId) {
-        int updated = jdbcTemplate.update(
-                """
-                UPDATE workflow.audiobook_conversion
-                SET state = 'FINALIZING', reason_code = 'FINAL_AUDIOBOOK_VALIDATION', version = version + 1
-                WHERE listener_id = ? AND conversion_id = ? AND state = 'GENERATING'
-                """,
-                listenerId,
-                conversionId);
-        if (updated == 0) {
-            String state;
-            try {
-                state = jdbcTemplate.queryForObject(
-                        "SELECT state FROM workflow.audiobook_conversion WHERE listener_id = ? AND conversion_id = ?",
-                        String.class,
-                        listenerId,
-                        conversionId);
-            } catch (EmptyResultDataAccessException exception) {
-                throw new IllegalStateException("Audiobook Conversion is unavailable", exception);
-            }
-            if (!"FINALIZING".equals(state)) {
-                throw new IllegalStateException("Audiobook Conversion cannot be finalized");
             }
         }
     }
@@ -737,38 +748,14 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
         if (replay != null) {
             return replay;
         }
-        List<String> states = jdbcTemplate.query(
-                """
-                SELECT state FROM workflow.audiobook_conversion
-                WHERE listener_id = ? AND conversion_id = ? FOR UPDATE
-                """,
-                (resultSet, row) -> resultSet.getString("state"),
-                listenerId,
-                conversionId);
-        if (states.isEmpty() || !"FINALIZING".equals(states.getFirst())) {
-            throw new IllegalStateException("Audiobook Conversion is not ready for visibility-last Finalization");
-        }
-        Timestamp now = Timestamp.from(identityClock.instant());
-        jdbcTemplate.update(
-                """
-                INSERT INTO library.private_audiobook (
-                    audiobook_id, listener_id, conversion_id, availability, created_at
-                ) VALUES (?, ?, ?, 'AVAILABLE', ?)
-                """,
-                prepared.audiobookId(), listenerId, conversionId, now);
+        conversionFinalizationService.lockAndRequireFinalizing(listenerId, conversionId);
+        Instant now = identityClock.instant();
         AudioPackagingService.PackagingResult packaged = prepared.packaged();
-        jdbcTemplate.update(
-                """
-                INSERT INTO library.audiobook_asset_version (
-                    asset_version_id, audiobook_id, listener_id, generation_recipe_id,
-                    recipe_digest, manifest_object_key, manifest_digest,
-                    packaging_profile_version, total_duration_ms, total_bytes,
-                    integrated_loudness_lufs, true_peak_dbtp, applied_gain_db, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                prepared.assetVersionId(),
-                prepared.audiobookId(),
+        privateAudiobookLibraryService.publish(new PrivateAudiobookLibraryService.Publication(
                 listenerId,
+                conversionId,
+                prepared.audiobookId(),
+                prepared.assetVersionId(),
                 prepared.recipeId(),
                 prepared.recipeDigest(),
                 prepared.manifestObjectKey(),
@@ -779,61 +766,26 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                 packaged.integratedLoudnessLufs(),
                 packaged.truePeakDbtp(),
                 packaged.appliedGainDb(),
-                now);
-        for (PreparedChapter chapter : prepared.chapters()) {
-            jdbcTemplate.update(
-                    """
-                    INSERT INTO library.audiobook_chapter (
-                        chapter_id, asset_version_id, listener_id, chapter_ordinal,
-                        display_title, start_ms, duration_ms
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    chapter.chapterId(),
-                    prepared.assetVersionId(),
-                    listenerId,
-                    chapter.ordinal(),
-                    chapter.displayTitle(),
-                    chapter.startMs(),
-                    chapter.durationMs());
-            for (PreparedPart part : chapter.parts()) {
-                jdbcTemplate.update(
-                        """
-                        INSERT INTO library.final_asset_part (
-                            part_id, chapter_id, asset_version_id, listener_id,
-                            chapter_ordinal, part_ordinal, object_key, mime_type,
-                            byte_length, duration_ms, sha256
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        part.partId(),
-                        chapter.chapterId(),
-                        prepared.assetVersionId(),
-                        listenerId,
-                        chapter.ordinal(),
-                        part.ordinal(),
-                        part.objectKey(),
-                        part.mimeType(),
-                        part.byteLength(),
-                        part.durationMs(),
-                        part.sha256());
-            }
-        }
-        jdbcTemplate.update(
-                """
-                UPDATE library.private_audiobook
-                SET current_asset_version_id = ?
-                WHERE audiobook_id = ? AND listener_id = ?
-                """,
-                prepared.assetVersionId(),
-                prepared.audiobookId(),
-                listenerId);
-        jdbcTemplate.update(
-                """
-                UPDATE workflow.audiobook_conversion
-                SET state = 'FINALIZED', reason_code = 'PRIVATE_AUDIOBOOK_AVAILABLE', version = version + 1
-                WHERE listener_id = ? AND conversion_id = ? AND state = 'FINALIZING'
-                """,
-                listenerId,
-                conversionId);
+                now,
+                prepared.chapters().stream()
+                        .map(chapter -> new PrivateAudiobookLibraryService.Chapter(
+                                chapter.chapterId(),
+                                chapter.ordinal(),
+                                chapter.displayTitle(),
+                                chapter.startMs(),
+                                chapter.durationMs(),
+                                chapter.parts().stream()
+                                        .map(part -> new PrivateAudiobookLibraryService.Part(
+                                                part.partId(),
+                                                part.ordinal(),
+                                                part.objectKey(),
+                                                part.mimeType(),
+                                                part.byteLength(),
+                                                part.durationMs(),
+                                                part.sha256()))
+                                        .toList()))
+                        .toList()));
+        conversionFinalizationService.markFinalized(listenerId, conversionId);
         jdbcTemplate.update(
                 """
                 INSERT INTO generation.working_asset_erasure_obligation (
@@ -843,8 +795,8 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                 identifierGenerator.generate(),
                 listenerId,
                 conversionId,
-                now,
-                Timestamp.from(now.toInstant().plus(properties.workingAssetRetention())));
+                Timestamp.from(now),
+                Timestamp.from(now.plus(properties.workingAssetRetention())));
         return new PrivateAudiobook(
                 prepared.audiobookId(),
                 prepared.assetVersionId(),
@@ -854,24 +806,16 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
     }
 
     private PrivateAudiobook privateAudiobook(UUID listenerId, UUID conversionId) {
-        List<PrivateAudiobook> matches = jdbcTemplate.query(
-                """
-                SELECT pa.audiobook_id, pa.current_asset_version_id, pa.availability,
-                       av.manifest_digest, av.total_duration_ms
-                FROM library.private_audiobook pa
-                JOIN library.audiobook_asset_version av
-                  ON av.asset_version_id = pa.current_asset_version_id
-                WHERE pa.listener_id = ? AND pa.conversion_id = ?
-                """,
-                (resultSet, row) -> new PrivateAudiobook(
-                        resultSet.getObject("audiobook_id", UUID.class),
-                        resultSet.getObject("current_asset_version_id", UUID.class),
-                        resultSet.getString("availability"),
-                        resultSet.getString("manifest_digest"),
-                        resultSet.getLong("total_duration_ms")),
-                listenerId,
-                conversionId);
-        return matches.isEmpty() ? null : matches.getFirst();
+        PrivateAudiobookLibraryService.PrivateAudiobook audiobook =
+                privateAudiobookLibraryService.find(listenerId, conversionId);
+        return audiobook == null
+                ? null
+                : new PrivateAudiobook(
+                        audiobook.audiobookId(),
+                        audiobook.assetVersionId(),
+                        audiobook.availability(),
+                        audiobook.manifestDigest(),
+                        audiobook.totalDurationMs());
     }
 
     private GenerationManifest existingManifest(UUID listenerId, UUID conversionId) {
@@ -995,6 +939,7 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
             String segmentId,
             String spokenTextReference,
             String spokenTextDigest,
+            UUID recipeId,
             String recipeDigest,
             String endpoint,
             String model,
@@ -1012,7 +957,10 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
             String recipeDigest,
             String manifestDigest,
             int segmentCount,
-            Instant createdAt) {
+            Instant createdAt,
+            String segmentationPolicyVersion,
+            String audioPolicyVersion,
+            String toolchainVersion) {
     }
 
     private record StoredAcceptedPcm(

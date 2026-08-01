@@ -8,21 +8,29 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
 public class SpeechProviderImpl implements SpeechProvider {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper().findAndRegisterModules();
+    private static final java.net.URI APPROVED_SPEECH_ENDPOINT =
+            java.net.URI.create("https://eu.api.openai.com/v1/audio/speech");
 
     private final AudioGenerationProperties properties;
     private final HttpClient httpClient;
 
+    @Autowired
     public SpeechProviderImpl(AudioGenerationProperties properties) {
-        this.properties = properties;
-        this.httpClient = HttpClient.newBuilder()
+        this(properties, HttpClient.newBuilder()
                 .connectTimeout(properties.commandTimeout())
-                .build();
+                .build());
+    }
+
+    SpeechProviderImpl(AudioGenerationProperties properties, HttpClient httpClient) {
+        this.properties = properties;
+        this.httpClient = httpClient;
     }
 
     @Override
@@ -73,14 +81,14 @@ public class SpeechProviderImpl implements SpeechProvider {
         }
     }
 
-    private static String body(SpeechRequest request) {
+    static String body(SpeechRequest request) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", request.model());
         body.put("voice", request.voice());
         body.put("input", request.spokenText());
         body.put("instructions", request.instructions());
         body.put("speed", request.speed());
-        body.put("response_format", "pcm");
+        body.put("response_format", "wav");
         try {
             return OBJECT_MAPPER.writeValueAsString(body);
         } catch (JsonProcessingException exception) {
@@ -92,7 +100,7 @@ public class SpeechProviderImpl implements SpeechProvider {
     private static void validate(SpeechRequest request) {
         if (request == null
                 || request.endpoint() == null
-                || !"https".equalsIgnoreCase(request.endpoint().getScheme())
+                || !APPROVED_SPEECH_ENDPOINT.equals(request.endpoint())
                 || blank(request.model())
                 || blank(request.region())
                 || blank(request.voice())

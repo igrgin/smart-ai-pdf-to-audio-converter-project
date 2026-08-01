@@ -41,11 +41,60 @@ public class SpeechSegmentationServiceImpl implements SpeechSegmentationService 
             }
         }
 
-        String manifestDigest = sha256(canonicalManifest(request.policyVersion(), ordered));
+        String manifestDigest = manifestDigest(
+                request.policyVersion(),
+                ordered.stream()
+                        .map(segment -> new ManifestEntry(
+                                segment.chapterOrdinal(),
+                                segment.segmentOrdinal(),
+                                segment.spokenTextDigest(),
+                                segment.boundaryKind(),
+                                segment.spokenText().length()))
+                        .toList());
         List<Segment> segments = ordered.stream()
                 .map(segment -> identify(request, segment))
                 .toList();
         return new Manifest(manifestDigest, segments);
+    }
+
+    @Override
+    public String manifestDigest(String policyVersion, List<ManifestEntry> entries) {
+        if (policyVersion == null || policyVersion.isBlank() || entries == null || entries.isEmpty()) {
+            throw new IllegalArgumentException("Persisted segment manifest is invalid");
+        }
+        if (entries.getFirst() == null
+                || entries.getFirst().chapterOrdinal() != 0
+                || entries.getFirst().segmentOrdinal() != 0) {
+            throw new IllegalArgumentException("Persisted segment manifest must begin at the first chapter");
+        }
+        StringBuilder canonical = new StringBuilder();
+        append(canonical, policyVersion);
+        int chapter = 0;
+        int segment = 0;
+        for (ManifestEntry entry : entries) {
+            if (entry == null
+                    || entry.chapterOrdinal() < chapter
+                    || entry.chapterOrdinal() > chapter + 1
+                    || (entry.chapterOrdinal() == chapter && entry.segmentOrdinal() != segment)
+                    || (entry.chapterOrdinal() == chapter + 1 && entry.segmentOrdinal() != 0)
+                    || entry.spokenTextDigest() == null
+                    || !entry.spokenTextDigest().matches("[0-9a-f]{64}")
+                    || entry.boundaryKind() == null
+                    || entry.characterCount() < 1) {
+                throw new IllegalArgumentException("Persisted segment manifest is not gapless or canonical");
+            }
+            if (entry.chapterOrdinal() == chapter + 1) {
+                chapter++;
+                segment = 0;
+            }
+            append(canonical, Integer.toString(entry.chapterOrdinal()));
+            append(canonical, Integer.toString(entry.segmentOrdinal()));
+            append(canonical, entry.spokenTextDigest());
+            append(canonical, entry.boundaryKind().name());
+            append(canonical, Integer.toString(entry.characterCount()));
+            segment++;
+        }
+        return sha256(canonical.toString());
     }
 
     private static Segment identify(SegmentationRequest request, UnidentifiedSegment segment) {
@@ -123,19 +172,6 @@ public class SpeechSegmentationServiceImpl implements SpeechSegmentationService 
         graphemes.setText(text);
         int boundary = graphemes.preceding(limit + 1);
         return boundary == BreakIterator.DONE ? limit : boundary;
-    }
-
-    private static String canonicalManifest(String policyVersion, List<UnidentifiedSegment> segments) {
-        StringBuilder canonical = new StringBuilder();
-        append(canonical, policyVersion);
-        for (UnidentifiedSegment segment : segments) {
-            append(canonical, Integer.toString(segment.chapterOrdinal()));
-            append(canonical, Integer.toString(segment.segmentOrdinal()));
-            append(canonical, segment.spokenTextDigest());
-            append(canonical, segment.boundaryKind().name());
-            append(canonical, Integer.toString(segment.spokenText().length()));
-        }
-        return canonical.toString();
     }
 
     private static void append(StringBuilder target, String value) {

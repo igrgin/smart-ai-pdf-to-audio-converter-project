@@ -7,6 +7,8 @@ public interface SpeechSegmentationService {
 
     Manifest segment(SegmentationRequest request);
 
+    String manifestDigest(String policyVersion, List<ManifestEntry> entries);
+
     record SegmentationRequest(
             UUID conversionId,
             String recipeDigest,
@@ -39,6 +41,14 @@ public interface SpeechSegmentationService {
             int chapterOrdinal,
             int segmentOrdinal,
             String spokenText,
+            String spokenTextDigest,
+            BoundaryKind boundaryKind,
+            int characterCount) {
+    }
+
+    record ManifestEntry(
+            int chapterOrdinal,
+            int segmentOrdinal,
             String spokenTextDigest,
             BoundaryKind boundaryKind,
             int characterCount) {

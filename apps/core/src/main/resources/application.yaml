@@ -79,7 +79,6 @@ platform:
     working-bucket: ${WORKING_BUCKET:local-working}
     final-bucket: ${FINALIZED_BUCKET:local-final}
     maximum-segment-characters: 3800
-    open-ai-api-key: ${OPENAI_API_KEY:}
     ffmpeg-command: ${FFMPEG_COMMAND:ffmpeg}
     command-timeout: 2m
     sample-rate: 24000

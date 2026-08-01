@@ -27,6 +27,7 @@ platform:
   generation:
     working-bucket: ${WORKING_BUCKET}
     final-bucket: ${FINALIZED_BUCKET}
+    open-ai-api-key: ${OPENAI_API_KEY:}
   demonstration-subscription:
     webhook-secret: ${STRIPE_WEBHOOK_SECRET}
     monthly-price-id: ${STRIPE_DEMONSTRATION_MONTHLY_PRICE_ID}

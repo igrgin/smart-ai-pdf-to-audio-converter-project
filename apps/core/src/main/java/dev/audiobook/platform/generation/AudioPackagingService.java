@@ -7,7 +7,12 @@ public interface AudioPackagingService {
 
     PackagingResult packageAudiobook(PackagingRequest request);
 
-    record PackagingRequest(UUID conversionId, String recipeDigest, List<Chapter> chapters) {
+    record PackagingRequest(
+            UUID conversionId,
+            String recipeDigest,
+            String audioPolicyVersion,
+            String toolchainVersion,
+            List<Chapter> chapters) {
         public PackagingRequest {
             chapters = chapters == null ? List.of() : List.copyOf(chapters);
         }

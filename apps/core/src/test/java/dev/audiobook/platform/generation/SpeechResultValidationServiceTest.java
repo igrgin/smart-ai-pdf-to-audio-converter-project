@@ -2,14 +2,18 @@ package dev.audiobook.platform.generation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
 
-import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 class SpeechResultValidationServiceTest {
 
-    private final SpeechResultValidationService service = new SpeechResultValidationServiceImpl(
-            AudioGenerationProperties.defaults(Path.of("working"), Path.of("final")));
+    private final AudioGenerationProperties properties =
+            AudioGenerationProperties.defaults(java.nio.file.Path.of("working"), java.nio.file.Path.of("final"));
+    private final CanonicalSpeechDecoder decoder = mock(CanonicalSpeechDecoder.class);
+    private final SpeechResultValidationService service =
+            new SpeechResultValidationServiceImpl(properties, decoder);
 
     @Test
     void validFrozenRouteRawPcmBecomesCanonicalPcm() {
@@ -20,9 +24,12 @@ class SpeechResultValidationServiceTest {
             pcm[index + 1] = (byte) ((sample >>> 8) & 0xff);
         }
 
+        byte[] providerAudio = new byte[] {82, 73, 70, 70};
+        given(decoder.decode(providerAudio)).willReturn(pcm);
+
         SpeechResultValidationService.ValidatedPcm result = service.validate(
                 new SpeechResultValidationService.ExpectedRoute("model-v1", "eu", "cedar"),
-                new SpeechProvider.SpeechResult("request-1", "model-v1", "eu", "cedar", pcm));
+                new SpeechProvider.SpeechResult("request-1", "model-v1", "eu", "cedar", providerAudio));
 
         assertThat(result.bytes()).containsExactly(pcm);
         assertThat(result.byteLength()).isEqualTo(48_000);
@@ -34,6 +41,11 @@ class SpeechResultValidationServiceTest {
     void providerDriftAndInvalidPcmFailClosed() {
         SpeechResultValidationService.ExpectedRoute route =
                 new SpeechResultValidationService.ExpectedRoute("model-v1", "eu", "cedar");
+        byte[] malformedAudio = new byte[] {1, 2, 3};
+        given(decoder.decode(malformedAudio)).willThrow(new SpeechValidationException(
+                SpeechValidationException.Code.INVALID_PCM));
+        byte[] silence = new byte[48_000];
+        given(decoder.decode(silence)).willReturn(silence);
 
         assertThatThrownBy(() -> service.validate(
                         route,
@@ -45,7 +57,7 @@ class SpeechResultValidationServiceTest {
         assertThatThrownBy(() -> service.validate(
                         route,
                         new SpeechProvider.SpeechResult(
-                                "request-3", "model-v1", "eu", "cedar", new byte[] {1, 2, 3})))
+                                "request-3", "model-v1", "eu", "cedar", malformedAudio)))
                 .isInstanceOf(SpeechValidationException.class)
                 .extracting(exception -> ((SpeechValidationException) exception).code())
                 .isEqualTo(SpeechValidationException.Code.INVALID_PCM);

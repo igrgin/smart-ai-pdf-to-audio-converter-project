@@ -40,6 +40,17 @@ class SpeechSegmentationServiceTest {
 
         assertThat(replay).isEqualTo(first);
         assertThat(first.manifestDigest()).matches("[0-9a-f]{64}");
+        assertThat(service.manifestDigest(
+                        "plan-v1",
+                        first.segments().stream()
+                                .map(segment -> new SpeechSegmentationService.ManifestEntry(
+                                        segment.chapterOrdinal(),
+                                        segment.segmentOrdinal(),
+                                        segment.spokenTextDigest(),
+                                        segment.boundaryKind(),
+                                        segment.characterCount()))
+                                .toList()))
+                .isEqualTo(first.manifestDigest());
         assertThat(first.segments())
                 .extracting(
                         SpeechSegmentationService.Segment::chapterOrdinal,

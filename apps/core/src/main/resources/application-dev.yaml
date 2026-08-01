@@ -10,6 +10,8 @@ server:
         secure: false
 
 platform:
+  generation:
+    open-ai-api-key: ${OPENAI_API_KEY:}
   identity:
     secure-session-cookie: false
 

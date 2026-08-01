@@ -43,10 +43,17 @@ class AudiobookGenerationITest {
     private final AudiobookConversionService conversionService;
     private final NarrationPlanAssetStore planAssetStore;
     private final AudiobookAssetStore audiobookAssetStore;
+    private final AudiobookGenerationWorkerService workerService;
     private final JdbcTemplate jdbcTemplate;
 
     @MockitoBean
     private SpeechProvider speechProvider;
+
+    @MockitoBean
+    private CanonicalSpeechDecoder speechDecoder;
+
+    @MockitoBean
+    private AudioPackagingService packagingService;
 
     @Autowired
     AudiobookGenerationITest(
@@ -57,6 +64,7 @@ class AudiobookGenerationITest {
             AudiobookConversionService conversionService,
             NarrationPlanAssetStore planAssetStore,
             AudiobookAssetStore audiobookAssetStore,
+            AudiobookGenerationWorkerService workerService,
             JdbcTemplate jdbcTemplate) {
         this.generationService = generationService;
         this.listenerIdentityService = listenerIdentityService;
@@ -65,6 +73,7 @@ class AudiobookGenerationITest {
         this.conversionService = conversionService;
         this.planAssetStore = planAssetStore;
         this.audiobookAssetStore = audiobookAssetStore;
+        this.workerService = workerService;
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -80,6 +89,8 @@ class AudiobookGenerationITest {
                     request.voice(),
                     sine(3_000, 220 + Math.abs(request.spokenText().hashCode() % 200)));
         });
+        given(speechDecoder.decode(any())).willAnswer(invocation -> invocation.getArgument(0));
+        given(packagingService.packageAudiobook(any())).willReturn(packagedAudiobook());
 
         AudiobookGenerationService.GenerationManifest manifest =
                 generationService.prepare(conversion.listenerId(), conversion.conversionId());
@@ -155,6 +166,7 @@ class AudiobookGenerationITest {
             return new SpeechProvider.SpeechResult(
                     "provider-drift", "unapproved-model", request.region(), request.voice(), sine(3_000, 220));
         });
+        given(speechDecoder.decode(any())).willAnswer(invocation -> invocation.getArgument(0));
 
         assertThatThrownBy(() -> generationService.generateSegment(
                         drift.listenerId(), drift.conversionId(), manifest.segments().getFirst().operationKey()))
@@ -165,6 +177,47 @@ class AudiobookGenerationITest {
                         drift.conversionId()))
                 .isEqualTo("FAILED");
         assertThat(audiobookCount(drift.conversionId())).isZero();
+    }
+
+    @Test
+    void persistedManifestRowsCannotDriftAfterPreparation() throws Exception {
+        Conversion conversion = approvedGeneratingConversion("immutable-manifest");
+        AudiobookGenerationService.GenerationManifest manifest =
+                generationService.prepare(conversion.listenerId(), conversion.conversionId());
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                        "UPDATE generation.speech_segment SET segment_ordinal = 9 WHERE operation_key = ?",
+                        manifest.segments().getFirst().operationKey()))
+                .isInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                        "UPDATE generation.audiobook_chapter_plan SET display_title = 'Drifted' WHERE conversion_id = ?",
+                        conversion.conversionId()))
+                .isInstanceOf(org.springframework.dao.DataAccessException.class);
+    }
+
+    @Test
+    void workersPollGenerationThenPublishOnlyAfterEverySegmentIsAccepted() throws Exception {
+        Conversion conversion = approvedGeneratingConversion("worker-polling");
+        jdbcTemplate.update(
+                "UPDATE workflow.audiobook_conversion SET state = 'FAILED' WHERE conversion_id <> ? AND state IN ('GENERATING', 'FINALIZING')",
+                conversion.conversionId());
+        given(speechProvider.synthesize(any())).willAnswer(invocation -> {
+            SpeechProvider.SpeechRequest request = invocation.getArgument(0);
+            return new SpeechProvider.SpeechResult(
+                    "provider-worker",
+                    request.model(),
+                    request.region(),
+                    request.voice(),
+                    sine(1_000, 330));
+        });
+        given(speechDecoder.decode(any())).willAnswer(invocation -> invocation.getArgument(0));
+        given(packagingService.packageAudiobook(any())).willReturn(packagedAudiobook());
+
+        assertThat(workerService.generatePending()).isOne();
+        assertThat(workerService.packageAndFinalizePending()).isOne();
+        assertThat(workerService.generatePending()).isZero();
+        assertThat(workerService.packageAndFinalizePending()).isZero();
+        assertThat(audiobookCount(conversion.conversionId())).isOne();
     }
 
     private Conversion approvedGeneratingConversion(String suffix) throws Exception {
@@ -284,6 +337,26 @@ class AudiobookGenerationITest {
                 "SELECT count(*) FROM library.private_audiobook WHERE conversion_id = ?",
                 Integer.class,
                 conversionId);
+    }
+
+    private static AudioPackagingService.PackagingResult packagedAudiobook() {
+        byte[] mp3 = new byte[] {73, 68, 51, 29};
+        String digest = SpeechSegmentationServiceImpl.sha256Bytes(mp3);
+        return new AudioPackagingService.PackagingResult(
+                "mono-24k-mp3-v1",
+                List.of(new AudioPackagingService.PackagedChapter(
+                        0,
+                        "A private chapter",
+                        0,
+                        6_000,
+                        List.of(new AudioPackagingService.PackagedPart(
+                                0, "audio/mpeg", mp3, mp3.length, 6_000, digest)))),
+                6_000,
+                mp3.length,
+                -18.0,
+                -1.5,
+                0.0,
+                "b".repeat(64));
     }
 
     private static byte[] sine(int durationMs, double frequency) {

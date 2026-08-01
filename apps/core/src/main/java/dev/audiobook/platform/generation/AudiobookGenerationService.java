@@ -11,8 +11,6 @@ public interface AudiobookGenerationService {
 
     PrivateAudiobook finalizeAudiobook(UUID listenerId, UUID conversionId);
 
-    PrivateAudiobook generateAndFinalize(UUID listenerId, UUID conversionId);
-
     record GenerationManifest(UUID manifestId, String manifestDigest, List<Segment> segments) {
         public GenerationManifest {
             segments = List.copyOf(segments);

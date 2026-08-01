@@ -185,8 +185,37 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE FUNCTION generation.reject_speech_segment_drift() RETURNS trigger AS $$
+BEGIN
+    IF NEW.segment_id = OLD.segment_id
+       AND NEW.manifest_id = OLD.manifest_id
+       AND NEW.listener_id = OLD.listener_id
+       AND NEW.conversion_id = OLD.conversion_id
+       AND NEW.chapter_ordinal = OLD.chapter_ordinal
+       AND NEW.segment_ordinal = OLD.segment_ordinal
+       AND NEW.operation_key = OLD.operation_key
+       AND NEW.spoken_text_ref = OLD.spoken_text_ref
+       AND NEW.spoken_text_sha256 = OLD.spoken_text_sha256
+       AND NEW.character_count = OLD.character_count
+       AND NEW.boundary_kind = OLD.boundary_kind
+       AND NEW.created_at = OLD.created_at THEN
+        RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'Persisted speech manifest rows are immutable';
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE TRIGGER segment_manifest_immutable
     BEFORE UPDATE OR DELETE OR TRUNCATE ON generation.segment_manifest
+    FOR EACH STATEMENT EXECUTE FUNCTION generation.reject_immutable_mutation();
+CREATE TRIGGER audiobook_chapter_plan_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON generation.audiobook_chapter_plan
+    FOR EACH STATEMENT EXECUTE FUNCTION generation.reject_immutable_mutation();
+CREATE TRIGGER speech_segment_update_guard
+    BEFORE UPDATE ON generation.speech_segment
+    FOR EACH ROW EXECUTE FUNCTION generation.reject_speech_segment_drift();
+CREATE TRIGGER speech_segment_delete_guard
+    BEFORE DELETE OR TRUNCATE ON generation.speech_segment
     FOR EACH STATEMENT EXECUTE FUNCTION generation.reject_immutable_mutation();
 CREATE TRIGGER accepted_segment_immutable
     BEFORE UPDATE OR DELETE OR TRUNCATE ON generation.accepted_segment
@@ -233,13 +262,3 @@ CREATE POLICY audiobook_chapter_listener_policy ON library.audiobook_chapter
     USING (listener_id = NULLIF(current_setting('app.listener_id', true), '')::uuid);
 CREATE POLICY final_asset_part_listener_policy ON library.final_asset_part
     USING (listener_id = NULLIF(current_setting('app.listener_id', true), '')::uuid);
-
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'folio_narration_worker') THEN
-        GRANT USAGE ON SCHEMA generation, library TO folio_narration_worker;
-        GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA generation TO folio_narration_worker;
-        GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA library TO folio_narration_worker;
-    END IF;
-END;
-$$;

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 public class SpeechResultValidationServiceImpl implements SpeechResultValidationService {
 
     private final AudioGenerationProperties properties;
+    private final CanonicalSpeechDecoder speechDecoder;
 
     @Override
     public ValidatedPcm validate(ExpectedRoute expectedRoute, SpeechProvider.SpeechResult result) {
@@ -19,7 +20,7 @@ public class SpeechResultValidationServiceImpl implements SpeechResultValidation
                 || !Objects.equals(expectedRoute.voice(), result.actualVoice())) {
             throw new SpeechValidationException(SpeechValidationException.Code.PROVIDER_DRIFT);
         }
-        byte[] pcm = result.audio();
+        byte[] pcm = speechDecoder.decode(result.audio());
         if (pcm.length < 2
                 || pcm.length % 2 != 0
                 || properties.sampleRate() <= 0

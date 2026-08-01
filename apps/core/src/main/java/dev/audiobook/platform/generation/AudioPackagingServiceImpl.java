@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 public class AudioPackagingServiceImpl implements AudioPackagingService {
 
     private static final String PROFILE_VERSION = "mono-24k-mp3-v1";
+    private static final String TOOLCHAIN_VERSION = "speech-worker-ffmpeg-v1";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper().findAndRegisterModules();
 
     private final AudioGenerationProperties properties;
@@ -54,21 +55,23 @@ public class AudioPackagingServiceImpl implements AudioPackagingService {
             }
 
             List<PackagedChapter> chapters = encodeChapters(scratch, assembly, normalizedPcm);
+            PublishedValidation published = validatePublishedParts(
+                    scratch, chapters, pcmDuration(normalizedPcm.length));
             long totalBytes = chapters.stream()
                     .flatMap(chapter -> chapter.parts().stream())
                     .mapToLong(PackagedPart::byteLength)
                     .sum();
-            long totalDurationMs = pcmDuration(normalizedPcm.length);
+            long totalDurationMs = published.durationMs();
             double appliedGain = outputLoudness.integratedLufs() - inputLoudness.integratedLufs();
             String manifestDigest = manifestDigest(
-                    request.recipeDigest(), chapters, totalDurationMs, totalBytes, outputLoudness);
+                    request.recipeDigest(), chapters, totalDurationMs, totalBytes, published.loudness());
             return new PackagingResult(
                     PROFILE_VERSION,
                     chapters,
                     totalDurationMs,
                     totalBytes,
-                    outputLoudness.integratedLufs(),
-                    outputLoudness.truePeakDbtp(),
+                    published.loudness().integratedLufs(),
+                    published.loudness().truePeakDbtp(),
                     appliedGain,
                     manifestDigest);
         } catch (IOException exception) {
@@ -125,6 +128,7 @@ public class AudioPackagingServiceImpl implements AudioPackagingService {
     private List<PackagedChapter> encodeChapters(Path scratch, Assembly assembly, byte[] normalizedPcm)
             throws IOException {
         List<PackagedChapter> chapters = new ArrayList<>();
+        long publishedStartMs = 0;
         for (ChapterLayout layout : assembly.chapters()) {
             List<PackagedPart> parts = new ArrayList<>();
             int partOrdinal = 0;
@@ -159,14 +163,56 @@ public class AudioPackagingServiceImpl implements AudioPackagingService {
                         durationMs,
                         SpeechSegmentationServiceImpl.sha256Bytes(mp3)));
             }
+            long publishedDurationMs = parts.stream().mapToLong(PackagedPart::durationMs).sum();
             chapters.add(new PackagedChapter(
                     layout.ordinal(),
                     layout.displayTitle(),
-                    pcmDuration(layout.start()),
-                    pcmDuration(layout.end() - layout.start()),
+                    publishedStartMs,
+                    publishedDurationMs,
                     parts));
+            publishedStartMs = Math.addExact(publishedStartMs, publishedDurationMs);
         }
         return List.copyOf(chapters);
+    }
+
+    private PublishedValidation validatePublishedParts(
+            Path scratch, List<PackagedChapter> chapters, long expectedDurationMs) throws IOException {
+        Path concat = scratch.resolve("published-parts.txt");
+        StringBuilder inputs = new StringBuilder();
+        int partCount = 0;
+        for (PackagedChapter chapter : chapters) {
+            for (PackagedPart part : chapter.parts()) {
+                Path path = scratch.resolve("published-" + chapter.ordinal() + "-" + part.ordinal() + ".mp3");
+                Files.write(path, part.bytes());
+                inputs.append("file '")
+                        .append(path.toString().replace("'", "'\\''"))
+                        .append("'\n");
+                partCount++;
+            }
+        }
+        Files.writeString(concat, inputs.toString(), StandardCharsets.UTF_8);
+        CommandResult measurement = run(List.of(
+                properties.ffmpegCommand(),
+                "-hide_banner", "-nostdin", "-y",
+                "-f", "concat", "-safe", "0", "-i", concat.toString(),
+                "-af", loudnessPrefix() + ":print_format=json",
+                "-f", "null", "-"));
+        Loudness loudness = parseLoudness(measurement.output(), "input_i", "input_tp");
+        validateLoudness(loudness);
+
+        Path decoded = scratch.resolve("published-decoded.pcm");
+        run(List.of(
+                properties.ffmpegCommand(),
+                "-hide_banner", "-nostdin", "-y",
+                "-f", "concat", "-safe", "0", "-i", concat.toString(),
+                "-f", "s16le", "-ar", Integer.toString(properties.sampleRate()), "-ac", "1",
+                decoded.toString()));
+        long durationMs = pcmDuration(Files.size(decoded));
+        long toleranceMs = Math.multiplyExact(partCount, 100L);
+        if (durationMs <= 0 || Math.abs(durationMs - expectedDurationMs) > toleranceMs) {
+            throw new AudioPackagingException("Published audiobook duration does not reconcile");
+        }
+        return new PublishedValidation(loudness, durationMs);
     }
 
     private Loudness measure(Path input) {
@@ -324,6 +370,8 @@ public class AudioPackagingServiceImpl implements AudioPackagingService {
         Objects.requireNonNull(request.conversionId(), "conversionId");
         if (request.recipeDigest() == null
                 || !request.recipeDigest().matches("[0-9a-f]{64}")
+                || !PROFILE_VERSION.equals(request.audioPolicyVersion())
+                || !TOOLCHAIN_VERSION.equals(request.toolchainVersion())
                 || request.chapters().isEmpty()) {
             throw new AudioPackagingException("Frozen recipe and accepted chapters are required");
         }
@@ -365,5 +413,8 @@ public class AudioPackagingServiceImpl implements AudioPackagingService {
     }
 
     private record CommandResult(String output) {
+    }
+
+    private record PublishedValidation(Loudness loudness, long durationMs) {
     }
 }
