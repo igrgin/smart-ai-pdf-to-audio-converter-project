@@ -674,7 +674,10 @@ describe("public sample", () => {
     fireEvent.change(screen.getByRole("textbox", { name: /section 1 title/i }), {
       target: { value: "Findings" }
     });
-    fireEvent.click(screen.getByRole("checkbox", { name: /exclude findings/i }));
+    const excludeFindings = await waitFor(() =>
+      screen.getByRole("checkbox", { name: /exclude findings/i })
+    );
+    fireEvent.click(excludeFindings);
     fireEvent.change(screen.getByRole("combobox", { name: /treatment for table in findings/i }), {
       target: { value: "DESCRIBE" }
     });

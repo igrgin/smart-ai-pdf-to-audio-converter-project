@@ -1,3 +1,4 @@
+-- V9 freezes narration reviews before this entitlement projection is introduced.
 CREATE TABLE conversion_entitlement_grant (
     grant_id UUID PRIMARY KEY,
     listener_id UUID NOT NULL REFERENCES listener_identity(listener_id),
