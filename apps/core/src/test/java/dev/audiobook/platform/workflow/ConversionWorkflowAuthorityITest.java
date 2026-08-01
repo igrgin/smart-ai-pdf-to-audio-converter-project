@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
+import dev.audiobook.platform.workflow.internal.ConversionWorkflowAdministrationService;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
@@ -25,6 +26,8 @@ class ConversionWorkflowAuthorityITest {
     private static final UUID CONVERSION_ID = UUID.fromString("01985f42-5f8d-7000-8500-000000000031");
 
     private final ConversionWorkflowService workflowService;
+    private final ConversionLifecycleService lifecycleService;
+    private final ConversionWorkflowAdministrationService administrationService;
     private final AudiobookConversionService conversionService;
     private final ConversionEntitlementService entitlementService;
     private final JdbcTemplate jdbcTemplate;
@@ -32,10 +35,14 @@ class ConversionWorkflowAuthorityITest {
     @Autowired
     ConversionWorkflowAuthorityITest(
             ConversionWorkflowService workflowService,
+            ConversionLifecycleService lifecycleService,
+            ConversionWorkflowAdministrationService administrationService,
             AudiobookConversionService conversionService,
             ConversionEntitlementService entitlementService,
             JdbcTemplate jdbcTemplate) {
         this.workflowService = workflowService;
+        this.lifecycleService = lifecycleService;
+        this.administrationService = administrationService;
         this.conversionService = conversionService;
         this.entitlementService = entitlementService;
         this.jdbcTemplate = jdbcTemplate;
@@ -125,7 +132,7 @@ class ConversionWorkflowAuthorityITest {
                 0,
                 "narration-worker-a",
                 Duration.ofMinutes(10)));
-        workflowService.checkpoint(new ConversionWorkflowService.StageCheckpoint(
+        administrationService.checkpoint(new ConversionWorkflowAdministrationService.StageCheckpoint(
                 acceptedMessageId,
                 CONVERSION_ID,
                 ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
@@ -191,13 +198,13 @@ class ConversionWorkflowAuthorityITest {
                 "ASSEMBLY_HASH_MISMATCH",
                 false));
 
-        var repaired = workflowService.repairStage(
+        var repaired = administrationService.repairStage(
                 LISTENER_ID,
                 CONVERSION_ID,
                 ConversionWorkflowService.Stage.ASSEMBLY,
                 0,
                 "repair-assembly-31");
-        var replayedSpeech = workflowService.acceptedResult(
+        var replayedSpeech = administrationService.acceptedResult(
                 LISTENER_ID,
                 CONVERSION_ID,
                 "speech:" + CONVERSION_ID + ":segment-0");
@@ -225,6 +232,23 @@ class ConversionWorkflowAuthorityITest {
     }
 
     @Test
+    void assemblyCannotClaimBeforeSpeechHasAnImmutableAcceptedResult() {
+        workflowService.scheduleStage(
+                LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.ASSEMBLY, 2);
+
+        var rejected = workflowService.claimDelivery(delivery(
+                UUID.randomUUID(), ConversionWorkflowService.Stage.ASSEMBLY, "assembly-worker"));
+
+        assertThat(rejected)
+                .extracting(
+                        ConversionWorkflowService.DeliveryDecision::disposition,
+                        ConversionWorkflowService.DeliveryDecision::reasonCode)
+                .containsExactly(
+                        ConversionWorkflowService.DeliveryDisposition.REJECTED,
+                        "STAGE_PREREQUISITE_NOT_ACCEPTED");
+    }
+
+    @Test
     void pausePersistsSafeResumeContextAndResumeRevalidatesCurrentEligibility() {
         workflowService.scheduleStage(
                 LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.NARRATION_ANALYSIS, 3);
@@ -233,29 +257,29 @@ class ConversionWorkflowAuthorityITest {
                 messageId, ConversionWorkflowService.Stage.NARRATION_ANALYSIS, "analysis-worker"));
         Instant deadline = Instant.now().plus(Duration.ofDays(7));
 
-        var paused = workflowService.pause(new ConversionWorkflowService.PauseCommand(
+        var paused = lifecycleService.pause(new ConversionLifecycleService.PauseCommand(
                 messageId,
                 LISTENER_ID,
                 CONVERSION_ID,
                 ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
                 "PROVIDER_RESULT_AMBIGUOUS",
-                ConversionWorkflowService.ResponsibleParty.PROVIDER,
+                ConversionLifecycleService.ResponsibleParty.PROVIDER,
                 deadline));
-        var visiblePause = workflowService.pauseDetails(LISTENER_ID, CONVERSION_ID);
-        var resumed = workflowService.resume(new ConversionWorkflowService.ResumeCommand(
+        var visiblePause = lifecycleService.pauseDetails(LISTENER_ID, CONVERSION_ID);
+        var resumed = lifecycleService.resume(new ConversionLifecycleService.ResumeCommand(
                 LISTENER_ID, CONVERSION_ID, 1, "resume-provider-ambiguity-31"));
-        var replay = workflowService.resume(new ConversionWorkflowService.ResumeCommand(
+        var replay = lifecycleService.resume(new ConversionLifecycleService.ResumeCommand(
                 LISTENER_ID, CONVERSION_ID, 1, "resume-provider-ambiguity-31"));
 
         assertThat(paused)
                 .extracting(
-                        ConversionWorkflowService.PauseDetails::reasonCode,
-                        ConversionWorkflowService.PauseDetails::responsibleParty,
-                        ConversionWorkflowService.PauseDetails::safeResumeStage,
-                        ConversionWorkflowService.PauseDetails::deadline)
+                        ConversionLifecycleService.PauseDetails::reasonCode,
+                        ConversionLifecycleService.PauseDetails::responsibleParty,
+                        ConversionLifecycleService.PauseDetails::safeResumeStage,
+                        ConversionLifecycleService.PauseDetails::deadline)
                 .containsExactly(
                         "PROVIDER_RESULT_AMBIGUOUS",
-                        ConversionWorkflowService.ResponsibleParty.PROVIDER,
+                        ConversionLifecycleService.ResponsibleParty.PROVIDER,
                         ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
                         deadline);
         assertThat(visiblePause).isEqualTo(paused);
@@ -275,13 +299,13 @@ class ConversionWorkflowAuthorityITest {
         UUID messageId = UUID.randomUUID();
         workflowService.claimDelivery(delivery(
                 messageId, ConversionWorkflowService.Stage.NARRATION_ANALYSIS, "analysis-worker"));
-        workflowService.pause(new ConversionWorkflowService.PauseCommand(
+        lifecycleService.pause(new ConversionLifecycleService.PauseCommand(
                 messageId,
                 LISTENER_ID,
                 CONVERSION_ID,
                 ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
                 "POLICY_REVALIDATION_REQUIRED",
-                ConversionWorkflowService.ResponsibleParty.PLATFORM,
+                ConversionLifecycleService.ResponsibleParty.PLATFORM,
                 null));
         UUID reservationId = jdbcTemplate.queryForObject(
                 """
@@ -294,7 +318,7 @@ class ConversionWorkflowAuthorityITest {
         entitlementService.settle(new ConversionEntitlementService.SettlementRequest(
                 reservationId, 0, 0, "settle-before-resume-31"));
 
-        assertThatThrownBy(() -> workflowService.resume(new ConversionWorkflowService.ResumeCommand(
+        assertThatThrownBy(() -> lifecycleService.resume(new ConversionLifecycleService.ResumeCommand(
                         LISTENER_ID, CONVERSION_ID, 1, "resume-ineligible-31")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("policy rejected");
@@ -312,16 +336,16 @@ class ConversionWorkflowAuthorityITest {
         UUID messageId = UUID.randomUUID();
         workflowService.claimDelivery(delivery(
                 messageId, ConversionWorkflowService.Stage.SPEECH, "speech-worker"));
-        workflowService.pause(new ConversionWorkflowService.PauseCommand(
+        lifecycleService.pause(new ConversionLifecycleService.PauseCommand(
                 messageId,
                 LISTENER_ID,
                 CONVERSION_ID,
                 ConversionWorkflowService.Stage.SPEECH,
                 "RECIPE_REVALIDATION_REQUIRED",
-                ConversionWorkflowService.ResponsibleParty.PLATFORM,
+                ConversionLifecycleService.ResponsibleParty.PLATFORM,
                 null));
 
-        assertThatThrownBy(() -> workflowService.resume(new ConversionWorkflowService.ResumeCommand(
+        assertThatThrownBy(() -> lifecycleService.resume(new ConversionLifecycleService.ResumeCommand(
                         LISTENER_ID, CONVERSION_ID, 1, "resume-ineligible-recipe-31")))
                 .isInstanceOf(RuntimeException.class);
         assertThat(workflowService.stage(
@@ -339,15 +363,15 @@ class ConversionWorkflowAuthorityITest {
         workflowService.claimDelivery(delivery(
                 inFlightMessageId, ConversionWorkflowService.Stage.SPEECH, "speech-worker"));
 
-        workflowService.recordProviderCost(new ConversionWorkflowService.ProviderCost(
+        lifecycleService.recordProviderCost(new ConversionLifecycleService.ProviderCost(
                 LISTENER_ID,
                 CONVERSION_ID,
                 750_000,
                 "provider-request:cancellation-cost-31",
                 "provider-cost:cancellation-31"));
-        var cancelled = workflowService.cancelListener(
+        var cancelled = lifecycleService.cancelListener(
                 LISTENER_ID, CONVERSION_ID, 0, "cancel-conversion-31");
-        var replay = workflowService.cancelListener(
+        var replay = lifecycleService.cancelListener(
                 LISTENER_ID, CONVERSION_ID, 0, "cancel-conversion-31");
         var lateClaim = workflowService.claimDelivery(delivery(
                 UUID.randomUUID(), ConversionWorkflowService.Stage.SPEECH, "speech-worker"));
@@ -378,11 +402,11 @@ class ConversionWorkflowAuthorityITest {
                         ConversionEntitlementService.ProviderSpend::reservedMicros,
                         ConversionEntitlementService.ProviderSpend::committedMicros)
                 .containsExactly(0L, 750_000L);
-        assertThat(workflowService.cleanup(LISTENER_ID, CONVERSION_ID))
+        assertThat(administrationService.cleanup(LISTENER_ID, CONVERSION_ID))
                 .extracting(
-                        ConversionWorkflowService.CleanupObligation::state,
-                        ConversionWorkflowService.CleanupObligation::reasonCode)
-                .containsExactly(ConversionWorkflowService.CleanupState.PENDING, "LISTENER_CANCELLED");
+                        ConversionWorkflowAdministrationService.CleanupObligation::state,
+                        ConversionWorkflowAdministrationService.CleanupObligation::reasonCode)
+                .containsExactly(ConversionWorkflowAdministrationService.CleanupState.PENDING, "LISTENER_CANCELLED");
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM library.private_audiobook WHERE conversion_id = ?",
                 Integer.class,
@@ -397,12 +421,11 @@ class ConversionWorkflowAuthorityITest {
         workflowService.claimDelivery(delivery(
                 inFlightMessageId, ConversionWorkflowService.Stage.PACKAGING, "packaging-worker"));
 
-        var failed = workflowService.failTerminal(new ConversionWorkflowService.TerminalFailureCommand(
+        var failed = administrationService.failTerminal(new ConversionWorkflowAdministrationService.TerminalFailureCommand(
                 LISTENER_ID,
                 CONVERSION_ID,
                 0,
                 "PACKAGING_RESULT_INVALID",
-                0,
                 600_000,
                 "terminal-packaging-failure-31"));
         var lateResult = workflowService.acceptResult(new ConversionWorkflowService.StageResult(
@@ -428,7 +451,7 @@ class ConversionWorkflowAuthorityITest {
                         ConversionEntitlementService.ProviderSpend::reservedMicros,
                         ConversionEntitlementService.ProviderSpend::committedMicros)
                 .containsExactly(0L, 600_000L);
-        assertThat(workflowService.cleanup(LISTENER_ID, CONVERSION_ID).reasonCode())
+        assertThat(administrationService.cleanup(LISTENER_ID, CONVERSION_ID).reasonCode())
                 .isEqualTo("TERMINAL_FAILURE");
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM library.private_audiobook WHERE conversion_id = ?",
@@ -437,16 +460,15 @@ class ConversionWorkflowAuthorityITest {
     }
 
     @Test
-    void terminalFailureCommitsCharactersBackedByAReusableResult() {
+    void terminalFailureCannotConsumeCharactersWithoutAcceptedReusableEvidence() {
         workflowService.scheduleStage(
                 LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.PACKAGING, 2);
 
-        workflowService.failTerminal(new ConversionWorkflowService.TerminalFailureCommand(
+        administrationService.failTerminal(new ConversionWorkflowAdministrationService.TerminalFailureCommand(
                 LISTENER_ID,
                 CONVERSION_ID,
                 0,
                 "FINALIZATION_PUBLICATION_FAILED",
-                100_000,
                 600_000,
                 "terminal-reusable-failure-31"));
 
@@ -455,7 +477,7 @@ class ConversionWorkflowAuthorityITest {
                         ConversionEntitlementService.Allowance::availableCharacters,
                         ConversionEntitlementService.Allowance::reservedCharacters,
                         ConversionEntitlementService.Allowance::committedCharacters)
-                .containsExactly(400_000L, 0L, 100_000L);
+                .containsExactly(500_000L, 0L, 0L);
         assertThat(entitlementService.providerSpend("openai").committedMicros())
                 .isEqualTo(600_000L);
     }

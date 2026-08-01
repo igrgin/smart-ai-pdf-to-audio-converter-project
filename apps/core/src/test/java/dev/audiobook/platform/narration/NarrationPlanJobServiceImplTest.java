@@ -14,6 +14,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 
 import dev.audiobook.platform.admission.QuarantineObjectStore;
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
+import dev.audiobook.platform.workflow.ConversionLifecycleService;
 import dev.audiobook.platform.workflow.ConversionWorkflowService;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -39,6 +40,7 @@ class NarrationPlanJobServiceImplTest {
     private final Clock clock = Clock.fixed(Instant.parse("2026-08-01T10:00:00Z"), ZoneOffset.UTC);
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     private final ConversionWorkflowService workflowService = mock(ConversionWorkflowService.class);
+    private final ConversionLifecycleService lifecycleService = mock(ConversionLifecycleService.class);
     private final PlatformIdentifierGenerator identifierGenerator = mock(PlatformIdentifierGenerator.class);
     private NarrationPlanJobService service;
 
@@ -52,6 +54,7 @@ class NarrationPlanJobServiceImplTest {
                 clock,
                 transactionManager,
                 workflowService,
+                lifecycleService,
                 identifierGenerator);
     }
 

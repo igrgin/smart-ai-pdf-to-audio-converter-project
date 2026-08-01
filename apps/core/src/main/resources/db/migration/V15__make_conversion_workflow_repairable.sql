@@ -14,6 +14,19 @@ WHERE outbox.work_id = work.work_id;
 ALTER TABLE workflow.narration_plan_outbox
     ALTER COLUMN expected_conversion_version SET NOT NULL;
 
+CREATE TABLE workflow.narration_plan_delivery (
+    message_id UUID PRIMARY KEY,
+    work_id UUID NOT NULL REFERENCES workflow.narration_plan_work(work_id),
+    schema_version INTEGER NOT NULL,
+    expected_conversion_version BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+);
+INSERT INTO workflow.narration_plan_delivery (
+    message_id, work_id, schema_version, expected_conversion_version, created_at
+)
+SELECT message_id, work_id, schema_version, expected_conversion_version, created_at
+FROM workflow.narration_plan_outbox;
+
 UPDATE workflow.audiobook_conversion
 SET pause_responsible_party = 'LISTENER', safe_resume_stage = 'NARRATION_ANALYSIS'
 WHERE state = 'PAUSED';
@@ -248,6 +261,9 @@ CREATE TRIGGER conversion_late_result_append_only
 CREATE TRIGGER conversion_provider_cost_entry_append_only
     BEFORE UPDATE OR DELETE OR TRUNCATE ON workflow.conversion_provider_cost_entry
     FOR EACH STATEMENT EXECUTE FUNCTION workflow.reject_workflow_evidence_mutation();
+CREATE TRIGGER narration_plan_delivery_append_only
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON workflow.narration_plan_delivery
+    FOR EACH STATEMENT EXECUTE FUNCTION workflow.reject_workflow_evidence_mutation();
 
 ALTER TABLE workflow.conversion_stage_run ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workflow.conversion_accepted_result ENABLE ROW LEVEL SECURITY;
@@ -258,6 +274,7 @@ ALTER TABLE workflow.conversion_cancellation_operation ENABLE ROW LEVEL SECURITY
 ALTER TABLE workflow.conversion_terminal_failure_operation ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workflow.conversion_cleanup_obligation ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workflow.conversion_provider_cost_entry ENABLE ROW LEVEL SECURITY;
+ALTER TABLE workflow.narration_plan_delivery ENABLE ROW LEVEL SECURITY;
 CREATE POLICY conversion_stage_run_listener_policy ON workflow.conversion_stage_run
     USING (listener_id = NULLIF(current_setting('app.listener_id', true), '')::uuid);
 CREATE POLICY conversion_accepted_result_listener_policy ON workflow.conversion_accepted_result
@@ -277,10 +294,18 @@ CREATE POLICY conversion_cleanup_obligation_listener_policy ON workflow.conversi
     USING (listener_id = NULLIF(current_setting('app.listener_id', true), '')::uuid);
 CREATE POLICY conversion_provider_cost_entry_listener_policy ON workflow.conversion_provider_cost_entry
     USING (listener_id = NULLIF(current_setting('app.listener_id', true), '')::uuid);
+CREATE POLICY narration_plan_delivery_listener_policy ON workflow.narration_plan_delivery
+    USING (EXISTS (
+        SELECT 1 FROM workflow.narration_plan_work work
+        WHERE work.work_id = narration_plan_delivery.work_id
+          AND work.listener_id = NULLIF(current_setting('app.listener_id', true), '')::uuid
+    ));
 
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'folio_narration_worker') THEN
+        GRANT SELECT, INSERT ON workflow.narration_plan_delivery TO folio_narration_worker;
+        GRANT UPDATE ON workflow.narration_plan_outbox TO folio_narration_worker;
         GRANT SELECT, INSERT, UPDATE ON workflow.conversion_stage_run TO folio_narration_worker;
         GRANT SELECT, INSERT ON workflow.conversion_message_inbox,
             workflow.conversion_accepted_result, workflow.conversion_pause_event,
@@ -292,6 +317,8 @@ BEGIN
             ON workflow.conversion_accepted_result TO folio_narration_worker USING (true) WITH CHECK (true);
         CREATE POLICY conversion_pause_event_narration_worker_policy
             ON workflow.conversion_pause_event TO folio_narration_worker USING (true) WITH CHECK (true);
+        CREATE POLICY narration_plan_delivery_worker_policy
+            ON workflow.narration_plan_delivery TO folio_narration_worker USING (true) WITH CHECK (true);
     END IF;
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'folio_speech_worker') THEN
         GRANT SELECT, INSERT, UPDATE ON workflow.conversion_stage_run TO folio_speech_worker;

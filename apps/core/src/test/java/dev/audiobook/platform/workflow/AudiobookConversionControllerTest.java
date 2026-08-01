@@ -52,7 +52,7 @@ class AudiobookConversionControllerTest {
     private AudiobookConversionService conversionService;
 
     @MockitoBean
-    private ConversionWorkflowService workflowService;
+    private ConversionLifecycleService lifecycleService;
 
     @MockitoBean
     private NarrationPlanService narrationPlanService;
@@ -301,8 +301,8 @@ class AudiobookConversionControllerTest {
 
     @Test
     void listenerCancelsAgainstTheSeenVersionWithoutSupplyingLedgerAmounts() throws Exception {
-        when(workflowService.cancelListener(LISTENER_ID, CONVERSION_ID, 4, "cancel-31"))
-                .thenReturn(new ConversionWorkflowService.CancellationResult(
+        when(lifecycleService.cancelListener(LISTENER_ID, CONVERSION_ID, 4, "cancel-31"))
+                .thenReturn(new ConversionLifecycleService.CancellationResult(
                         CONVERSION_ID,
                         AudiobookConversionService.ConversionState.CANCELLED,
                         "LISTENER_CANCELLED",
@@ -335,7 +335,7 @@ class AudiobookConversionControllerTest {
 
     @Test
     void staleResumeIsAConflict() throws Exception {
-        when(workflowService.resume(new ConversionWorkflowService.ResumeCommand(
+        when(lifecycleService.resume(new ConversionLifecycleService.ResumeCommand(
                         LISTENER_ID, CONVERSION_ID, 3, "resume-stale-31")))
                 .thenThrow(new IllegalStateException("Conversion resume is stale or unavailable"));
 
@@ -365,13 +365,13 @@ class AudiobookConversionControllerTest {
                 List.of(),
                 4);
         when(conversionService.conversion(LISTENER_ID, CONVERSION_ID)).thenReturn(paused, resumed);
-        when(workflowService.pauseDetails(LISTENER_ID, CONVERSION_ID)).thenReturn(
-                new ConversionWorkflowService.PauseDetails(
+        when(lifecycleService.pauseDetails(LISTENER_ID, CONVERSION_ID)).thenReturn(
+                new ConversionLifecycleService.PauseDetails(
                         "PROVIDER_RESULT_AMBIGUOUS",
-                        ConversionWorkflowService.ResponsibleParty.PROVIDER,
+                        ConversionLifecycleService.ResponsibleParty.PROVIDER,
                         ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
                         deadline));
-        when(workflowService.resume(new ConversionWorkflowService.ResumeCommand(
+        when(lifecycleService.resume(new ConversionLifecycleService.ResumeCommand(
                         LISTENER_ID, CONVERSION_ID, 3, "resume-31")))
                 .thenReturn(new ConversionWorkflowService.StageView(
                         UUID.randomUUID(),

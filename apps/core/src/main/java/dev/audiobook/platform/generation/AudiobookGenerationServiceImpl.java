@@ -14,6 +14,7 @@ import dev.audiobook.platform.narration.NarrationRejectionReason;
 import dev.audiobook.platform.narration.PublicationNarrationPlanInterpreter;
 import dev.audiobook.platform.provider.GovernedSpeechService;
 import dev.audiobook.platform.workflow.AudiobookConversionFinalizationService;
+import dev.audiobook.platform.workflow.ConversionLifecycleService;
 import dev.audiobook.platform.workflow.ConversionWorkflowService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -60,7 +61,7 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
     private final PlatformIdentifierGenerator identifierGenerator;
     private final AudioGenerationProperties properties;
     private final Clock identityClock;
-    private final ConversionWorkflowService workflowService;
+    private final ConversionLifecycleService lifecycleService;
 
     @Override
     public GenerationManifest prepare(UUID listenerId, UUID conversionId) {
@@ -179,8 +180,13 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
     }
 
     @Override
-    public AcceptedSegment generateSegment(UUID listenerId, UUID conversionId, String operationKey) {
+    public AcceptedSegment generateSegment(ProviderCallCommand command) {
+        Objects.requireNonNull(command, "command");
+        UUID listenerId = command.listenerId();
+        UUID conversionId = command.conversionId();
+        String operationKey = command.operationKey();
         requireIdentity(listenerId, conversionId);
+        Objects.requireNonNull(command.workflowMessageId(), "workflowMessageId");
         if (operationKey == null || operationKey.isBlank() || operationKey.length() > 200) {
             throw new IllegalArgumentException("Stable speech operation key is required");
         }
@@ -203,7 +209,11 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
             throw new IllegalStateException("Frozen Generation Recipe is no longer eligible");
         }
         AttemptStart attempt = transaction().execute(status -> startAttempt(
-                listenerId, conversionId, operationKey, segment.segmentId()));
+                listenerId,
+                conversionId,
+                operationKey,
+                segment.segmentId(),
+                command.workflowMessageId()));
         if (attempt == null) {
             throw new IllegalStateException("Speech provider attempt could not start");
         }
@@ -218,7 +228,7 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
             transaction().executeWithoutResult(status -> {
                 Long estimatedProviderCost = estimatedProviderCostMicros(listenerId, conversionId, operationKey);
                 if (estimatedProviderCost != null) {
-                    workflowService.recordProviderCost(new ConversionWorkflowService.ProviderCost(
+                    lifecycleService.recordProviderCost(new ConversionLifecycleService.ProviderCost(
                             listenerId,
                             conversionId,
                             estimatedProviderCost,
@@ -313,17 +323,32 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
     }
 
     private AttemptStart startAttempt(
-            UUID listenerId, UUID conversionId, String operationKey, String segmentId) {
-        String conversionState = jdbcTemplate.queryForObject(
+            UUID listenerId,
+            UUID conversionId,
+            String operationKey,
+            String segmentId,
+            UUID workflowMessageId) {
+        List<String> authorized = jdbcTemplate.queryForList(
                 """
-                SELECT state FROM workflow.audiobook_conversion
-                WHERE listener_id = ? AND conversion_id = ? FOR UPDATE
+                SELECT conversion.state
+                FROM workflow.audiobook_conversion conversion
+                JOIN workflow.conversion_stage_run stage
+                  ON stage.conversion_id = conversion.conversion_id
+                 AND stage.stage = 'SPEECH'
+                WHERE conversion.listener_id = ? AND conversion.conversion_id = ?
+                  AND conversion.state = 'GENERATING'
+                  AND stage.state = 'CLAIMED'
+                  AND stage.lease_message_id = ?
+                  AND stage.lease_expires_at > ?
+                FOR UPDATE OF conversion, stage
                 """,
                 String.class,
                 listenerId,
-                conversionId);
-        if (!"GENERATING".equals(conversionState)) {
-            throw new IllegalStateException("Audiobook Conversion no longer permits provider calls");
+                conversionId,
+                workflowMessageId,
+                Timestamp.from(identityClock.instant()));
+        if (authorized.isEmpty()) {
+            throw new IllegalStateException("Audiobook Conversion workflow lease no longer permits provider calls");
         }
         int attemptNumber = jdbcTemplate.queryForObject(
                 """

@@ -2,6 +2,7 @@ package dev.audiobook.platform.narration;
 
 import dev.audiobook.platform.admission.QuarantineObjectStore;
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
+import dev.audiobook.platform.workflow.ConversionLifecycleService;
 import dev.audiobook.platform.workflow.ConversionWorkflowService;
 import java.io.IOException;
 import java.sql.Timestamp;
@@ -31,6 +32,7 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
     private final Clock clock;
     private final PlatformTransactionManager transactionManager;
     private final ConversionWorkflowService workflowService;
+    private final ConversionLifecycleService lifecycleService;
     private final PlatformIdentifierGenerator identifierGenerator;
 
     @Override
@@ -90,10 +92,10 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
         PendingDelivery delivery = jdbcTemplate.queryForObject(
                 """
                 SELECT w.listener_id, w.conversion_id, w.submission_id,
-                       o.schema_version, o.expected_conversion_version
+                       delivery.schema_version, delivery.expected_conversion_version
                 FROM workflow.narration_plan_work w
-                JOIN workflow.narration_plan_outbox o ON o.work_id = w.work_id
-                WHERE w.work_id = ? AND o.message_id = ?
+                JOIN workflow.narration_plan_delivery delivery ON delivery.work_id = w.work_id
+                WHERE w.work_id = ? AND delivery.message_id = ?
                 """,
                 (resultSet, row) -> new PendingDelivery(
                         messageId,
@@ -170,15 +172,7 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
                     String.class,
                     workId);
             if ("READY".equals(state)) {
-                jdbcTemplate.update(
-                        """
-                        UPDATE workflow.narration_plan_outbox
-                        SET message_id = ?, created_at = ?, published_at = NULL
-                        WHERE work_id = ?
-                        """,
-                        identifierGenerator.generate(),
-                        Timestamp.from(clock.instant()),
-                        workId);
+                rotateDelivery(workId, messageId);
             }
         });
     }
@@ -201,30 +195,53 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
                 MAX_ATTEMPTS,
                 BATCH_SIZE);
         for (DeliveryCoordinates delivery : expired) {
-            jdbcTemplate.update(
-                    """
-                    UPDATE workflow.narration_plan_outbox
-                    SET message_id = ?, created_at = ?, published_at = NULL
-                    WHERE work_id = ? AND message_id = ?
-                    """,
-                    identifierGenerator.generate(),
-                    Timestamp.from(clock.instant()),
-                    delivery.workId(),
-                    delivery.messageId());
+            rotateDelivery(delivery.workId(), delivery.messageId());
         }
+    }
+
+    private void rotateDelivery(UUID workId, UUID previousMessageId) {
+        UUID nextMessageId = identifierGenerator.generate();
+        Timestamp now = Timestamp.from(clock.instant());
+        int recorded = jdbcTemplate.update(
+                """
+                INSERT INTO workflow.narration_plan_delivery (
+                    message_id, work_id, schema_version, expected_conversion_version, created_at
+                )
+                SELECT ?, work_id, schema_version, expected_conversion_version, ?
+                FROM workflow.narration_plan_delivery
+                WHERE message_id = ? AND work_id = ?
+                ON CONFLICT (message_id) DO NOTHING
+                """,
+                nextMessageId,
+                now,
+                previousMessageId,
+                workId);
+        if (recorded != 1) {
+            return;
+        }
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.narration_plan_outbox
+                SET message_id = ?, created_at = ?, published_at = NULL
+                WHERE work_id = ? AND message_id = ?
+                """,
+                nextMessageId,
+                now,
+                workId,
+                previousMessageId);
     }
 
     private void pauseAfterDamage(
             UUID workId, UUID messageId, SourceTooDamagedException exception) {
         transactions().executeWithoutResult(status -> {
             PendingDelivery delivery = pendingDelivery(messageId, workId);
-            workflowService.pause(new ConversionWorkflowService.PauseCommand(
+            lifecycleService.pause(new ConversionLifecycleService.PauseCommand(
                     messageId,
                     delivery.listenerId(),
                     delivery.conversionId(),
                     ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
                     exception.reasonCode(),
-                    ConversionWorkflowService.ResponsibleParty.LISTENER,
+                    ConversionLifecycleService.ResponsibleParty.LISTENER,
                     null));
             jdbcTemplate.update(
                     """
@@ -281,10 +298,10 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
         return jdbcTemplate.queryForObject(
                 """
                 SELECT w.listener_id, w.conversion_id, w.submission_id,
-                       o.schema_version, o.expected_conversion_version
+                       delivery.schema_version, delivery.expected_conversion_version
                 FROM workflow.narration_plan_work w
-                JOIN workflow.narration_plan_outbox o ON o.work_id = w.work_id
-                WHERE w.work_id = ? AND o.message_id = ?
+                JOIN workflow.narration_plan_delivery delivery ON delivery.work_id = w.work_id
+                WHERE w.work_id = ? AND delivery.message_id = ?
                 """,
                 (resultSet, row) -> new PendingDelivery(
                         messageId,

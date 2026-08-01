@@ -162,7 +162,7 @@ class NarrationPlanITest {
         assertThat(conversionService.conversion(listenerId, conversionId).reasonCode())
                 .isEqualTo("EXTRACTION_PENDING");
         assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
-        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
 
         assertThat(conversionService.conversion(listenerId, conversionId)).satisfies(conversion -> {
             assertThat(conversion.state())
@@ -205,7 +205,7 @@ class NarrationPlanITest {
         UUID conversionId = admit(listenerId, pdf(3), "application/pdf", "pdf-damaged");
 
         assertThat(narrationPlanJobService.processPending()).isZero();
-        assertThat(conversionService.applyNarrationPlanResults(List.of())).isZero();
+        assertThat(conversionService.applyNarrationPlanResults()).isZero();
 
         AudiobookConversionService.AudiobookConversion paused =
                 conversionService.conversion(listenerId, conversionId);
@@ -356,7 +356,7 @@ class NarrationPlanITest {
         assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
         assertThat(conversionService.conversion(listenerId, conversionId).state())
                 .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
-        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
                         """
                         SELECT count(*) FROM workflow.narration_plan_work w
@@ -422,7 +422,7 @@ class NarrationPlanITest {
                 .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
 
         assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
-        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
         assertThat(conversionService.conversion(listenerId, conversionId).state())
                 .isEqualTo(AudiobookConversionService.ConversionState.AWAITING_REVIEW);
     }
@@ -433,7 +433,7 @@ class NarrationPlanITest {
         UUID listenerId = entitledListener();
         UUID conversionId = admit(listenerId, "skip-review");
         assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
-        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
 
         NarrationReviewService.ReviewCommand command = new NarrationReviewService.ReviewCommand(
                 listenerId,
@@ -602,7 +602,7 @@ class NarrationPlanITest {
     }
 
     @Test
-    void coreReconcilesAPlanPersistedBeforeTheWorkerCouldCompleteItsLease() throws Exception {
+    void coreDoesNotAdvanceAPlanWhoseAcceptedWorkStateWasRolledBack() throws Exception {
         UUID listenerId = entitledListener();
         UUID conversionId = admit(listenerId, "persisted-before-completion");
         WorkCoordinates coordinates = narrationWork(conversionId);
@@ -618,9 +618,9 @@ class NarrationPlanITest {
                 coordinates.messageId(),
                 coordinates.workId());
 
-        assertThat(conversionService.applyNarrationPlanResults(List.of(conversionId))).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults()).isZero();
         assertThat(conversionService.conversion(listenerId, conversionId).state())
-                .isEqualTo(AudiobookConversionService.ConversionState.AWAITING_REVIEW);
+                .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
         assertThat(jdbcTemplate.queryForObject(
                         """
                         SELECT state || ':' || (lease_owner IS NULL) || ':' || (lease_expires_at IS NULL)
@@ -628,7 +628,7 @@ class NarrationPlanITest {
                         """,
                         String.class,
                         coordinates.workId()))
-                .isEqualTo("SUCCEEDED:true:true");
+                .isEqualTo("CLAIMED:false:false");
     }
 
     @Test
@@ -655,9 +655,15 @@ class NarrationPlanITest {
                 WHERE work_id = ?
                 """,
                 coordinates.workId());
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.conversion_stage_run
+                SET lease_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 second'
+                WHERE conversion_id = ? AND stage = 'NARRATION_ANALYSIS'
+                """,
+                conversionId);
 
-        assertThat(narrationPlanJobService.processDelivery(coordinates.messageId(), coordinates.workId()))
-                .isFalse();
+        assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
         assertThat(narrationPlanJobService.processDelivery(coordinates.messageId(), coordinates.workId()))
                 .isFalse();
         assertThat(jdbcTemplate.queryForObject(
@@ -666,10 +672,15 @@ class NarrationPlanITest {
                         coordinates.messageId()))
                 .isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM workflow.narration_plan_delivery WHERE work_id = ?",
+                        Integer.class,
+                        coordinates.workId()))
+                .isEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject(
                         "SELECT attempt_count FROM workflow.narration_plan_work WHERE work_id = ?",
                         Integer.class,
                         coordinates.workId()))
-                .isEqualTo(1);
+                .isEqualTo(2);
     }
 
     @Test
@@ -688,7 +699,7 @@ class NarrationPlanITest {
         }
 
         assertThat(narrationPlanJobService.processPending()).isZero();
-        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
                         """
                         SELECT state || ':' || attempt_count
@@ -810,7 +821,7 @@ class NarrationPlanITest {
     private UUID readyReview(UUID listenerId, String operationSuffix) throws Exception {
         UUID conversionId = admit(listenerId, operationSuffix);
         assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
-        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
         return conversionId;
     }
 

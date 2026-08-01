@@ -82,8 +82,11 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
                         messageId, candidate.conversionId(), ConversionWorkflowService.Stage.SPEECH)) {
                     return 0;
                 }
-                generationService.generateSegment(
-                        candidate.listenerId(), candidate.conversionId(), segment.operationKey());
+                generationService.generateSegment(new AudiobookGenerationService.ProviderCallCommand(
+                        candidate.listenerId(),
+                        candidate.conversionId(),
+                        segment.operationKey(),
+                        messageId));
             }
             if (!workflowService.claimActive(
                     messageId, candidate.conversionId(), ConversionWorkflowService.Stage.SPEECH)) {
@@ -129,6 +132,17 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
                 JOIN workflow.audiobook_conversion conversion
                   ON conversion.conversion_id = m.conversion_id
                 WHERE conversion.state = 'GENERATING'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM workflow.conversion_stage_run speech
+                    WHERE speech.conversion_id = m.conversion_id
+                      AND speech.stage = 'SPEECH' AND speech.state = 'SUCCEEDED'
+                      AND EXISTS (
+                        SELECT 1 FROM workflow.conversion_accepted_result accepted
+                        WHERE accepted.conversion_id = speech.conversion_id
+                          AND accepted.stage = 'SPEECH'
+                      )
+                  )
                   AND NOT EXISTS (
                     SELECT 1
                     FROM generation.speech_segment s

@@ -21,7 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AudiobookConversionController {
 
     private final AudiobookConversionService conversionService;
-    private final ConversionWorkflowService workflowService;
+    private final ConversionLifecycleService lifecycleService;
     private final NarrationPlanService narrationPlanService;
 
     @GetMapping("/{conversionId}")
@@ -43,9 +43,9 @@ public class AudiobookConversionController {
                         && "NARRATION_REVIEW_AVAILABLE".equals(conversion.reasonCode())
                 ? narrationPlanService.plan(principal.listenerId(), conversionId)
                 : null;
-        ConversionWorkflowService.PauseDetails pause =
+        ConversionLifecycleService.PauseDetails pause =
                 conversion.state() == AudiobookConversionService.ConversionState.PAUSED
-                        ? workflowService.pauseDetails(principal.listenerId(), conversionId)
+                        ? lifecycleService.pauseDetails(principal.listenerId(), conversionId)
                         : null;
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
@@ -90,7 +90,7 @@ public class AudiobookConversionController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestHeader("If-Match") String ifMatch) {
         long expectedVersion = expectedVersion(ifMatch);
-        ConversionWorkflowService.CancellationResult cancellation = workflowService.cancelListener(
+        ConversionLifecycleService.CancellationResult cancellation = lifecycleService.cancelListener(
                 principal.listenerId(), conversionId, expectedVersion, idempotencyKey);
         return ResponseEntity.accepted()
                 .cacheControl(CacheControl.noStore())
@@ -112,7 +112,7 @@ public class AudiobookConversionController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestHeader("If-Match") String ifMatch) {
         long expectedVersion = expectedVersion(ifMatch);
-        workflowService.resume(new ConversionWorkflowService.ResumeCommand(
+        lifecycleService.resume(new ConversionLifecycleService.ResumeCommand(
                 principal.listenerId(), conversionId, expectedVersion, idempotencyKey));
         AudiobookConversionService.AudiobookConversion conversion =
                 conversionService.conversion(principal.listenerId(), conversionId);
@@ -161,7 +161,7 @@ public class AudiobookConversionController {
             long version,
             AudiobookConversionService.RecoveryDetails recovery,
             NarrationPlanService.PlanView narrationPlan,
-            ConversionWorkflowService.PauseDetails pause) {
+            ConversionLifecycleService.PauseDetails pause) {
 
         public ConversionProgress(
                 UUID conversionId,

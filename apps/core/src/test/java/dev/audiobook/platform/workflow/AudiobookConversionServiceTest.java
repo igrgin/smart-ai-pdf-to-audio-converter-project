@@ -34,6 +34,7 @@ class AudiobookConversionServiceTest {
     private final NarrationSelectionService narrationSelectionService = mock(NarrationSelectionService.class);
     private final PlatformIdentifierGenerator identifierGenerator = mock(PlatformIdentifierGenerator.class);
     private final ConversionWorkflowService conversionWorkflowService = mock(ConversionWorkflowService.class);
+    private final ConversionLifecycleService conversionLifecycleService = mock(ConversionLifecycleService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-08-01T10:00:00Z"), ZoneOffset.UTC);
     private final AudiobookConversionService service =
             new AudiobookConversionServiceImpl(
@@ -41,7 +42,8 @@ class AudiobookConversionServiceTest {
                     clock,
                     narrationSelectionService,
                     identifierGenerator,
-                    conversionWorkflowService);
+                    conversionWorkflowService,
+                    conversionLifecycleService);
     private final UUID listenerId = UUID.randomUUID();
     private final UUID conversionId = UUID.randomUUID();
     private final NarrationSelectionService.GenerationAuthorization authorization =
@@ -110,6 +112,8 @@ class AudiobookConversionServiceTest {
         UUID workId = UUID.randomUUID();
         UUID messageId = UUID.randomUUID();
         given(identifierGenerator.generate()).willReturn(workId, messageId);
+        given(jdbcTemplate.queryForObject(contains("SELECT version"), eq(Long.class), eq(conversionId)))
+                .willReturn(7L);
 
         service.scheduleNarrationPlan(listenerId, conversionId, submissionId);
 
@@ -125,7 +129,13 @@ class AudiobookConversionServiceTest {
                 contains("INSERT INTO workflow.narration_plan_outbox"),
                 eq(messageId),
                 eq(workId),
-                eq(conversionId),
+                eq(7L),
+                eq(Timestamp.from(clock.instant())));
+        verify(jdbcTemplate).update(
+                contains("INSERT INTO workflow.narration_plan_delivery"),
+                eq(messageId),
+                eq(workId),
+                eq(7L),
                 eq(Timestamp.from(clock.instant())));
     }
 
@@ -154,35 +164,12 @@ class AudiobookConversionServiceTest {
     }
 
     @Test
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    void suppliesBoundedWorkflowOwnedRecoveryCandidates() throws Exception {
-        given(jdbcTemplate.query(anyString(), any(RowMapper.class))).willAnswer(invocation -> {
-            RowMapper mapper = invocation.getArgument(1);
-            ResultSet resultSet = mock(ResultSet.class);
-            given(resultSet.getObject("conversion_id", UUID.class)).willReturn(conversionId);
-            return List.of(mapper.mapRow(resultSet, 0));
-        });
-
-        assertThat(service.narrationPlanRecoveryCandidates()).containsExactly(conversionId);
-
-        verify(jdbcTemplate).query(contains("LIMIT 100"), any(RowMapper.class));
-    }
-
-    @Test
-    void reconcilesConfirmedPlansThenAppliesCompletedExhaustedAndPausedResults() {
-        given(jdbcTemplate.update(
-                        contains("SET state = 'SUCCEEDED'"),
-                        eq(Timestamp.from(clock.instant())),
-                        eq(conversionId)))
-                .willReturn(1);
+    void appliesAcceptedCompletedExhaustedAndPausedResults() {
         given(jdbcTemplate.update(anyString())).willReturn(2, 1, 1);
 
-        assertThat(service.applyNarrationPlanResults(List.of(conversionId))).isEqualTo(4);
+        assertThat(service.applyNarrationPlanResults()).isEqualTo(4);
 
-        verify(jdbcTemplate).update(
-                contains("SET state = 'SUCCEEDED'"),
-                eq(Timestamp.from(clock.instant())),
-                eq(conversionId));
+        verify(jdbcTemplate).update(contains("conversion_accepted_result"));
         verify(jdbcTemplate).update(contains("w.pause_reason_code = 'SOURCE_TOO_DAMAGED'"));
     }
 }

@@ -22,6 +22,7 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
     private final NarrationSelectionService narrationSelectionService;
     private final PlatformIdentifierGenerator identifierGenerator;
     private final ConversionWorkflowService conversionWorkflowService;
+    private final ConversionLifecycleService conversionLifecycleService;
 
     @Override
     @Transactional
@@ -61,7 +62,12 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
         Objects.requireNonNull(conversionId, "conversionId");
         Objects.requireNonNull(submissionId, "submissionId");
         UUID workId = identifierGenerator.generate();
+        UUID messageId = identifierGenerator.generate();
         Timestamp now = Timestamp.from(identityClock.instant());
+        Long expectedConversionVersion = jdbcTemplate.queryForObject(
+                "SELECT version FROM workflow.audiobook_conversion WHERE conversion_id = ?",
+                Long.class,
+                conversionId);
         jdbcTemplate.update(
                 """
                 INSERT INTO workflow.narration_plan_work (
@@ -79,12 +85,21 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
                 INSERT INTO workflow.narration_plan_outbox (
                     message_id, work_id, message_type, schema_version,
                     expected_conversion_version, created_at
-                ) VALUES (?, ?, 'PREPARE_NARRATION_PLAN', 1,
-                    (SELECT version FROM workflow.audiobook_conversion WHERE conversion_id = ?), ?)
+                ) VALUES (?, ?, 'PREPARE_NARRATION_PLAN', 1, ?, ?)
                 """,
-                identifierGenerator.generate(),
+                messageId,
                 workId,
-                conversionId,
+                expectedConversionVersion,
+                now);
+        jdbcTemplate.update(
+                """
+                INSERT INTO workflow.narration_plan_delivery (
+                    message_id, work_id, schema_version, expected_conversion_version, created_at
+                ) VALUES (?, ?, 1, ?, ?)
+                """,
+                messageId,
+                workId,
+                expectedConversionVersion,
                 now);
         conversionWorkflowService.scheduleStage(
                 listenerId,
@@ -122,44 +137,27 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
     }
 
     @Override
-    public List<UUID> narrationPlanRecoveryCandidates() {
-        return jdbcTemplate.query(
-                """
-                SELECT w.conversion_id
-                FROM workflow.narration_plan_work w
-                JOIN workflow.audiobook_conversion c ON c.conversion_id = w.conversion_id
-                WHERE w.state IN ('READY', 'CLAIMED') AND c.state = 'PREPARING'
-                ORDER BY w.created_at, w.work_id
-                LIMIT 100
-                """,
-                (resultSet, row) -> resultSet.getObject("conversion_id", UUID.class));
-    }
-
-    @Override
     @Transactional
-    public int applyNarrationPlanResults(List<UUID> planPresentConversionIds) {
-        Objects.requireNonNull(planPresentConversionIds, "planPresentConversionIds");
-        Timestamp now = Timestamp.from(identityClock.instant());
-        for (UUID conversionId : List.copyOf(planPresentConversionIds)) {
-            Objects.requireNonNull(conversionId, "conversionId");
-            jdbcTemplate.update(
-                    """
-                    UPDATE workflow.narration_plan_work
-                    SET state = 'SUCCEEDED', completed_at = ?, lease_owner = NULL, lease_expires_at = NULL
-                    WHERE conversion_id = ? AND state IN ('READY', 'CLAIMED')
-                    """,
-                    now,
-                    conversionId);
-        }
+    public int applyNarrationPlanResults() {
         int ready = jdbcTemplate.update(
                 """
                 UPDATE workflow.audiobook_conversion c
                 SET state = 'AWAITING_REVIEW', reason_code = 'NARRATION_REVIEW_AVAILABLE', version = version + 1
-                WHERE c.state = 'PREPARING' AND EXISTS (
-                    SELECT 1
-                    FROM workflow.narration_plan_work w
-                    WHERE w.conversion_id = c.conversion_id AND w.state = 'SUCCEEDED'
-                )
+                WHERE c.state = 'PREPARING'
+                  AND EXISTS (
+                      SELECT 1 FROM workflow.narration_plan_work work
+                      WHERE work.conversion_id = c.conversion_id AND work.state = 'SUCCEEDED'
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM workflow.conversion_accepted_result accepted
+                      JOIN narration.narration_plan plan
+                        ON plan.conversion_id = accepted.conversion_id
+                       AND plan.working_asset_ref = accepted.result_reference
+                       AND plan.asset_sha256 = accepted.result_sha256
+                      WHERE accepted.conversion_id = c.conversion_id
+                        AND accepted.stage = 'NARRATION_ANALYSIS'
+                  )
                 """);
         int exhausted = jdbcTemplate.update(
                 """
@@ -187,28 +185,6 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
                       AND w.pause_reason_code = 'SOURCE_TOO_DAMAGED'
                 )
                 """);
-        jdbcTemplate.update(
-                """
-                UPDATE workflow.conversion_stage_run stage
-                SET state = CASE work.state
-                        WHEN 'SUCCEEDED' THEN 'SUCCEEDED'
-                        WHEN 'PAUSED' THEN 'PAUSED'
-                        WHEN 'EXHAUSTED' THEN 'FAILED'
-                        ELSE stage.state
-                    END,
-                    failure_code = CASE work.state
-                        WHEN 'PAUSED' THEN work.pause_reason_code
-                        WHEN 'EXHAUSTED' THEN 'NARRATION_PLAN_RETRIES_EXHAUSTED'
-                        ELSE NULL
-                    END,
-                    lease_owner = NULL, lease_message_id = NULL, lease_expires_at = NULL,
-                    updated_at = ?
-                FROM workflow.narration_plan_work work
-                WHERE work.conversion_id = stage.conversion_id
-                  AND stage.stage = 'NARRATION_ANALYSIS'
-                  AND work.state IN ('SUCCEEDED', 'PAUSED', 'EXHAUSTED')
-                """,
-                now);
         return ready + exhausted + paused;
     }
 
@@ -305,7 +281,7 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
             }
             throw new IllegalArgumentException("Idempotency-Key was already used for another recovery action");
         }
-        conversionWorkflowService.resume(new ConversionWorkflowService.ResumeCommand(
+        conversionLifecycleService.resume(new ConversionLifecycleService.ResumeCommand(
                 listenerId, conversionId, expectedVersion, idempotencyKey));
         int resumed = jdbcTemplate.update(
                 """
@@ -326,6 +302,17 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
                 UUID.class,
                 conversionId,
                 listenerId);
+        UUID messageId = identifierGenerator.generate();
+        jdbcTemplate.update(
+                """
+                INSERT INTO workflow.narration_plan_delivery (
+                    message_id, work_id, schema_version, expected_conversion_version, created_at
+                ) VALUES (?, ?, 1, ?, ?)
+                """,
+                messageId,
+                workId,
+                expectedVersion + 1,
+                now);
         jdbcTemplate.update(
                 """
                 UPDATE workflow.narration_plan_outbox
@@ -333,7 +320,7 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
                     created_at = ?, published_at = NULL
                 WHERE work_id = ?
                 """,
-                identifierGenerator.generate(),
+                messageId,
                 expectedVersion + 1,
                 now,
                 workId);
