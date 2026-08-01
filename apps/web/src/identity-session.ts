@@ -26,7 +26,13 @@ export interface Library {
 
 export interface AudiobookConversion {
   conversionId: string;
-  state: "PREPARING";
+  state: "PREPARING" | "GENERATING";
+  version: number;
+  recipeId?: string;
+  voiceId?: string;
+  voiceDisplayName?: string;
+  pace?: "MEASURED" | "NATURAL" | "BRISK";
+  explicitNarrationChoiceRequired: boolean;
 }
 
 export interface ConversionEntitlement {
