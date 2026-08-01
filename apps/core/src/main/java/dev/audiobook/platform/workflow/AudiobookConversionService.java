@@ -1,5 +1,6 @@
 package dev.audiobook.platform.workflow;
 
+import dev.audiobook.platform.narration.NarrationSelectionService;
 import java.util.List;
 import java.util.UUID;
 
@@ -13,6 +14,8 @@ public interface AudiobookConversionService {
 
     void markNarrationPlanReady(UUID listenerId, UUID conversionId);
 
+    NarrationSelectionService.GenerationAuthorization beginSpeechGeneration(UUID listenerId, UUID conversionId);
+
     record AudiobookConversion(
             UUID conversionId,
             ConversionState state,
@@ -23,10 +26,14 @@ public interface AudiobookConversionService {
             this(
                     conversionId,
                     state,
-                    state == ConversionState.PREPARING ? "NARRATION_PLAN_PENDING" : "NARRATION_REVIEW_AVAILABLE",
-                    state == ConversionState.PREPARING
-                            ? List.of()
-                            : List.of(AllowedAction.REVIEW_NARRATION_PLAN, AllowedAction.ACCEPT_RECOMMENDATIONS),
+                    switch (state) {
+                        case PREPARING -> "NARRATION_PLAN_PENDING";
+                        case AWAITING_REVIEW -> "NARRATION_REVIEW_AVAILABLE";
+                        case GENERATING -> "GENERATION_IN_PROGRESS";
+                    },
+                    state == ConversionState.AWAITING_REVIEW
+                            ? List.of(AllowedAction.REVIEW_NARRATION_PLAN, AllowedAction.ACCEPT_RECOMMENDATIONS)
+                            : List.of(),
                     0);
         }
 
@@ -37,7 +44,8 @@ public interface AudiobookConversionService {
 
     enum ConversionState {
         PREPARING,
-        AWAITING_REVIEW
+        AWAITING_REVIEW,
+        GENERATING
     }
 
     enum AllowedAction {

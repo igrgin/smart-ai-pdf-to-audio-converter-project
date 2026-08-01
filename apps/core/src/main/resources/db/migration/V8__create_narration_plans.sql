@@ -4,7 +4,7 @@ ALTER TABLE workflow.audiobook_conversion
     DROP CONSTRAINT audiobook_conversion_state_check;
 ALTER TABLE workflow.audiobook_conversion
     ADD CONSTRAINT audiobook_conversion_state_check
-    CHECK (state IN ('PREPARING', 'AWAITING_REVIEW'));
+    CHECK (state IN ('PREPARING', 'AWAITING_REVIEW', 'GENERATING'));
 ALTER TABLE workflow.audiobook_conversion
     ADD COLUMN reason_code VARCHAR(64) NOT NULL DEFAULT 'NARRATION_PLAN_PENDING';
 ALTER TABLE workflow.audiobook_conversion

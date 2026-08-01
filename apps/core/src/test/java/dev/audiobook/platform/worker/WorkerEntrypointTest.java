@@ -17,12 +17,15 @@ class WorkerEntrypointTest {
     @Test
     void supportedNonIdleStageCompletesItsEntrypoint() {
         NarrationPlanJobService narrationPlanJobService = mock(NarrationPlanJobService.class);
+        InspectionWorkerService inspectionWorkerService = mock(InspectionWorkerService.class);
         WorkerEntrypoint entrypoint = new WorkerEntrypoint(
                 new WorkerProperties(WorkerProperties.Stage.INSPECTION, false, null, null),
-                narrationPlanJobService);
+                narrationPlanJobService,
+                inspectionWorkerService);
 
         assertThatCode(() -> entrypoint.run(mock(ApplicationArguments.class)))
                 .doesNotThrowAnyException();
+        verify(inspectionWorkerService).runPending();
         verify(narrationPlanJobService, never()).processPending();
     }
 
@@ -31,7 +34,8 @@ class WorkerEntrypointTest {
         NarrationPlanJobService narrationPlanJobService = mock(NarrationPlanJobService.class);
         WorkerEntrypoint entrypoint = new WorkerEntrypoint(
                 new WorkerProperties(WorkerProperties.Stage.NARRATION_ANALYSIS, false, null, null),
-                narrationPlanJobService);
+                narrationPlanJobService,
+                mock(InspectionWorkerService.class));
 
         entrypoint.run(mock(ApplicationArguments.class));
 
@@ -46,7 +50,8 @@ class WorkerEntrypointTest {
         WorkerEntrypoint entrypoint = new WorkerEntrypoint(
                 new WorkerProperties(
                         WorkerProperties.Stage.NARRATION_ANALYSIS, false, messageId, workId),
-                narrationPlanJobService);
+                narrationPlanJobService,
+                mock(InspectionWorkerService.class));
 
         entrypoint.run(mock(ApplicationArguments.class));
 
@@ -57,7 +62,9 @@ class WorkerEntrypointTest {
     @Test
     void missingStageFailsBeforeTheWorkerCanBecomeReady() {
         WorkerEntrypoint entrypoint = new WorkerEntrypoint(
-                new WorkerProperties(null, false, null, null), mock(NarrationPlanJobService.class));
+                new WorkerProperties(null, false, null, null),
+                mock(NarrationPlanJobService.class),
+                mock(InspectionWorkerService.class));
 
         assertThatThrownBy(() -> entrypoint.run(mock(ApplicationArguments.class)))
                 .isInstanceOf(IllegalStateException.class)
@@ -68,7 +75,8 @@ class WorkerEntrypointTest {
     void idleWorkerPropagatesCancellationByInterruption() {
         WorkerEntrypoint entrypoint = new WorkerEntrypoint(
                 new WorkerProperties(WorkerProperties.Stage.RECONCILIATION, true, null, null),
-                mock(NarrationPlanJobService.class));
+                mock(NarrationPlanJobService.class),
+                mock(InspectionWorkerService.class));
         Thread.currentThread().interrupt();
 
         try {
@@ -84,7 +92,8 @@ class WorkerEntrypointTest {
         NarrationPlanJobService narrationPlanJobService = mock(NarrationPlanJobService.class);
         WorkerEntrypoint entrypoint = new WorkerEntrypoint(
                 new WorkerProperties(WorkerProperties.Stage.NARRATION_ANALYSIS, true, null, null),
-                narrationPlanJobService);
+                narrationPlanJobService,
+                mock(InspectionWorkerService.class));
         AtomicReference<Throwable> failure = new AtomicReference<>();
         Thread worker = Thread.ofVirtual().start(() -> {
             try {

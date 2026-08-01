@@ -1,10 +1,10 @@
 package dev.audiobook.platform.identity;
 
 import dev.audiobook.platform.admission.InspectionWorkDeliveryController;
-import java.security.SecureRandom;
 import java.time.Clock;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.security.oauth2.client.autoconfigure.OAuth2ClientProperties;
 import org.springframework.boot.security.oauth2.client.autoconfigure.OAuth2ClientPropertiesMapper;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -30,17 +30,8 @@ import org.springframework.session.web.http.DefaultCookieSerializer;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(OAuth2ClientProperties.class)
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class SecurityConfiguration {
-
-    @Bean
-    Clock identityClock() {
-        return Clock.systemUTC();
-    }
-
-    @Bean
-    SecureRandom identitySecureRandom() {
-        return new SecureRandom();
-    }
 
     @Bean
     DefaultCookieSerializer sessionCookieSerializer(IdentitySecurityProperties properties) {

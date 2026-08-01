@@ -1,5 +1,6 @@
 package dev.audiobook.platform.workflow;
 
+import dev.audiobook.platform.narration.NarrationSelectionService;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.util.List;
@@ -16,6 +17,7 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
 
     private final JdbcTemplate jdbcTemplate;
     private final Clock identityClock;
+    private final NarrationSelectionService narrationSelectionService;
 
     @Override
     @Transactional
@@ -93,5 +95,37 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
                         ? List.of(AllowedAction.REVIEW_NARRATION_PLAN, AllowedAction.ACCEPT_RECOMMENDATIONS)
                         : List.of(),
                 resultSet.getLong("version"));
+    }
+
+    @Override
+    @Transactional
+    public NarrationSelectionService.GenerationAuthorization beginSpeechGeneration(
+            UUID listenerId, UUID conversionId) {
+        Objects.requireNonNull(listenerId, "listenerId");
+        Objects.requireNonNull(conversionId, "conversionId");
+        NarrationSelectionService.GenerationAuthorization authorization =
+                narrationSelectionService.authorizeGeneration(listenerId, conversionId);
+        int started = jdbcTemplate.update(
+                """
+                UPDATE workflow.audiobook_conversion
+                SET state = 'GENERATING', reason_code = 'GENERATION_IN_PROGRESS', version = version + 1
+                WHERE conversion_id = ? AND listener_id = ? AND state = 'AWAITING_REVIEW'
+                """,
+                conversionId,
+                listenerId);
+        if (started == 0) {
+            String state = jdbcTemplate.queryForObject(
+                    """
+                    SELECT state FROM workflow.audiobook_conversion
+                    WHERE conversion_id = ? AND listener_id = ?
+                    """,
+                    String.class,
+                    conversionId,
+                    listenerId);
+            if (!ConversionState.GENERATING.name().equals(state)) {
+                throw new IllegalStateException("Audiobook Conversion cannot begin speech generation");
+            }
+        }
+        return authorization;
     }
 }

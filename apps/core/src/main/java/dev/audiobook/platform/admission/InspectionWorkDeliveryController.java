@@ -2,8 +2,6 @@ package dev.audiobook.platform.admission;
 
 import dev.audiobook.platform.workflow.InspectionWorkflowService;
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
-import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
 import java.util.UUID;
@@ -27,10 +25,8 @@ public class InspectionWorkDeliveryController {
     private static final Pattern COORDINATES = Pattern.compile(
             "\\{\\\"messageId\\\":\\\"([0-9a-f-]{36})\\\",\\\"workId\\\":\\\"([0-9a-f-]{36})\\\"}");
 
-    private final PublicationSubmissionService submissionService;
     private final InspectionWorkflowService inspectionWorkflowService;
     private final PubSubPushAuthenticator authenticator;
-    private final Clock identityClock;
 
     @PostMapping(DELIVERY_PATH)
     public ResponseEntity<Void> accept(
@@ -58,11 +54,6 @@ public class InspectionWorkDeliveryController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
         }
         inspectionWorkflowService.acceptDelivery(coordinates.messageId(), coordinates.workId());
-        submissionService.inspect(new PublicationSubmissionService.InspectionCommand(
-                coordinates.workId(),
-                "pubsub-inspection-delivery",
-                Instant.now(identityClock).plusSeconds(540),
-                "inspect-" + coordinates.workId()));
         return ResponseEntity.noContent().build();
     }
 

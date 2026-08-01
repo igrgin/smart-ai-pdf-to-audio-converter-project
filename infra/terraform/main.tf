@@ -23,6 +23,7 @@ locals {
     "iam.googleapis.com",
     "pubsub.googleapis.com",
     "run.googleapis.com",
+    "cloudscheduler.googleapis.com",
     "secretmanager.googleapis.com",
     "servicenetworking.googleapis.com",
     "sqladmin.googleapis.com",
@@ -91,6 +92,11 @@ resource "random_password" "narration_database" {
   special = true
 }
 
+resource "random_password" "inspection_database" {
+  length  = 32
+  special = true
+}
+
 resource "random_password" "upload_capability" {
   length  = 48
   special = false
@@ -145,6 +151,12 @@ resource "google_sql_user" "narration_worker" {
   password = random_password.narration_database.result
 }
 
+resource "google_sql_user" "inspection" {
+  name     = "audiobook_inspection"
+  instance = google_sql_database_instance.postgres.name
+  password = random_password.inspection_database.result
+}
+
 resource "google_secret_manager_secret" "database_password" {
   secret_id = "${local.prefix}-database-password"
   replication {
@@ -176,9 +188,27 @@ resource "google_secret_manager_secret" "narration_database_password" {
   depends_on = [google_project_service.required["secretmanager.googleapis.com"]]
 }
 
+resource "google_secret_manager_secret" "inspection_database_password" {
+  secret_id = "${local.prefix}-inspection-database-password"
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.required["secretmanager.googleapis.com"]]
+}
+
 resource "google_secret_manager_secret_version" "narration_database_password" {
   secret      = google_secret_manager_secret.narration_database_password.id
   secret_data = random_password.narration_database.result
+}
+
+resource "google_secret_manager_secret_version" "inspection_database_password" {
+  secret      = google_secret_manager_secret.inspection_database_password.id
+  secret_data = random_password.inspection_database.result
 }
 
 resource "google_secret_manager_secret" "upload_capability" {
@@ -291,6 +321,16 @@ resource "google_service_account" "narration_dispatcher" {
   display_name = "${local.prefix} Narration Plan dispatcher"
 }
 
+resource "google_service_account" "inspection_worker" {
+  account_id   = "${local.prefix}-inspection"
+  display_name = "${local.prefix} inspection worker"
+}
+
+resource "google_service_account" "inspection_launcher" {
+  account_id   = "${local.prefix}-inspect-run"
+  display_name = "${local.prefix} inspection job launcher"
+}
+
 resource "google_secret_manager_secret_iam_member" "core_database_password" {
   secret_id = google_secret_manager_secret.database_password.id
   role      = "roles/secretmanager.secretAccessor"
@@ -310,7 +350,7 @@ resource "google_secret_manager_secret_iam_member" "core_upload_capability" {
 }
 
 resource "google_secret_manager_secret_iam_member" "worker_database_password" {
-  for_each = local.worker_stages_without_narration
+  for_each = setsubtract(local.worker_stages_without_narration, toset(["inspection"]))
 
   secret_id = google_secret_manager_secret.database_password.id
   role      = "roles/secretmanager.secretAccessor"
@@ -321,6 +361,12 @@ resource "google_secret_manager_secret_iam_member" "narration_database_password"
   secret_id = google_secret_manager_secret.narration_database_password.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.workers["narration-analysis"].email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "inspection_database_password" {
+  secret_id = google_secret_manager_secret.inspection_database_password.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.inspection_worker.email}"
 }
 
 resource "google_pubsub_topic_iam_member" "core_publisher" {
@@ -344,7 +390,7 @@ resource "google_service_account_iam_member" "pubsub_push_token_creator" {
 }
 
 resource "google_storage_bucket_iam_member" "worker_working_objects" {
-  for_each = local.worker_stages_without_narration
+  for_each = setsubtract(local.worker_stages_without_narration, toset(["inspection"]))
 
   bucket = google_storage_bucket.working.name
   role   = "roles/storage.objectAdmin"
@@ -373,6 +419,19 @@ resource "google_storage_bucket_iam_member" "narration_plan_creator" {
   }
 }
 
+resource "google_project_iam_custom_role" "inspection_object_reader" {
+  role_id     = "folio_inspection_reader_${replace(var.environment_name, "-", "_")}"
+  title       = "${local.prefix} inspection object reader"
+  description = "Read opaque quarantine objects without listing or mutation"
+  permissions = ["storage.objects.get"]
+}
+
+resource "google_storage_bucket_iam_member" "inspection_working_objects" {
+  bucket = google_storage_bucket.working.name
+  role   = google_project_iam_custom_role.inspection_object_reader.name
+  member = "serviceAccount:${google_service_account.inspection_worker.email}"
+}
+
 resource "google_storage_bucket_iam_member" "core_working_objects" {
   bucket = google_storage_bucket.working.name
   role   = "roles/storage.objectAdmin"
@@ -380,7 +439,7 @@ resource "google_storage_bucket_iam_member" "core_working_objects" {
 }
 
 resource "google_storage_bucket_iam_member" "worker_finalized_objects" {
-  for_each = local.worker_stages_without_narration
+  for_each = setsubtract(local.worker_stages_without_narration, toset(["inspection"]))
 
   bucket = google_storage_bucket.finalized.name
   role   = "roles/storage.objectAdmin"
@@ -577,7 +636,8 @@ resource "google_cloud_run_v2_service" "core" {
     google_secret_manager_secret_iam_member.core_upload_capability,
     google_storage_bucket_iam_member.core_working_objects,
     google_sql_user.narration_worker,
-    google_sql_user.platform
+    google_sql_user.platform,
+    google_sql_user.inspection
   ]
 }
 
@@ -608,9 +668,9 @@ resource "google_cloud_run_v2_job" "workers" {
   template {
     task_count = 1
     template {
-      service_account = google_service_account.workers[each.key].email
-      max_retries     = 3
-      timeout         = "3600s"
+      service_account = each.key == "inspection" ? google_service_account.inspection_worker.email : google_service_account.workers[each.key].email
+      max_retries     = each.key == "inspection" ? 0 : 3
+      timeout         = each.key == "inspection" ? "600s" : "3600s"
 
       containers {
         image = var.core_image
@@ -618,7 +678,7 @@ resource "google_cloud_run_v2_job" "workers" {
         resources {
           limits = {
             cpu    = each.key == "extraction" ? "2" : "1"
-            memory = each.key == "extraction" ? "2Gi" : "512Mi"
+            memory = each.key == "extraction" ? "2Gi" : (each.key == "inspection" ? "1Gi" : "512Mi")
           }
         }
 
@@ -633,6 +693,14 @@ resource "google_cloud_run_v2_job" "workers" {
         env {
           name  = "SPRING_PROFILES_ACTIVE"
           value = "prod"
+        }
+        env {
+          name  = "BUILD_VERSION"
+          value = var.environment_name
+        }
+        env {
+          name  = "BUILD_REVISION"
+          value = substr(regex("sha256:([0-9a-f]{64})$", var.core_image)[0], 0, 12)
         }
         env {
           name  = "FLYWAY_ENABLED"
@@ -651,16 +719,21 @@ resource "google_cloud_run_v2_job" "workers" {
           value = "jdbc:postgresql://${google_sql_database_instance.postgres.private_ip_address}:5432/${google_sql_database.platform.name}"
         }
         env {
-          name  = "DATABASE_USER"
-          value = each.key == "narration-analysis" ? google_sql_user.narration_worker.name : google_sql_user.platform.name
+          name = "DATABASE_USER"
+          value = each.key == "inspection" ? google_sql_user.inspection.name : (
+            each.key == "narration-analysis" ? google_sql_user.narration_worker.name : google_sql_user.platform.name
+          )
         }
         env {
           name  = "WORKING_BUCKET"
           value = google_storage_bucket.working.name
         }
-        env {
-          name  = "FINALIZED_BUCKET"
-          value = google_storage_bucket.finalized.name
+        dynamic "env" {
+          for_each = each.key == "inspection" ? [] : [true]
+          content {
+            name  = "FINALIZED_BUCKET"
+            value = google_storage_bucket.finalized.name
+          }
         }
         env {
           name  = "WORK_TOPIC"
@@ -671,16 +744,112 @@ resource "google_cloud_run_v2_job" "workers" {
           value = var.project_id
         }
         env {
+          name  = "PUBSUB_PUSH_AUDIENCE"
+          value = local.inspection_push_audience
+        }
+        env {
+          name  = "PUBSUB_PUSH_SERVICE_ACCOUNT"
+          value = google_service_account.workers["inspection"].email
+        }
+        env {
           name  = "UPLOAD_TOKEN_SECRET"
           value = "worker-does-not-mint-upload-capabilities"
+        }
+        env {
+          name  = "APPLICATION_ORIGIN"
+          value = "https://worker.invalid"
+        }
+        env {
+          name  = "ZITADEL_ISSUER"
+          value = "https://worker.invalid"
+        }
+        env {
+          name  = "ZITADEL_AUTHORIZATION_URI"
+          value = "https://worker.invalid/oauth/authorize"
+        }
+        env {
+          name  = "ZITADEL_TOKEN_URI"
+          value = "https://worker.invalid/oauth/token"
+        }
+        env {
+          name  = "ZITADEL_USERINFO_URI"
+          value = "https://worker.invalid/oauth/userinfo"
+        }
+        env {
+          name  = "ZITADEL_JWK_SET_URI"
+          value = "https://worker.invalid/oauth/keys"
+        }
+        env {
+          name  = "ZITADEL_RECOVERY_URI"
+          value = "https://worker.invalid/recovery"
+        }
+        env {
+          name  = "ZITADEL_CLIENT_ID"
+          value = "worker-does-not-authenticate"
+        }
+        env {
+          name  = "ZITADEL_CLIENT_SECRET"
+          value = "worker-does-not-authenticate"
+        }
+        env {
+          name  = "ZITADEL_GOOGLE_IDP_ID"
+          value = "worker-google-disabled"
+        }
+        env {
+          name  = "ZITADEL_APPLE_IDP_ID"
+          value = "worker-apple-disabled"
+        }
+        env {
+          name  = "ZITADEL_FACEBOOK_IDP_ID"
+          value = "worker-facebook-disabled"
+        }
+        env {
+          name  = "OPERATOR_LISTENER_IDS"
+          value = "00000000-0000-0000-0000-000000000000"
+        }
+        env {
+          name  = "FREE_GRANT_CHARACTERS"
+          value = "500000"
+        }
+        env {
+          name  = "FREE_GRANT_VALIDITY"
+          value = "365d"
+        }
+        env {
+          name  = "PER_CONVERSION_CHARACTER_CEILING"
+          value = "500000"
+        }
+        env {
+          name  = "PER_CONVERSION_SPEND_CEILING_MICROS"
+          value = "5000000"
+        }
+        env {
+          name  = "PER_LISTENER_SPEND_CEILING_MICROS"
+          value = "10000000"
+        }
+        env {
+          name  = "PROVIDER_SPEND_CEILING_MICROS"
+          value = "100000000"
+        }
+        env {
+          name  = "GLOBAL_SPEND_CEILING_MICROS"
+          value = "150000000"
+        }
+        env {
+          name  = "PER_LISTENER_CONCURRENCY"
+          value = "1"
+        }
+        env {
+          name  = "GLOBAL_CONCURRENCY"
+          value = "3"
         }
         env {
           name = "DATABASE_PASSWORD"
           value_source {
             secret_key_ref {
-              secret = each.key == "narration-analysis" ? (
-                google_secret_manager_secret.narration_database_password.secret_id
-              ) : google_secret_manager_secret.database_password.secret_id
+              secret = each.key == "inspection" ? google_secret_manager_secret.inspection_database_password.secret_id : (
+                each.key == "narration-analysis" ? google_secret_manager_secret.narration_database_password.secret_id : google_secret_manager_secret.database_password.secret_id
+              )
               version = "latest"
             }
           }
@@ -701,8 +870,41 @@ resource "google_cloud_run_v2_job" "workers" {
     google_project_service.required["run.googleapis.com"],
     google_secret_manager_secret_iam_member.worker_database_password,
     google_secret_manager_secret_iam_member.narration_database_password,
+    google_secret_manager_secret_iam_member.inspection_database_password,
+    google_storage_bucket_iam_member.inspection_working_objects,
     google_sql_user.narration_worker,
-    google_sql_user.platform
+    google_sql_user.platform,
+    google_sql_user.inspection
+  ]
+}
+
+resource "google_cloud_run_v2_job_iam_member" "inspection_launcher" {
+  project  = var.project_id
+  location = google_cloud_run_v2_job.workers["inspection"].location
+  name     = google_cloud_run_v2_job.workers["inspection"].name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.inspection_launcher.email}"
+}
+
+resource "google_cloud_scheduler_job" "inspection" {
+  name      = "${local.prefix}-inspection"
+  region    = var.region
+  schedule  = "* * * * *"
+  time_zone = "Etc/UTC"
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.workers["inspection"].name}:run"
+    body        = base64encode("{}")
+
+    oauth_token {
+      service_account_email = google_service_account.inspection_launcher.email
+    }
+  }
+
+  depends_on = [
+    google_project_service.required["cloudscheduler.googleapis.com"],
+    google_cloud_run_v2_job_iam_member.inspection_launcher
   ]
 }
 

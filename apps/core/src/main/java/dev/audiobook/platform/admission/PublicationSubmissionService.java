@@ -15,7 +15,7 @@ public interface PublicationSubmissionService {
 
     int expireDue();
 
-    Inspection inspect(InspectionCommand command);
+    int applyInspectionResults();
 
     Submission submission(UUID listenerId, UUID submissionId);
 
@@ -67,18 +67,6 @@ public interface PublicationSubmissionService {
     record CancelCommand(UUID listenerId, UUID submissionId, String idempotencyKey) {
     }
 
-    record InspectionCommand(UUID workId, String workerId, Instant leaseUntil, String operationKey) {
-    }
-
-    record Inspection(
-            UUID submissionId,
-            InspectionOutcome outcome,
-            String reasonCode,
-            UUID sourcePublicationId,
-            UUID conversionId,
-            boolean replayed) {
-    }
-
     record Submission(
             UUID submissionId,
             SubmissionState state,
@@ -94,12 +82,6 @@ public interface PublicationSubmissionService {
         REJECTED,
         EXPIRED,
         CANCELLED
-    }
-
-    enum InspectionOutcome {
-        ADMITTED,
-        REJECTED,
-        LEASED_BY_ANOTHER_WORKER
     }
 
 }

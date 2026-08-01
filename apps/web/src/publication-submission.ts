@@ -34,11 +34,25 @@ export interface Submission {
 
 export type TransferStage = "HASHING" | "UPLOADING" | "INSPECTING";
 
-export async function submitAuthorizedEpub(
+export function publicationMediaType(file: File): "application/pdf" | "application/epub+zip" | null {
+  if (file.size <= 0 || file.size > 262_144_000) return null;
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".pdf") && (file.type === "" || file.type === "application/pdf")) {
+    return "application/pdf";
+  }
+  if (name.endsWith(".epub") && (file.type === "" || file.type === "application/epub+zip")) {
+    return "application/epub+zip";
+  }
+  return null;
+}
+
+export async function submitAuthorizedPublication(
   file: File,
   csrf: CsrfProof,
   onStage: (stage: TransferStage) => void
 ): Promise<Submission> {
+  const mediaType = publicationMediaType(file);
+  if (!mediaType) throw new Error("Unsupported publication file");
   onStage("HASHING");
   const publicationDigest = await sha256(file);
   const createResponse = await fetch("/api/v1/publication-submissions", {
@@ -50,7 +64,7 @@ export async function submitAuthorizedEpub(
       [csrf.headerName]: csrf.token
     },
     body: JSON.stringify({
-      mediaType: "application/epub+zip",
+      mediaType,
       byteLength: file.size,
       sha256: publicationDigest,
       rightsAttestation: { termsVersion: "rights-v1", noticeVersion: "notice-v1" }

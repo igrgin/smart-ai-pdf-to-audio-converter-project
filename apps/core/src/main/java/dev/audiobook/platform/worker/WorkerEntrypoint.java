@@ -1,8 +1,6 @@
 package dev.audiobook.platform.worker;
 
 import dev.audiobook.platform.narration.NarrationPlanJobService;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -18,6 +16,7 @@ public class WorkerEntrypoint implements ApplicationRunner {
 
     private final WorkerProperties workerProperties;
     private final NarrationPlanJobService narrationPlanJobService;
+    private final InspectionWorkerService inspectionWorkerService;
 
     @Override
     public void run(ApplicationArguments arguments) throws InterruptedException {
@@ -32,15 +31,20 @@ public class WorkerEntrypoint implements ApplicationRunner {
                         workerProperties.messageId(), workerProperties.workId());
                 return;
             }
-            do {
-                narrationPlanJobService.processPending();
-                if (!workerProperties.idle()) {
-                    return;
+        }
+        do {
+            if (workerProperties.stage() == WorkerProperties.Stage.INSPECTION) {
+                int processed = inspectionWorkerService.runPending();
+                if (processed > 0) {
+                    log.info("inspection_batch_complete result_count={}", processed);
                 }
-            } while (!new CountDownLatch(1).await(1, TimeUnit.SECONDS));
-        }
-        if (workerProperties.idle()) {
-            new CountDownLatch(1).await();
-        }
+            }
+            if (workerProperties.stage() == WorkerProperties.Stage.NARRATION_ANALYSIS) {
+                narrationPlanJobService.processPending();
+            }
+            if (workerProperties.idle()) {
+                Thread.sleep(1_000);
+            }
+        } while (workerProperties.idle());
     }
 }

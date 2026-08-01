@@ -1,6 +1,7 @@
 package dev.audiobook.platform.workflow;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 public interface InspectionWorkflowService {
@@ -11,7 +12,7 @@ public interface InspectionWorkflowService {
 
     Claim claim(UUID workId, String workerId, Instant leaseUntil, String operationKey);
 
-    boolean complete(UUID workId, String workerId);
+    List<PendingInspection> pending(Instant availableAt, int limit);
 
     record ScheduledInspection(UUID workId, UUID messageId) {
     }
@@ -22,8 +23,12 @@ public interface InspectionWorkflowService {
     record Claim(UUID submissionId, ClaimStatus status) {
     }
 
+    record PendingInspection(UUID workId, String operationKey) {
+    }
+
     enum ClaimStatus {
         CLAIMED,
+        RETRIES_EXHAUSTED,
         LEASED_BY_ANOTHER_WORKER,
         COMPLETED
     }

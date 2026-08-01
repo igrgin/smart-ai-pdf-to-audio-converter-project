@@ -1,10 +1,10 @@
 package dev.audiobook.platform.admission;
 
-import java.io.InputStream;
+import java.nio.file.Path;
 
 public interface EpubInspectionService {
 
-    Result inspect(InputStream publication);
+    Result inspect(Path publication);
 
     record Result(boolean accepted, String reasonCode) {
         public static Result admissionAllowed() {

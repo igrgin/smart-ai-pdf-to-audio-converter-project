@@ -9,6 +9,8 @@ import static org.mockito.Mockito.doThrow;
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.admission.InspectionWorkPublisher;
 import dev.audiobook.platform.admission.AdmissionOutboxRelayService;
+import dev.audiobook.platform.admission.InspectionOutcomeRecordingService;
+import dev.audiobook.platform.admission.MalwareScanner;
 import dev.audiobook.platform.admission.PublicationSubmissionService;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import dev.audiobook.platform.identity.ExternalIdentity;
@@ -28,6 +30,7 @@ import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -47,6 +50,7 @@ class NarrationPlanITest {
     private final ConversionEntitlementService entitlementService;
     private final ListenerIdentityService listenerIdentityService;
     private final InspectionWorkflowService inspectionWorkflowService;
+    private final InspectionOutcomeRecordingService inspectionOutcomeRecordingService;
     private final AudiobookConversionService conversionService;
     private final NarrationPlanService narrationPlanService;
     private final NarrationPlanAssetStore assetStore;
@@ -57,6 +61,9 @@ class NarrationPlanITest {
     @MockitoBean
     private InspectionWorkPublisher inspectionWorkPublisher;
 
+    @MockitoBean
+    private MalwareScanner malwareScanner;
+
     @MockitoSpyBean
     private NarrationPlanAssetStore spiedAssetStore;
 
@@ -66,6 +73,7 @@ class NarrationPlanITest {
             ConversionEntitlementService entitlementService,
             ListenerIdentityService listenerIdentityService,
             InspectionWorkflowService inspectionWorkflowService,
+            InspectionOutcomeRecordingService inspectionOutcomeRecordingService,
             AudiobookConversionService conversionService,
             NarrationPlanService narrationPlanService,
             NarrationPlanAssetStore assetStore,
@@ -76,12 +84,19 @@ class NarrationPlanITest {
         this.entitlementService = entitlementService;
         this.listenerIdentityService = listenerIdentityService;
         this.inspectionWorkflowService = inspectionWorkflowService;
+        this.inspectionOutcomeRecordingService = inspectionOutcomeRecordingService;
         this.conversionService = conversionService;
         this.narrationPlanService = narrationPlanService;
         this.assetStore = assetStore;
         this.narrationPlanJobService = narrationPlanJobService;
         this.outboxRelayService = outboxRelayService;
         this.jdbcTemplate = jdbcTemplate;
+    }
+
+    @BeforeEach
+    void allowCleanPublicationsThroughTheInspectionBoundary() {
+        org.mockito.Mockito.when(malwareScanner.scan(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(MalwareScanner.Result.CLEAN);
     }
 
     @Test
@@ -125,14 +140,17 @@ class NarrationPlanITest {
         assertThat(outboxRelayService.relayPending()).isEqualTo(1);
         inspectionWorkflowService.acceptDelivery(messageId, workId);
 
-        PublicationSubmissionService.Inspection inspection = submissionService.inspect(
-                new PublicationSubmissionService.InspectionCommand(
+        InspectionOutcomeRecordingService.Inspection inspection = inspectionOutcomeRecordingService.inspect(
+                new InspectionOutcomeRecordingService.InspectionCommand(
                         workId,
                         "narration-inspection-worker",
                         Instant.now().plusSeconds(60),
                         "inspect-" + workId));
+        assertThat(inspection.outcome()).isEqualTo(InspectionOutcomeRecordingService.InspectionOutcome.ADMITTED);
+        assertThat(submissionService.applyInspectionResults()).isEqualTo(1);
+        UUID conversionId = submissionService.submission(listenerId, creation.submissionId()).conversionId();
 
-        assertThat(conversionService.conversion(listenerId, inspection.conversionId()).state())
+        assertThat(conversionService.conversion(listenerId, conversionId).state())
                 .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
         assertThat(outboxRelayService.relayPending()).isZero();
         assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
@@ -143,18 +161,18 @@ class NarrationPlanITest {
                         WHERE w.conversion_id = ? AND w.state = 'SUCCEEDED' AND o.published_at IS NULL
                         """,
                         Integer.class,
-                        inspection.conversionId()))
+                        conversionId))
                 .isEqualTo(1);
 
         AudiobookConversionService.AudiobookConversion conversion =
-                conversionService.conversion(listenerId, inspection.conversionId());
+                conversionService.conversion(listenerId, conversionId);
         assertThat(conversion.state()).isEqualTo(AudiobookConversionService.ConversionState.AWAITING_REVIEW);
         assertThat(conversion.reasonCode()).isEqualTo("NARRATION_REVIEW_AVAILABLE");
         assertThat(conversion.allowedActions()).containsExactly(
                 AudiobookConversionService.AllowedAction.REVIEW_NARRATION_PLAN,
                 AudiobookConversionService.AllowedAction.ACCEPT_RECOMMENDATIONS);
 
-        NarrationPlanService.PlanView view = narrationPlanService.plan(listenerId, inspection.conversionId());
+        NarrationPlanService.PlanView view = narrationPlanService.plan(listenerId, conversionId);
         assertThat(view.normalProseEditable()).isFalse();
         assertThat(view.chapters()).extracting(NarrationPlanService.ChapterView::title)
                 .containsExactly("Evidence");
@@ -175,10 +193,10 @@ class NarrationPlanITest {
                         resultSet.getString("working_asset_ref"),
                         resultSet.getString("asset_sha256"),
                         resultSet.getString("relational_value")),
-                inspection.conversionId());
+                conversionId);
         assertThat(stored).isNotNull();
         assertThat(stored.relationalValue()).doesNotContain(PRIVATE_PROSE, "Year 2026", "Evidence");
-        byte[] workingAsset = assetStore.read(inspection.conversionId(), stored.reference());
+        byte[] workingAsset = assetStore.read(conversionId, stored.reference());
         assertThat(sha256(workingAsset)).isEqualTo(stored.sha256());
         assertThat(new String(workingAsset, StandardCharsets.UTF_8))
                 .contains(PRIVATE_PROSE, "Year 2026", "Evidence");
@@ -187,29 +205,29 @@ class NarrationPlanITest {
     @Test
     void narrationWorkerRetriesDurablePreparingWorkAfterWorkingAssetFailure() throws Exception {
         UUID listenerId = entitledListener();
-        PublicationSubmissionService.Inspection inspection = admit(listenerId, "retry");
+        UUID conversionId = admit(listenerId, "retry");
 
         doThrow(new java.io.IOException("working asset unavailable"))
                 .doCallRealMethod()
                 .when(spiedAssetStore)
-                .write(eq(inspection.conversionId()), any(byte[].class));
+                .write(eq(conversionId), any(byte[].class));
 
         assertThatThrownBy(narrationPlanJobService::processPending)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Narration Plan Working Asset storage is unavailable");
-        assertThat(conversionService.conversion(listenerId, inspection.conversionId()).state())
+        assertThat(conversionService.conversion(listenerId, conversionId).state())
                 .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
 
         assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
-        assertThat(conversionService.conversion(listenerId, inspection.conversionId()).state())
+        assertThat(conversionService.conversion(listenerId, conversionId).state())
                 .isEqualTo(AudiobookConversionService.ConversionState.AWAITING_REVIEW);
     }
 
     @Test
     void duplicateDeliveryRespectsActiveAndExpiredLeasesWithoutDuplicatingTheInbox() throws Exception {
         UUID listenerId = entitledListener();
-        PublicationSubmissionService.Inspection inspection = admit(listenerId, "leases");
-        WorkCoordinates coordinates = narrationWork(inspection.conversionId());
+        UUID conversionId = admit(listenerId, "leases");
+        WorkCoordinates coordinates = narrationWork(conversionId);
         jdbcTemplate.update(
                 """
                 UPDATE workflow.narration_plan_work
@@ -249,11 +267,11 @@ class NarrationPlanITest {
     @Test
     void repeatedDependencyFailureExhaustsDurableWorkAtTheAttemptBoundary() throws Exception {
         UUID listenerId = entitledListener();
-        PublicationSubmissionService.Inspection inspection = admit(listenerId, "exhaustion");
-        WorkCoordinates coordinates = narrationWork(inspection.conversionId());
+        UUID conversionId = admit(listenerId, "exhaustion");
+        WorkCoordinates coordinates = narrationWork(conversionId);
         doThrow(new java.io.IOException("working asset unavailable"))
                 .when(spiedAssetStore)
-                .write(eq(inspection.conversionId()), any(byte[].class));
+                .write(eq(conversionId), any(byte[].class));
 
         for (int attempt = 0; attempt < 4; attempt++) {
             assertThatThrownBy(narrationPlanJobService::processPending)
@@ -270,7 +288,7 @@ class NarrationPlanITest {
                         String.class,
                         coordinates.workId()))
                 .isEqualTo("EXHAUSTED:4");
-        assertThat(conversionService.conversion(listenerId, inspection.conversionId())).satisfies(conversion -> {
+        assertThat(conversionService.conversion(listenerId, conversionId)).satisfies(conversion -> {
             assertThat(conversion.state()).isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
             assertThat(conversion.reasonCode()).isEqualTo("NARRATION_PLAN_REQUIRES_INTERVENTION");
             assertThat(conversion.allowedActions()).isEmpty();
@@ -329,7 +347,7 @@ class NarrationPlanITest {
         }
     }
 
-    private PublicationSubmissionService.Inspection admit(UUID listenerId, String operationSuffix) throws Exception {
+    private UUID admit(UUID listenerId, String operationSuffix) throws Exception {
         byte[] source = epub();
         String digest = sha256(source);
         PublicationSubmissionService.Creation creation = submissionService.create(
@@ -366,11 +384,15 @@ class NarrationPlanITest {
                 workId);
         assertThat(outboxRelayService.relayPending()).isEqualTo(1);
         inspectionWorkflowService.acceptDelivery(messageId, workId);
-        return submissionService.inspect(new PublicationSubmissionService.InspectionCommand(
+        InspectionOutcomeRecordingService.Inspection inspection = inspectionOutcomeRecordingService.inspect(
+                new InspectionOutcomeRecordingService.InspectionCommand(
                 workId,
                 "narration-inspection-worker",
                 Instant.now().plusSeconds(60),
                 "inspect-" + workId));
+        assertThat(inspection.outcome()).isEqualTo(InspectionOutcomeRecordingService.InspectionOutcome.ADMITTED);
+        assertThat(submissionService.applyInspectionResults()).isEqualTo(1);
+        return submissionService.submission(listenerId, creation.submissionId()).conversionId();
     }
 
     private WorkCoordinates narrationWork(UUID conversionId) {

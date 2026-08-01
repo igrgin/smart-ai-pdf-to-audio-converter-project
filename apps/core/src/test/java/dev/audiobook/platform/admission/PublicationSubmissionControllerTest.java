@@ -2,6 +2,7 @@ package dev.audiobook.platform.admission;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -50,6 +51,9 @@ class PublicationSubmissionControllerTest {
     private PublicationSubmissionService submissionService;
 
     @MockitoBean
+    private InspectionOutcomeRecordingService inspectionOutcomeRecordingService;
+
+    @MockitoBean
     private AdmissionOutboxRelayService outboxRelayService;
 
     @MockitoBean
@@ -74,7 +78,7 @@ class PublicationSubmissionControllerTest {
     private MockMvc mockMvc;
 
     @Test
-    void authenticatedPubSubPushAcceptsAndExecutesOpaqueInspectionCoordinates() throws Exception {
+    void authenticatedPubSubPushDurablyAcceptsOpaqueCoordinatesWithoutParsingInTheCore() throws Exception {
         UUID messageId = UUID.fromString("01985f42-5f8d-7000-8000-000000000323");
         UUID workId = UUID.fromString("01985f42-5f8d-7000-8000-000000000423");
         String coordinates = "{\"messageId\":\"%s\",\"workId\":\"%s\"}".formatted(messageId, workId);
@@ -92,7 +96,8 @@ class PublicationSubmissionControllerTest {
                 .andExpect(status().isNoContent());
 
         verify(inspectionWorkflowService).acceptDelivery(messageId, workId);
-        verify(submissionService).inspect(any(PublicationSubmissionService.InspectionCommand.class));
+        verify(inspectionOutcomeRecordingService, never())
+                .inspect(any(InspectionOutcomeRecordingService.InspectionCommand.class));
 
         when(pubSubPushAuthenticator.authentic("invalid-token")).thenReturn(false);
         mockMvc.perform(post(InspectionWorkDeliveryController.DELIVERY_PATH)

@@ -26,10 +26,15 @@ export interface Library {
 
 export interface AudiobookConversion {
   conversionId: string;
-  state: "PREPARING" | "AWAITING_REVIEW";
-  reasonCode: "NARRATION_PLAN_PENDING" | "NARRATION_PLAN_REQUIRES_INTERVENTION" | "NARRATION_REVIEW_AVAILABLE";
+  state: "PREPARING" | "AWAITING_REVIEW" | "GENERATING";
+  reasonCode: "NARRATION_PLAN_PENDING" | "NARRATION_PLAN_REQUIRES_INTERVENTION" | "NARRATION_REVIEW_AVAILABLE" | "GENERATION_IN_PROGRESS";
   allowedActions: AllowedAction[];
   version: number;
+  recipeId?: string;
+  voiceId?: string;
+  voiceDisplayName?: string;
+  pace?: "MEASURED" | "NATURAL" | "BRISK";
+  explicitNarrationChoiceRequired: boolean;
 }
 
 export type AllowedAction = "REVIEW_NARRATION_PLAN" | "ACCEPT_RECOMMENDATIONS";
