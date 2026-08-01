@@ -42,6 +42,11 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
                         WHERE s.conversion_id = c.conversion_id
                           AND a.operation_key IS NULL
                     )
+                    OR NOT EXISTS (
+                        SELECT 1 FROM workflow.conversion_stage_run stage
+                        WHERE stage.conversion_id = c.conversion_id
+                          AND stage.stage = 'SPEECH' AND stage.state = 'SUCCEEDED'
+                    )
                   )
                 ORDER BY c.created_at, c.conversion_id
                 LIMIT 1
@@ -73,10 +78,19 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
             AudiobookGenerationService.GenerationManifest manifest = generationService.prepare(
                     candidate.listenerId(), candidate.conversionId());
             for (AudiobookGenerationService.Segment segment : manifest.segments()) {
+                if (!workflowService.claimActive(
+                        messageId, candidate.conversionId(), ConversionWorkflowService.Stage.SPEECH)) {
+                    return 0;
+                }
                 generationService.generateSegment(
                         candidate.listenerId(), candidate.conversionId(), segment.operationKey());
             }
-            workflowService.acceptResult(new ConversionWorkflowService.StageResult(
+            if (!workflowService.claimActive(
+                    messageId, candidate.conversionId(), ConversionWorkflowService.Stage.SPEECH)) {
+                return 0;
+            }
+            ConversionWorkflowService.ResultDecision accepted = workflowService.acceptResult(
+                    new ConversionWorkflowService.StageResult(
                     messageId,
                     candidate.conversionId(),
                     ConversionWorkflowService.Stage.SPEECH,
@@ -84,6 +98,10 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
                     "generation/manifests/" + manifest.manifestId(),
                     manifest.manifestDigest(),
                     true));
+            if (accepted.disposition() != ConversionWorkflowService.ResultDisposition.ACCEPTED
+                    && accepted.disposition() != ConversionWorkflowService.ResultDisposition.REPLAYED) {
+                return 0;
+            }
         } catch (RuntimeException exception) {
             workflowService.failStage(new ConversionWorkflowService.StageFailure(
                     messageId,
@@ -100,7 +118,12 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
     public int packagePending() {
         List<ConversionCoordinate> candidates = jdbcTemplate.query(
                 """
-                SELECT m.listener_id, m.conversion_id, conversion.version
+                SELECT m.listener_id, m.conversion_id, conversion.version,
+                       CASE WHEN EXISTS (
+                           SELECT 1 FROM workflow.conversion_stage_run assembly
+                           WHERE assembly.conversion_id = m.conversion_id
+                             AND assembly.stage = 'ASSEMBLY' AND assembly.state = 'SUCCEEDED'
+                       ) THEN 'PACKAGING' ELSE 'ASSEMBLY' END AS pending_stage
                 FROM generation.active_segment_manifest active
                 JOIN generation.segment_manifest m ON m.manifest_id = active.manifest_id
                 JOIN workflow.audiobook_conversion conversion
@@ -116,9 +139,16 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
                     WHERE s.conversion_id = m.conversion_id
                       AND a.operation_key IS NULL
                   )
-                  AND NOT EXISTS (
-                    SELECT 1 FROM generation.packaged_audiobook_result p
-                    WHERE p.conversion_id = m.conversion_id
+                  AND (
+                    NOT EXISTS (
+                      SELECT 1 FROM workflow.conversion_stage_run stage
+                      WHERE stage.conversion_id = m.conversion_id
+                        AND stage.stage = 'ASSEMBLY' AND stage.state = 'SUCCEEDED'
+                    ) OR NOT EXISTS (
+                    SELECT 1 FROM workflow.conversion_stage_run stage
+                    WHERE stage.conversion_id = m.conversion_id
+                      AND stage.stage = 'PACKAGING' AND stage.state = 'SUCCEEDED'
+                    )
                   )
                 ORDER BY m.created_at, m.conversion_id
                 LIMIT 1
@@ -126,19 +156,20 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
                 (resultSet, row) -> new ConversionCoordinate(
                         resultSet.getObject("listener_id", UUID.class),
                         resultSet.getObject("conversion_id", UUID.class),
-                        resultSet.getLong("version")));
+                        resultSet.getLong("version"),
+                        ConversionWorkflowService.Stage.valueOf(resultSet.getString("pending_stage"))));
         if (candidates.isEmpty()) {
             return 0;
         }
         ConversionCoordinate candidate = candidates.getFirst();
         workflowService.scheduleStage(
-                candidate.listenerId(), candidate.conversionId(), ConversionWorkflowService.Stage.PACKAGING, 3);
+                candidate.listenerId(), candidate.conversionId(), candidate.stage(), 3);
         UUID messageId = identifierGenerator.generate();
         ConversionWorkflowService.DeliveryDecision claim = workflowService.claimDelivery(
                 new ConversionWorkflowService.WorkDelivery(
                         messageId,
                         candidate.conversionId(),
-                        ConversionWorkflowService.Stage.PACKAGING,
+                        candidate.stage(),
                         1,
                         candidate.version(),
                         packagingWorkerId,
@@ -156,26 +187,40 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
                     String.class,
                     candidate.conversionId(),
                     candidate.listenerId());
-            workflowService.acceptResult(new ConversionWorkflowService.StageResult(
+            ConversionWorkflowService.ResultDecision accepted = workflowService.acceptResult(
+                    new ConversionWorkflowService.StageResult(
                     messageId,
                     candidate.conversionId(),
-                    ConversionWorkflowService.Stage.PACKAGING,
-                    "packaging-stage:" + candidate.conversionId(),
-                    "generation/packaged-results/" + candidate.conversionId(),
+                    candidate.stage(),
+                    candidate.stage().name().toLowerCase() + "-stage:" + candidate.conversionId(),
+                    "generation/" + candidate.stage().name().toLowerCase()
+                            + "-results/" + candidate.conversionId(),
                     resultDigest,
                     false));
+            if (accepted.disposition() != ConversionWorkflowService.ResultDisposition.ACCEPTED
+                    && accepted.disposition() != ConversionWorkflowService.ResultDisposition.REPLAYED) {
+                return 0;
+            }
         } catch (RuntimeException exception) {
             workflowService.failStage(new ConversionWorkflowService.StageFailure(
                     messageId,
                     candidate.conversionId(),
-                    ConversionWorkflowService.Stage.PACKAGING,
-                    "PACKAGING_STAGE_FAILED",
+                    candidate.stage(),
+                    candidate.stage().name() + "_STAGE_FAILED",
                     true));
             throw exception;
         }
         return 1;
     }
 
-    private record ConversionCoordinate(UUID listenerId, UUID conversionId, long version) {
+    private record ConversionCoordinate(
+            UUID listenerId,
+            UUID conversionId,
+            long version,
+            ConversionWorkflowService.Stage stage) {
+
+        private ConversionCoordinate(UUID listenerId, UUID conversionId, long version) {
+            this(listenerId, conversionId, version, ConversionWorkflowService.Stage.SPEECH);
+        }
     }
 }

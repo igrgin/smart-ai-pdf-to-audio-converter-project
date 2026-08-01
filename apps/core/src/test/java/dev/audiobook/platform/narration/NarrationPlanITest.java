@@ -205,7 +205,7 @@ class NarrationPlanITest {
         UUID conversionId = admit(listenerId, pdf(3), "application/pdf", "pdf-damaged");
 
         assertThat(narrationPlanJobService.processPending()).isZero();
-        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults(List.of())).isZero();
 
         AudiobookConversionService.AudiobookConversion paused =
                 conversionService.conversion(listenerId, conversionId);
@@ -657,7 +657,7 @@ class NarrationPlanITest {
                 coordinates.workId());
 
         assertThat(narrationPlanJobService.processDelivery(coordinates.messageId(), coordinates.workId()))
-                .isTrue();
+                .isFalse();
         assertThat(narrationPlanJobService.processDelivery(coordinates.messageId(), coordinates.workId()))
                 .isFalse();
         assertThat(jdbcTemplate.queryForObject(
@@ -669,7 +669,7 @@ class NarrationPlanITest {
                         "SELECT attempt_count FROM workflow.narration_plan_work WHERE work_id = ?",
                         Integer.class,
                         coordinates.workId()))
-                .isEqualTo(2);
+                .isEqualTo(1);
     }
 
     @Test

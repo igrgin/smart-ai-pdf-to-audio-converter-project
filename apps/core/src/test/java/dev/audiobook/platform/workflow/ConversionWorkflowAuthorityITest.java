@@ -1,6 +1,7 @@
 package dev.audiobook.platform.workflow;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
@@ -230,7 +231,7 @@ class ConversionWorkflowAuthorityITest {
         UUID messageId = UUID.randomUUID();
         workflowService.claimDelivery(delivery(
                 messageId, ConversionWorkflowService.Stage.NARRATION_ANALYSIS, "analysis-worker"));
-        Instant deadline = Instant.parse("2026-08-08T10:00:00Z");
+        Instant deadline = Instant.now().plus(Duration.ofDays(7));
 
         var paused = workflowService.pause(new ConversionWorkflowService.PauseCommand(
                 messageId,
@@ -268,6 +269,69 @@ class ConversionWorkflowAuthorityITest {
     }
 
     @Test
+    void resumeLeavesTheConversionPausedWhenCurrentEntitlementIsNoLongerEligible() {
+        workflowService.scheduleStage(
+                LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.NARRATION_ANALYSIS, 3);
+        UUID messageId = UUID.randomUUID();
+        workflowService.claimDelivery(delivery(
+                messageId, ConversionWorkflowService.Stage.NARRATION_ANALYSIS, "analysis-worker"));
+        workflowService.pause(new ConversionWorkflowService.PauseCommand(
+                messageId,
+                LISTENER_ID,
+                CONVERSION_ID,
+                ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
+                "POLICY_REVALIDATION_REQUIRED",
+                ConversionWorkflowService.ResponsibleParty.PLATFORM,
+                null));
+        UUID reservationId = jdbcTemplate.queryForObject(
+                """
+                SELECT reservation_id FROM character_entitlement_ledger_entry
+                WHERE listener_id = ? AND conversion_id = ? AND entry_type = 'RESERVATION'
+                """,
+                UUID.class,
+                LISTENER_ID,
+                CONVERSION_ID);
+        entitlementService.settle(new ConversionEntitlementService.SettlementRequest(
+                reservationId, 0, 0, "settle-before-resume-31"));
+
+        assertThatThrownBy(() -> workflowService.resume(new ConversionWorkflowService.ResumeCommand(
+                        LISTENER_ID, CONVERSION_ID, 1, "resume-ineligible-31")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("policy rejected");
+        assertThat(workflowService.stage(
+                        LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.NARRATION_ANALYSIS).state())
+                .isEqualTo(ConversionWorkflowService.StageState.PAUSED);
+        assertThat(conversionService.conversion(LISTENER_ID, CONVERSION_ID).state())
+                .isEqualTo(AudiobookConversionService.ConversionState.PAUSED);
+    }
+
+    @Test
+    void speechResumeLeavesTheConversionPausedWhenTheRecipeIsNoLongerEligible() {
+        workflowService.scheduleStage(
+                LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.SPEECH, 3);
+        UUID messageId = UUID.randomUUID();
+        workflowService.claimDelivery(delivery(
+                messageId, ConversionWorkflowService.Stage.SPEECH, "speech-worker"));
+        workflowService.pause(new ConversionWorkflowService.PauseCommand(
+                messageId,
+                LISTENER_ID,
+                CONVERSION_ID,
+                ConversionWorkflowService.Stage.SPEECH,
+                "RECIPE_REVALIDATION_REQUIRED",
+                ConversionWorkflowService.ResponsibleParty.PLATFORM,
+                null));
+
+        assertThatThrownBy(() -> workflowService.resume(new ConversionWorkflowService.ResumeCommand(
+                        LISTENER_ID, CONVERSION_ID, 1, "resume-ineligible-recipe-31")))
+                .isInstanceOf(RuntimeException.class);
+        assertThat(workflowService.stage(
+                        LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.SPEECH).state())
+                .isEqualTo(ConversionWorkflowService.StageState.PAUSED);
+        assertThat(conversionService.conversion(LISTENER_ID, CONVERSION_ID).state())
+                .isEqualTo(AudiobookConversionService.ConversionState.PAUSED);
+    }
+
+    @Test
     void cancellationStopsClaimsRejectsLateResultsAndSettlesLedgersIndependently() {
         workflowService.scheduleStage(
                 LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.SPEECH, 3);
@@ -275,20 +339,16 @@ class ConversionWorkflowAuthorityITest {
         workflowService.claimDelivery(delivery(
                 inFlightMessageId, ConversionWorkflowService.Stage.SPEECH, "speech-worker"));
 
-        var cancelled = workflowService.cancel(new ConversionWorkflowService.CancellationCommand(
+        workflowService.recordProviderCost(new ConversionWorkflowService.ProviderCost(
                 LISTENER_ID,
                 CONVERSION_ID,
-                0,
                 750_000,
-                "listener-requested",
-                "cancel-conversion-31"));
-        var replay = workflowService.cancel(new ConversionWorkflowService.CancellationCommand(
-                LISTENER_ID,
-                CONVERSION_ID,
-                0,
-                750_000,
-                "listener-requested",
-                "cancel-conversion-31"));
+                "provider-request:cancellation-cost-31",
+                "provider-cost:cancellation-31"));
+        var cancelled = workflowService.cancelListener(
+                LISTENER_ID, CONVERSION_ID, 0, "cancel-conversion-31");
+        var replay = workflowService.cancelListener(
+                LISTENER_ID, CONVERSION_ID, 0, "cancel-conversion-31");
         var lateClaim = workflowService.claimDelivery(delivery(
                 UUID.randomUUID(), ConversionWorkflowService.Stage.SPEECH, "speech-worker"));
         var lateResult = workflowService.acceptResult(new ConversionWorkflowService.StageResult(
@@ -342,6 +402,7 @@ class ConversionWorkflowAuthorityITest {
                 CONVERSION_ID,
                 0,
                 "PACKAGING_RESULT_INVALID",
+                0,
                 600_000,
                 "terminal-packaging-failure-31"));
         var lateResult = workflowService.acceptResult(new ConversionWorkflowService.StageResult(
@@ -373,6 +434,30 @@ class ConversionWorkflowAuthorityITest {
                 "SELECT count(*) FROM library.private_audiobook WHERE conversion_id = ?",
                 Integer.class,
                 CONVERSION_ID)).isZero();
+    }
+
+    @Test
+    void terminalFailureCommitsCharactersBackedByAReusableResult() {
+        workflowService.scheduleStage(
+                LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.PACKAGING, 2);
+
+        workflowService.failTerminal(new ConversionWorkflowService.TerminalFailureCommand(
+                LISTENER_ID,
+                CONVERSION_ID,
+                0,
+                "FINALIZATION_PUBLICATION_FAILED",
+                100_000,
+                600_000,
+                "terminal-reusable-failure-31"));
+
+        assertThat(entitlementService.allowance(LISTENER_ID))
+                .extracting(
+                        ConversionEntitlementService.Allowance::availableCharacters,
+                        ConversionEntitlementService.Allowance::reservedCharacters,
+                        ConversionEntitlementService.Allowance::committedCharacters)
+                .containsExactly(400_000L, 0L, 100_000L);
+        assertThat(entitlementService.providerSpend("openai").committedMicros())
+                .isEqualTo(600_000L);
     }
 
     private static ConversionWorkflowService.WorkDelivery delivery(

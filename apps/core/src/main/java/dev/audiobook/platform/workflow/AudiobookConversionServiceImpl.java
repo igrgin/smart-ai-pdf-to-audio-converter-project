@@ -77,11 +77,14 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
         jdbcTemplate.update(
                 """
                 INSERT INTO workflow.narration_plan_outbox (
-                    message_id, work_id, message_type, schema_version, created_at
-                ) VALUES (?, ?, 'PREPARE_NARRATION_PLAN', 1, ?)
+                    message_id, work_id, message_type, schema_version,
+                    expected_conversion_version, created_at
+                ) VALUES (?, ?, 'PREPARE_NARRATION_PLAN', 1,
+                    (SELECT version FROM workflow.audiobook_conversion WHERE conversion_id = ?), ?)
                 """,
                 identifierGenerator.generate(),
                 workId,
+                conversionId,
                 now);
         conversionWorkflowService.scheduleStage(
                 listenerId,
@@ -302,46 +305,22 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
             }
             throw new IllegalArgumentException("Idempotency-Key was already used for another recovery action");
         }
+        conversionWorkflowService.resume(new ConversionWorkflowService.ResumeCommand(
+                listenerId, conversionId, expectedVersion, idempotencyKey));
         int resumed = jdbcTemplate.update(
                 """
-                UPDATE workflow.narration_plan_work w
+                UPDATE workflow.narration_plan_work
                 SET state = 'READY', attempt_count = 0, pause_reason_code = NULL,
                     resume_from_page = NULL, listener_guidance = NULL,
                     lease_owner = NULL, lease_expires_at = NULL
-                FROM workflow.audiobook_conversion c
-                WHERE w.conversion_id = c.conversion_id
-                  AND w.conversion_id = ? AND w.listener_id = ?
-                  AND w.state = 'PAUSED' AND c.state = 'PAUSED'
-                  AND c.reason_code = 'SOURCE_TOO_DAMAGED'
-                  AND c.version = ?
+                WHERE conversion_id = ? AND listener_id = ? AND state = 'PAUSED'
+                  AND pause_reason_code = 'SOURCE_TOO_DAMAGED'
                 """,
                 conversionId,
-                listenerId,
-                expectedVersion);
+                listenerId);
         if (resumed == 0) {
             throw new IllegalStateException("Damaged-source recovery is unavailable or stale");
         }
-        jdbcTemplate.update(
-                """
-                UPDATE workflow.audiobook_conversion
-                SET state = 'PREPARING', reason_code = 'NARRATION_PLAN_PENDING',
-                    pause_responsible_party = NULL, safe_resume_stage = NULL, pause_deadline = NULL,
-                    version = version + 1
-                WHERE conversion_id = ? AND listener_id = ? AND state = 'PAUSED' AND version = ?
-                """,
-                conversionId,
-                listenerId,
-                expectedVersion);
-        jdbcTemplate.update(
-                """
-                UPDATE workflow.conversion_stage_run
-                SET state = 'READY', failure_code = NULL, updated_at = ?
-                WHERE conversion_id = ? AND listener_id = ?
-                  AND stage = 'NARRATION_ANALYSIS' AND state = 'PAUSED'
-                """,
-                now,
-                conversionId,
-                listenerId);
         UUID workId = jdbcTemplate.queryForObject(
                 "SELECT work_id FROM workflow.narration_plan_work WHERE conversion_id = ? AND listener_id = ?",
                 UUID.class,
@@ -350,10 +329,12 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
         jdbcTemplate.update(
                 """
                 UPDATE workflow.narration_plan_outbox
-                SET message_id = ?, created_at = ?, published_at = NULL
+                SET message_id = ?, expected_conversion_version = ?,
+                    created_at = ?, published_at = NULL
                 WHERE work_id = ?
                 """,
                 identifierGenerator.generate(),
+                expectedVersion + 1,
                 now,
                 workId);
         return conversion(listenerId, conversionId);

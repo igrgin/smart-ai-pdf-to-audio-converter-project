@@ -114,7 +114,8 @@ class AudiobookGenerationITest {
         AudiobookGenerationService.AcceptedSegment replay = generationService.generateSegment(
                 conversion.listenerId(), conversion.conversionId(), reverse.getFirst().operationKey());
 
-        generationService.packageAudiobook(conversion.listenerId(), conversion.conversionId());
+        assertThat(workerService.packagePending()).isOne();
+        assertThat(workerService.packagePending()).isOne();
         AudiobookGenerationService.PrivateAudiobook finalized =
                 generationService.finalizeAudiobook(conversion.listenerId(), conversion.conversionId());
         AudiobookGenerationService.PrivateAudiobook finalizationReplay =
@@ -361,6 +362,11 @@ class AudiobookGenerationITest {
 
         assertThat(workerService.generatePending()).isOne();
         assertThat(workerService.packagePending()).isOne();
+        assertThatThrownBy(() -> generationService.finalizeAudiobook(
+                        conversion.listenerId(), conversion.conversionId()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("authoritatively accepted");
+        assertThat(workerService.packagePending()).isOne();
         generationService.finalizeAudiobook(conversion.listenerId(), conversion.conversionId());
         assertThat(workerService.generatePending()).isZero();
         assertThat(workerService.packagePending()).isZero();
@@ -368,12 +374,12 @@ class AudiobookGenerationITest {
         assertThat(jdbcTemplate.queryForList(
                         """
                         SELECT stage, state FROM workflow.conversion_stage_run
-                        WHERE conversion_id = ? AND stage IN ('SPEECH', 'PACKAGING')
+                        WHERE conversion_id = ? AND stage IN ('SPEECH', 'ASSEMBLY', 'PACKAGING')
                         ORDER BY stage
                         """,
                         conversion.conversionId()))
                 .extracting(row -> row.get("stage") + ":" + row.get("state"))
-                .containsExactly("PACKAGING:SUCCEEDED", "SPEECH:SUCCEEDED");
+                .containsExactly("ASSEMBLY:SUCCEEDED", "PACKAGING:SUCCEEDED", "SPEECH:SUCCEEDED");
     }
 
     @Test

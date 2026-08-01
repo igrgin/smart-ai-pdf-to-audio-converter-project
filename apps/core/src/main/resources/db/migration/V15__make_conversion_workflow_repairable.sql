@@ -3,6 +3,17 @@ ALTER TABLE workflow.audiobook_conversion
     ADD COLUMN safe_resume_stage VARCHAR(32),
     ADD COLUMN pause_deadline TIMESTAMPTZ;
 
+ALTER TABLE workflow.narration_plan_outbox
+    ADD COLUMN expected_conversion_version BIGINT;
+UPDATE workflow.narration_plan_outbox outbox
+SET expected_conversion_version = conversion.version
+FROM workflow.narration_plan_work work
+JOIN workflow.audiobook_conversion conversion
+  ON conversion.conversion_id = work.conversion_id
+WHERE outbox.work_id = work.work_id;
+ALTER TABLE workflow.narration_plan_outbox
+    ALTER COLUMN expected_conversion_version SET NOT NULL;
+
 UPDATE workflow.audiobook_conversion
 SET pause_responsible_party = 'LISTENER', safe_resume_stage = 'NARRATION_ANALYSIS'
 WHERE state = 'PAUSED';
@@ -154,6 +165,7 @@ CREATE TABLE workflow.conversion_terminal_failure_operation (
     conversion_id UUID NOT NULL,
     expected_conversion_version BIGINT NOT NULL,
     failure_code VARCHAR(64) NOT NULL,
+    reusable_characters BIGINT NOT NULL CHECK (reusable_characters >= 0),
     incurred_provider_cost_micros BIGINT NOT NULL CHECK (incurred_provider_cost_micros >= 0),
     created_at TIMESTAMPTZ NOT NULL,
     FOREIGN KEY (conversion_id, listener_id)
@@ -268,6 +280,19 @@ CREATE POLICY conversion_provider_cost_entry_listener_policy ON workflow.convers
 
 DO $$
 BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'folio_narration_worker') THEN
+        GRANT SELECT, INSERT, UPDATE ON workflow.conversion_stage_run TO folio_narration_worker;
+        GRANT SELECT, INSERT ON workflow.conversion_message_inbox,
+            workflow.conversion_accepted_result, workflow.conversion_pause_event,
+            workflow.conversion_late_result TO folio_narration_worker;
+        GRANT UPDATE ON workflow.audiobook_conversion TO folio_narration_worker;
+        CREATE POLICY conversion_stage_run_narration_worker_policy
+            ON workflow.conversion_stage_run TO folio_narration_worker USING (true) WITH CHECK (true);
+        CREATE POLICY conversion_accepted_result_narration_worker_policy
+            ON workflow.conversion_accepted_result TO folio_narration_worker USING (true) WITH CHECK (true);
+        CREATE POLICY conversion_pause_event_narration_worker_policy
+            ON workflow.conversion_pause_event TO folio_narration_worker USING (true) WITH CHECK (true);
+    END IF;
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'folio_speech_worker') THEN
         GRANT SELECT, INSERT, UPDATE ON workflow.conversion_stage_run TO folio_speech_worker;
         GRANT SELECT, INSERT ON workflow.conversion_message_inbox,

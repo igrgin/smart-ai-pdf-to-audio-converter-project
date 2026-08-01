@@ -1,6 +1,8 @@
 package dev.audiobook.platform.narration;
 
 import dev.audiobook.platform.admission.QuarantineObjectStore;
+import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
+import dev.audiobook.platform.workflow.ConversionWorkflowService;
 import java.io.IOException;
 import java.sql.Timestamp;
 import java.time.Clock;
@@ -28,9 +30,12 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
     private final NarrationPlanService narrationPlanService;
     private final Clock clock;
     private final PlatformTransactionManager transactionManager;
+    private final ConversionWorkflowService workflowService;
+    private final PlatformIdentifierGenerator identifierGenerator;
 
     @Override
     public int processPending() {
+        renewExpiredDeliveries();
         List<DeliveryCoordinates> pending = jdbcTemplate.query(
                 """
                 SELECT o.message_id, w.work_id
@@ -66,15 +71,7 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
         }
         try (var publication = objectStore.read(delivery.submissionId())) {
             narrationPlanService.prepare(delivery.listenerId(), delivery.conversionId(), publication);
-            transactions().executeWithoutResult(status -> jdbcTemplate.update(
-                    """
-                    UPDATE workflow.narration_plan_work
-                    SET state = 'SUCCEEDED', completed_at = ?, lease_owner = NULL, lease_expires_at = NULL
-                    WHERE work_id = ? AND state = 'CLAIMED' AND lease_owner = ?
-                    """,
-                    Timestamp.from(clock.instant()),
-                    workId,
-                    messageId));
+            transactions().executeWithoutResult(status -> acceptResult(delivery));
             return true;
         } catch (SourceTooDamagedException exception) {
             pauseAfterDamage(workId, messageId, exception);
@@ -90,6 +87,36 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
 
     private PendingDelivery claim(UUID messageId, UUID workId) {
         Instant now = clock.instant();
+        PendingDelivery delivery = jdbcTemplate.queryForObject(
+                """
+                SELECT w.listener_id, w.conversion_id, w.submission_id,
+                       o.schema_version, o.expected_conversion_version
+                FROM workflow.narration_plan_work w
+                JOIN workflow.narration_plan_outbox o ON o.work_id = w.work_id
+                WHERE w.work_id = ? AND o.message_id = ?
+                """,
+                (resultSet, row) -> new PendingDelivery(
+                        messageId,
+                        workId,
+                        resultSet.getObject("listener_id", UUID.class),
+                        resultSet.getObject("conversion_id", UUID.class),
+                        resultSet.getObject("submission_id", UUID.class),
+                        resultSet.getInt("schema_version"),
+                        resultSet.getLong("expected_conversion_version")),
+                workId,
+                messageId);
+        ConversionWorkflowService.DeliveryDecision workflowClaim = workflowService.claimDelivery(
+                new ConversionWorkflowService.WorkDelivery(
+                        messageId,
+                        delivery.conversionId(),
+                        ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
+                        delivery.schemaVersion(),
+                        delivery.expectedConversionVersion(),
+                        "narration-worker",
+                        LEASE_DURATION));
+        if (workflowClaim.disposition() != ConversionWorkflowService.DeliveryDisposition.CLAIMED) {
+            return null;
+        }
         jdbcTemplate.update(
                 """
                 INSERT INTO workflow.narration_plan_inbox (message_id, work_id, accepted_at)
@@ -116,47 +143,159 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
         if (claimed == 0) {
             return null;
         }
+        return delivery;
+    }
+
+    private void releaseAfterFailure(UUID workId, UUID messageId) {
+        transactions().executeWithoutResult(status -> {
+            PendingDelivery delivery = pendingDelivery(messageId, workId);
+            workflowService.failStage(new ConversionWorkflowService.StageFailure(
+                    messageId,
+                    delivery.conversionId(),
+                    ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
+                    "NARRATION_ANALYSIS_FAILED",
+                    true));
+            jdbcTemplate.update(
+                    """
+                    UPDATE workflow.narration_plan_work
+                    SET state = CASE WHEN attempt_count >= ? THEN 'EXHAUSTED' ELSE 'READY' END,
+                        lease_owner = NULL, lease_expires_at = NULL
+                    WHERE work_id = ? AND state = 'CLAIMED' AND lease_owner = ?
+                    """,
+                    MAX_ATTEMPTS,
+                    workId,
+                    messageId);
+            String state = jdbcTemplate.queryForObject(
+                    "SELECT state FROM workflow.narration_plan_work WHERE work_id = ?",
+                    String.class,
+                    workId);
+            if ("READY".equals(state)) {
+                jdbcTemplate.update(
+                        """
+                        UPDATE workflow.narration_plan_outbox
+                        SET message_id = ?, created_at = ?, published_at = NULL
+                        WHERE work_id = ?
+                        """,
+                        identifierGenerator.generate(),
+                        Timestamp.from(clock.instant()),
+                        workId);
+            }
+        });
+    }
+
+    private void renewExpiredDeliveries() {
+        List<DeliveryCoordinates> expired = jdbcTemplate.query(
+                """
+                SELECT o.message_id, w.work_id
+                FROM workflow.narration_plan_work w
+                JOIN workflow.narration_plan_outbox o ON o.work_id = w.work_id
+                WHERE w.state = 'CLAIMED' AND w.lease_expires_at <= ?
+                  AND w.attempt_count < ?
+                ORDER BY w.created_at, w.work_id
+                LIMIT ?
+                """,
+                (resultSet, row) -> new DeliveryCoordinates(
+                        resultSet.getObject("message_id", UUID.class),
+                        resultSet.getObject("work_id", UUID.class)),
+                Timestamp.from(clock.instant()),
+                MAX_ATTEMPTS,
+                BATCH_SIZE);
+        for (DeliveryCoordinates delivery : expired) {
+            jdbcTemplate.update(
+                    """
+                    UPDATE workflow.narration_plan_outbox
+                    SET message_id = ?, created_at = ?, published_at = NULL
+                    WHERE work_id = ? AND message_id = ?
+                    """,
+                    identifierGenerator.generate(),
+                    Timestamp.from(clock.instant()),
+                    delivery.workId(),
+                    delivery.messageId());
+        }
+    }
+
+    private void pauseAfterDamage(
+            UUID workId, UUID messageId, SourceTooDamagedException exception) {
+        transactions().executeWithoutResult(status -> {
+            PendingDelivery delivery = pendingDelivery(messageId, workId);
+            workflowService.pause(new ConversionWorkflowService.PauseCommand(
+                    messageId,
+                    delivery.listenerId(),
+                    delivery.conversionId(),
+                    ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
+                    exception.reasonCode(),
+                    ConversionWorkflowService.ResponsibleParty.LISTENER,
+                    null));
+            jdbcTemplate.update(
+                    """
+                    UPDATE workflow.narration_plan_work
+                    SET state = 'PAUSED', pause_reason_code = ?, resume_from_page = ?,
+                        listener_guidance = ?, lease_owner = NULL, lease_expires_at = NULL
+                    WHERE work_id = ? AND state = 'CLAIMED' AND lease_owner = ?
+                    """,
+                    exception.reasonCode(),
+                    exception.resumeFromPage(),
+                    exception.listenerGuidance(),
+                    workId,
+                    messageId);
+        });
+    }
+
+    private void acceptResult(PendingDelivery delivery) {
+        PlanResult plan = jdbcTemplate.queryForObject(
+                """
+                SELECT working_asset_ref, asset_sha256
+                FROM narration.narration_plan
+                WHERE listener_id = ? AND conversion_id = ?
+                """,
+                (resultSet, row) -> new PlanResult(
+                        resultSet.getString("working_asset_ref"),
+                        resultSet.getString("asset_sha256")),
+                delivery.listenerId(),
+                delivery.conversionId());
+        ConversionWorkflowService.ResultDecision accepted = workflowService.acceptResult(
+                new ConversionWorkflowService.StageResult(
+                        delivery.messageId(),
+                        delivery.conversionId(),
+                        ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
+                        "narration-analysis:" + delivery.conversionId(),
+                        plan.reference(),
+                        plan.digest(),
+                        false));
+        if (accepted.disposition() != ConversionWorkflowService.ResultDisposition.ACCEPTED
+                && accepted.disposition() != ConversionWorkflowService.ResultDisposition.REPLAYED) {
+            throw new IllegalStateException("Narration analysis result was not accepted");
+        }
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.narration_plan_work
+                SET state = 'SUCCEEDED', completed_at = ?, lease_owner = NULL, lease_expires_at = NULL
+                WHERE work_id = ? AND state = 'CLAIMED' AND lease_owner = ?
+                """,
+                Timestamp.from(clock.instant()),
+                delivery.workId(),
+                delivery.messageId());
+    }
+
+    private PendingDelivery pendingDelivery(UUID messageId, UUID workId) {
         return jdbcTemplate.queryForObject(
                 """
-                SELECT listener_id, conversion_id, submission_id
-                FROM workflow.narration_plan_work WHERE work_id = ?
+                SELECT w.listener_id, w.conversion_id, w.submission_id,
+                       o.schema_version, o.expected_conversion_version
+                FROM workflow.narration_plan_work w
+                JOIN workflow.narration_plan_outbox o ON o.work_id = w.work_id
+                WHERE w.work_id = ? AND o.message_id = ?
                 """,
                 (resultSet, row) -> new PendingDelivery(
                         messageId,
                         workId,
                         resultSet.getObject("listener_id", UUID.class),
                         resultSet.getObject("conversion_id", UUID.class),
-                        resultSet.getObject("submission_id", UUID.class)),
-                workId);
-    }
-
-    private void releaseAfterFailure(UUID workId, UUID messageId) {
-        transactions().executeWithoutResult(status -> jdbcTemplate.update(
-                """
-                UPDATE workflow.narration_plan_work
-                SET state = CASE WHEN attempt_count >= ? THEN 'EXHAUSTED' ELSE 'READY' END,
-                    lease_owner = NULL, lease_expires_at = NULL
-                WHERE work_id = ? AND state = 'CLAIMED' AND lease_owner = ?
-                """,
-                MAX_ATTEMPTS,
+                        resultSet.getObject("submission_id", UUID.class),
+                        resultSet.getInt("schema_version"),
+                        resultSet.getLong("expected_conversion_version")),
                 workId,
-                messageId));
-    }
-
-    private void pauseAfterDamage(
-            UUID workId, UUID messageId, SourceTooDamagedException exception) {
-        transactions().executeWithoutResult(status -> jdbcTemplate.update(
-                """
-                UPDATE workflow.narration_plan_work
-                SET state = 'PAUSED', pause_reason_code = ?, resume_from_page = ?,
-                    listener_guidance = ?, lease_owner = NULL, lease_expires_at = NULL
-                WHERE work_id = ? AND state = 'CLAIMED' AND lease_owner = ?
-                """,
-                exception.reasonCode(),
-                exception.resumeFromPage(),
-                exception.listenerGuidance(),
-                workId,
-                messageId));
+                messageId);
     }
 
     private TransactionTemplate transactions() {
@@ -164,7 +303,16 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
     }
 
     private record PendingDelivery(
-            UUID messageId, UUID workId, UUID listenerId, UUID conversionId, UUID submissionId) {
+            UUID messageId,
+            UUID workId,
+            UUID listenerId,
+            UUID conversionId,
+            UUID submissionId,
+            int schemaVersion,
+            long expectedConversionVersion) {
+    }
+
+    private record PlanResult(String reference, String digest) {
     }
 
     private record DeliveryCoordinates(UUID messageId, UUID workId) {

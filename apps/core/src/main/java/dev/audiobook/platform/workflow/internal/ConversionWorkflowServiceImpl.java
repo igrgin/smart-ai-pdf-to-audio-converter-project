@@ -1,8 +1,10 @@
-package dev.audiobook.platform.workflow;
+package dev.audiobook.platform.workflow.internal;
 
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
 import dev.audiobook.platform.narration.NarrationSelectionService;
+import dev.audiobook.platform.workflow.AudiobookConversionService;
+import dev.audiobook.platform.workflow.ConversionWorkflowService;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
@@ -112,6 +114,31 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public boolean claimActive(UUID messageId, UUID conversionId, Stage stage) {
+        Objects.requireNonNull(messageId, "messageId");
+        Objects.requireNonNull(conversionId, "conversionId");
+        Objects.requireNonNull(stage, "stage");
+        Integer active = jdbcTemplate.queryForObject(
+                """
+                SELECT count(*)
+                FROM workflow.conversion_stage_run run
+                JOIN workflow.audiobook_conversion conversion
+                  ON conversion.conversion_id = run.conversion_id
+                WHERE run.conversion_id = ? AND run.stage = ?
+                  AND run.state = 'CLAIMED' AND run.lease_message_id = ?
+                  AND run.lease_expires_at > ?
+                  AND conversion.state NOT IN ('FINALIZED', 'FAILED', 'CANCELLED')
+                """,
+                Integer.class,
+                conversionId,
+                stage.name(),
+                messageId,
+                timestamp(identityClock.instant()));
+        return active != null && active == 1;
+    }
+
+    @Override
     @Transactional
     public StageView checkpoint(StageCheckpoint checkpoint) {
         validate(checkpoint);
@@ -150,9 +177,19 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
         }
         AcceptedResult replay = findAcceptedResult(result.conversionId(), result.operationKey());
         if (replay != null) {
-            return replay.resultDigest().equals(result.resultDigest())
-                    ? new ResultDecision(ResultDisposition.REPLAYED, replay.acceptedResultId(), null)
-                    : new ResultDecision(ResultDisposition.AMBIGUOUS, replay.acceptedResultId(), "RESULT_DIGEST_MISMATCH");
+            if (!replay.resultDigest().equals(result.resultDigest())) {
+                return new ResultDecision(
+                        ResultDisposition.AMBIGUOUS, replay.acceptedResultId(), "RESULT_DIGEST_MISMATCH");
+            }
+            StageLease replayLease = lockedStageLease(result.conversionId(), result.stage());
+            if (replayLease != null
+                    && replayLease.state() == StageState.CLAIMED
+                    && result.messageId().equals(replayLease.leaseMessageId())
+                    && replayLease.leaseExpiresAt() != null
+                    && replayLease.leaseExpiresAt().isAfter(identityClock.instant())) {
+                completeStage(replayLease.stageRunId());
+            }
+            return new ResultDecision(ResultDisposition.REPLAYED, replay.acceptedResultId(), null);
         }
         StageLease lease = lockedStageLease(result.conversionId(), result.stage());
         if (lease == null
@@ -181,15 +218,7 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
                 result.resultDigest(),
                 result.providerWork(),
                 timestamp(now));
-        jdbcTemplate.update(
-                """
-                UPDATE workflow.conversion_stage_run
-                SET state = 'SUCCEEDED', lease_owner = NULL, lease_message_id = NULL,
-                    lease_expires_at = NULL, failure_code = NULL, updated_at = ?
-                WHERE stage_run_id = ?
-                """,
-                timestamp(now),
-                lease.stageRunId());
+        completeStage(lease.stageRunId());
         return new ResultDecision(ResultDisposition.ACCEPTED, acceptedResultId, null);
     }
 
@@ -273,6 +302,30 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
                 || current.attemptCount() >= current.maximumAttempts()) {
             throw new IllegalStateException("Failed stage is not repairable within its retry bound");
         }
+        Integer failedPrerequisites = jdbcTemplate.queryForObject(
+                """
+                SELECT count(*) FROM workflow.conversion_stage_run prerequisite
+                WHERE prerequisite.listener_id = ? AND prerequisite.conversion_id = ?
+                  AND prerequisite.state = 'FAILED'
+                  AND CASE prerequisite.stage
+                        WHEN 'INSPECTION' THEN 1 WHEN 'EXTRACTION' THEN 2
+                        WHEN 'NARRATION_ANALYSIS' THEN 3 WHEN 'SPEECH' THEN 4
+                        WHEN 'ASSEMBLY' THEN 5 WHEN 'PACKAGING' THEN 6
+                        WHEN 'FINALIZATION' THEN 7
+                      END < CASE ?
+                        WHEN 'INSPECTION' THEN 1 WHEN 'EXTRACTION' THEN 2
+                        WHEN 'NARRATION_ANALYSIS' THEN 3 WHEN 'SPEECH' THEN 4
+                        WHEN 'ASSEMBLY' THEN 5 WHEN 'PACKAGING' THEN 6
+                        WHEN 'FINALIZATION' THEN 7
+                      END
+                """,
+                Integer.class,
+                listenerId,
+                conversionId,
+                stage.name());
+        if (failedPrerequisites != null && failedPrerequisites > 0) {
+            throw new IllegalStateException("An earlier failed stage must be repaired first");
+        }
         jdbcTemplate.update(
                 """
                 UPDATE workflow.conversion_stage_run
@@ -282,6 +335,18 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
                 timestamp(identityClock.instant()),
                 current.stageRunId());
         return stage(listenerId, conversionId, stage);
+    }
+
+    private void completeStage(UUID stageRunId) {
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.conversion_stage_run
+                SET state = 'SUCCEEDED', lease_owner = NULL, lease_message_id = NULL,
+                    lease_expires_at = NULL, failure_code = NULL, updated_at = ?
+                WHERE stage_run_id = ?
+                """,
+                timestamp(identityClock.instant()),
+                stageRunId);
     }
 
     @Override
@@ -520,11 +585,43 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
         requireOperationKey(idempotencyKey);
         Long incurredCost = jdbcTemplate.queryForObject(
                 """
-                SELECT COALESCE(SUM(incurred_provider_cost_micros), 0)
-                FROM workflow.conversion_provider_cost_entry
-                WHERE listener_id = ? AND conversion_id = ?
+                WITH reservation AS (
+                    SELECT characters.reserved_delta AS reserved_characters,
+                           provider.reserved_delta AS reserved_cost_micros
+                    FROM character_entitlement_ledger_entry characters
+                    JOIN provider_spend_ledger_entry provider
+                      ON provider.reservation_id = characters.reservation_id
+                    WHERE characters.listener_id = ? AND characters.conversion_id = ?
+                      AND characters.entry_type = 'RESERVATION'
+                      AND provider.entry_type = 'RESERVATION'
+                ), recorded AS (
+                    SELECT COALESCE(SUM(incurred_provider_cost_micros), 0) AS cost_micros
+                    FROM workflow.conversion_provider_cost_entry
+                    WHERE listener_id = ? AND conversion_id = ?
+                ), calling AS (
+                    SELECT COALESCE(SUM(GREATEST(1, CEIL(
+                        reservation.reserved_cost_micros::numeric * segment.character_count
+                        / reservation.reserved_characters
+                    )::bigint)), 0) AS cost_micros
+                    FROM generation.speech_attempt attempt
+                    JOIN generation.speech_segment segment ON segment.segment_id = attempt.segment_id
+                    CROSS JOIN reservation
+                    WHERE attempt.listener_id = ? AND attempt.conversion_id = ?
+                      AND attempt.state = 'CALLING_PROVIDER'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM workflow.conversion_provider_cost_entry cost
+                          WHERE cost.operation_key = 'provider-cost:' || attempt.attempt_id
+                      )
+                )
+                SELECT LEAST(reservation.reserved_cost_micros,
+                            recorded.cost_micros + calling.cost_micros)
+                FROM reservation, recorded, calling
                 """,
                 Long.class,
+                listenerId,
+                conversionId,
+                listenerId,
+                conversionId,
                 listenerId,
                 conversionId);
         return cancel(new CancellationCommand(
@@ -540,6 +637,9 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
     @Transactional
     public void recordProviderCost(ProviderCost command) {
         validate(command);
+        if (lockOwnedConversion(command.listenerId(), command.conversionId()) == null) {
+            throw new IllegalStateException("Conversion provider cost owner is unavailable");
+        }
         jdbcTemplate.update(
                 """
                 INSERT INTO workflow.conversion_provider_cost_entry (
@@ -576,7 +676,7 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
         }
         entitlementService.settle(new ConversionEntitlementService.SettlementRequest(
                 reservationId(command.listenerId(), command.conversionId()),
-                0,
+                command.reusableCharacters(),
                 command.incurredProviderCostMicros(),
                 "conversion-failure-settlement:" + command.conversionId()));
         Instant now = identityClock.instant();
@@ -626,14 +726,15 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
                 """
                 INSERT INTO workflow.conversion_terminal_failure_operation (
                     operation_key, listener_id, conversion_id, expected_conversion_version,
-                    failure_code, incurred_provider_cost_micros, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    failure_code, reusable_characters, incurred_provider_cost_micros, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 command.idempotencyKey(),
                 command.listenerId(),
                 command.conversionId(),
                 command.expectedConversionVersion(),
                 command.failureCode(),
+                command.reusableCharacters(),
                 command.incurredProviderCostMicros(),
                 timestamp(now));
         return cancellationResult(command.listenerId(), command.conversionId());
@@ -870,7 +971,7 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
         List<TerminalFailureOperation> matches = jdbcTemplate.query(
                 """
                 SELECT listener_id, conversion_id, expected_conversion_version,
-                       failure_code, incurred_provider_cost_micros
+                       failure_code, reusable_characters, incurred_provider_cost_micros
                 FROM workflow.conversion_terminal_failure_operation WHERE operation_key = ?
                 """,
                 (resultSet, row) -> new TerminalFailureOperation(
@@ -878,6 +979,7 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
                         resultSet.getObject("conversion_id", UUID.class),
                         resultSet.getLong("expected_conversion_version"),
                         resultSet.getString("failure_code"),
+                        resultSet.getLong("reusable_characters"),
                         resultSet.getLong("incurred_provider_cost_micros")),
                 operationKey);
         return matches.isEmpty() ? null : matches.getFirst();
@@ -1095,8 +1197,8 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
                 || command.failureCode().length() > 64) {
             throw new IllegalArgumentException("failureCode is required and must be at most 64 characters");
         }
-        if (command.incurredProviderCostMicros() < 0) {
-            throw new IllegalArgumentException("incurredProviderCostMicros cannot be negative");
+        if (command.reusableCharacters() < 0 || command.incurredProviderCostMicros() < 0) {
+            throw new IllegalArgumentException("Reusable characters and incurred provider cost cannot be negative");
         }
     }
 
@@ -1214,12 +1316,14 @@ public class ConversionWorkflowServiceImpl implements ConversionWorkflowService 
             UUID conversionId,
             long expectedConversionVersion,
             String failureCode,
+            long reusableCharacters,
             long incurredProviderCostMicros) {
         boolean matches(TerminalFailureCommand command) {
             return listenerId.equals(command.listenerId())
                     && conversionId.equals(command.conversionId())
                     && expectedConversionVersion == command.expectedConversionVersion()
                     && failureCode.equals(command.failureCode())
+                    && reusableCharacters == command.reusableCharacters()
                     && incurredProviderCostMicros == command.incurredProviderCostMicros();
         }
     }

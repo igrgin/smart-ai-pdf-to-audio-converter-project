@@ -10,6 +10,8 @@ public interface ConversionWorkflowService {
 
     DeliveryDecision claimDelivery(WorkDelivery delivery);
 
+    boolean claimActive(UUID messageId, UUID conversionId, Stage stage);
+
     StageView checkpoint(StageCheckpoint checkpoint);
 
     ResultDecision acceptResult(StageResult result);
@@ -120,6 +122,7 @@ public interface ConversionWorkflowService {
             UUID conversionId,
             long expectedConversionVersion,
             String failureCode,
+            long reusableCharacters,
             long incurredProviderCostMicros,
             String idempotencyKey) {
     }

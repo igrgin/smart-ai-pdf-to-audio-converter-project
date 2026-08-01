@@ -14,6 +14,7 @@ import dev.audiobook.platform.narration.NarrationRejectionReason;
 import dev.audiobook.platform.narration.PublicationNarrationPlanInterpreter;
 import dev.audiobook.platform.provider.GovernedSpeechService;
 import dev.audiobook.platform.workflow.AudiobookConversionFinalizationService;
+import dev.audiobook.platform.workflow.ConversionWorkflowService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -59,6 +60,7 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
     private final PlatformIdentifierGenerator identifierGenerator;
     private final AudioGenerationProperties properties;
     private final Clock identityClock;
+    private final ConversionWorkflowService workflowService;
 
     @Override
     public GenerationManifest prepare(UUID listenerId, UUID conversionId) {
@@ -200,33 +202,12 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                 || !authorization.recipeDigest().equals(segment.recipeDigest())) {
             throw new IllegalStateException("Frozen Generation Recipe is no longer eligible");
         }
-        int attemptNumber = jdbcTemplate.queryForObject(
-                """
-                UPDATE generation.speech_segment
-                SET next_attempt_number = next_attempt_number + 1
-                WHERE listener_id = ? AND conversion_id = ? AND operation_key = ?
-                RETURNING next_attempt_number - 1
-                """,
-                Integer.class,
-                listenerId,
-                conversionId,
-                operationKey);
-        UUID attemptId = identifierGenerator.generate();
-        Instant startedAt = identityClock.instant();
-        jdbcTemplate.update(
-                """
-                INSERT INTO generation.speech_attempt (
-                    attempt_id, listener_id, conversion_id, segment_id, operation_key,
-                    attempt_number, state, started_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'CALLING_PROVIDER', ?)
-                """,
-                attemptId,
-                listenerId,
-                conversionId,
-                segment.segmentId(),
-                operationKey,
-                attemptNumber,
-                Timestamp.from(startedAt));
+        AttemptStart attempt = transaction().execute(status -> startAttempt(
+                listenerId, conversionId, operationKey, segment.segmentId()));
+        if (attempt == null) {
+            throw new IllegalStateException("Speech provider attempt could not start");
+        }
+        UUID attemptId = attempt.attemptId();
         try {
             String spokenText = readSpokenText(segment);
             GovernedSpeechService.SpeechOutcome providerOutcome = governedSpeechService.synthesize(
@@ -234,26 +215,37 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                             segment.recipeId(), attemptId.toString(), spokenText));
             SpeechProvider.SpeechResult providerResult = providerOutcome.speech();
             String receivedDigest = SpeechSegmentationServiceImpl.sha256Bytes(providerResult.audio());
-            jdbcTemplate.update(
-                    """
-                    UPDATE generation.speech_attempt
-                    SET state = 'RECEIVED', provider_request_id = ?, actual_model = ?,
-                        actual_region = ?, actual_voice = ?, received_sha256 = ?,
-                        capability_profile_version = ?, input_meter = ?, input_units = ?,
-                        output_meter = ?, output_units = ?
-                    WHERE attempt_id = ?
-                    """,
-                    providerResult.providerRequestId(),
-                    providerResult.actualModel(),
-                    providerResult.actualRegion(),
-                    providerResult.actualVoice(),
-                    receivedDigest,
-                    providerOutcome.capabilityProfileVersion(),
-                    providerOutcome.usage().inputMeter(),
-                    providerOutcome.usage().inputUnits(),
-                    providerOutcome.usage().outputMeter(),
-                    providerOutcome.usage().outputUnits(),
-                    attemptId);
+            transaction().executeWithoutResult(status -> {
+                Long estimatedProviderCost = estimatedProviderCostMicros(listenerId, conversionId, operationKey);
+                if (estimatedProviderCost != null) {
+                    workflowService.recordProviderCost(new ConversionWorkflowService.ProviderCost(
+                            listenerId,
+                            conversionId,
+                            estimatedProviderCost,
+                            "provider-request:" + providerResult.providerRequestId() + ":attempt:" + attemptId,
+                            "provider-cost:" + attemptId));
+                }
+                jdbcTemplate.update(
+                        """
+                        UPDATE generation.speech_attempt
+                        SET state = 'RECEIVED', provider_request_id = ?, actual_model = ?,
+                            actual_region = ?, actual_voice = ?, received_sha256 = ?,
+                            capability_profile_version = ?, input_meter = ?, input_units = ?,
+                            output_meter = ?, output_units = ?
+                        WHERE attempt_id = ?
+                        """,
+                        providerResult.providerRequestId(),
+                        providerResult.actualModel(),
+                        providerResult.actualRegion(),
+                        providerResult.actualVoice(),
+                        receivedDigest,
+                        providerOutcome.capabilityProfileVersion(),
+                        providerOutcome.usage().inputMeter(),
+                        providerOutcome.usage().inputUnits(),
+                        providerOutcome.usage().outputMeter(),
+                        providerOutcome.usage().outputUnits(),
+                        attemptId);
+            });
             SpeechResultValidationService.ValidatedPcm pcm = validationService.validate(
                     new SpeechResultValidationService.ExpectedRoute(
                             segment.model(), segment.region(), segment.voice()),
@@ -320,6 +312,73 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                 failover.replacementRecipeId(), replacement.manifestId());
     }
 
+    private AttemptStart startAttempt(
+            UUID listenerId, UUID conversionId, String operationKey, String segmentId) {
+        String conversionState = jdbcTemplate.queryForObject(
+                """
+                SELECT state FROM workflow.audiobook_conversion
+                WHERE listener_id = ? AND conversion_id = ? FOR UPDATE
+                """,
+                String.class,
+                listenerId,
+                conversionId);
+        if (!"GENERATING".equals(conversionState)) {
+            throw new IllegalStateException("Audiobook Conversion no longer permits provider calls");
+        }
+        int attemptNumber = jdbcTemplate.queryForObject(
+                """
+                UPDATE generation.speech_segment
+                SET next_attempt_number = next_attempt_number + 1
+                WHERE listener_id = ? AND conversion_id = ? AND operation_key = ?
+                RETURNING next_attempt_number - 1
+                """,
+                Integer.class,
+                listenerId,
+                conversionId,
+                operationKey);
+        UUID attemptId = identifierGenerator.generate();
+        jdbcTemplate.update(
+                """
+                INSERT INTO generation.speech_attempt (
+                    attempt_id, listener_id, conversion_id, segment_id, operation_key,
+                    attempt_number, state, started_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'CALLING_PROVIDER', ?)
+                """,
+                attemptId,
+                listenerId,
+                conversionId,
+                segmentId,
+                operationKey,
+                attemptNumber,
+                Timestamp.from(identityClock.instant()));
+        return new AttemptStart(attemptId);
+    }
+
+    private Long estimatedProviderCostMicros(UUID listenerId, UUID conversionId, String operationKey) {
+        List<Long> estimates = jdbcTemplate.queryForList(
+                """
+                SELECT GREATEST(1, CEIL(
+                    provider.reserved_delta::numeric * segment.character_count
+                    / characters.reserved_delta
+                )::bigint)
+                FROM generation.speech_segment segment
+                JOIN character_entitlement_ledger_entry characters
+                  ON characters.listener_id = segment.listener_id
+                 AND characters.conversion_id = segment.conversion_id
+                 AND characters.entry_type = 'RESERVATION'
+                JOIN provider_spend_ledger_entry provider
+                  ON provider.reservation_id = characters.reservation_id
+                 AND provider.entry_type = 'RESERVATION'
+                WHERE segment.listener_id = ? AND segment.conversion_id = ?
+                  AND segment.operation_key = ?
+                """,
+                Long.class,
+                listenerId,
+                conversionId,
+                operationKey);
+        return estimates.isEmpty() ? null : estimates.getFirst();
+    }
+
     @Override
     public void packageAudiobook(UUID listenerId, UUID conversionId) {
         requireIdentity(listenerId, conversionId);
@@ -356,6 +415,25 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
         PreparedFinalization prepared = storedPreparedFinalization(listenerId, conversionId);
         if (prepared == null) {
             throw new IllegalStateException("Audiobook packaging result is not complete");
+        }
+        Integer acceptedPackaging = jdbcTemplate.queryForObject(
+                """
+                SELECT count(*)
+                FROM workflow.conversion_stage_run stage
+                JOIN workflow.conversion_accepted_result accepted
+                  ON accepted.stage_run_id = stage.stage_run_id
+                JOIN generation.packaged_audiobook_result packaged
+                  ON packaged.conversion_id = stage.conversion_id
+                 AND packaged.manifest_digest = accepted.result_sha256
+                WHERE stage.listener_id = ? AND stage.conversion_id = ?
+                  AND stage.stage = 'PACKAGING' AND stage.state = 'SUCCEEDED'
+                  AND accepted.operation_key = 'packaging-stage:' || stage.conversion_id
+                """,
+                Integer.class,
+                listenerId,
+                conversionId);
+        if (acceptedPackaging == null || acceptedPackaging != 1) {
+            throw new IllegalStateException("Audiobook packaging result is not authoritatively accepted");
         }
         return transaction().execute(status -> publishFinalization(listenerId, conversionId, prepared));
     }
@@ -1032,6 +1110,9 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
             String model,
             String region,
             String voice) {
+    }
+
+    private record AttemptStart(UUID attemptId) {
     }
 
     private record StoredManifest(

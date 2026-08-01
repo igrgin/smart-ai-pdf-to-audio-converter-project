@@ -125,6 +125,7 @@ class AudiobookConversionServiceTest {
                 contains("INSERT INTO workflow.narration_plan_outbox"),
                 eq(messageId),
                 eq(workId),
+                eq(conversionId),
                 eq(Timestamp.from(clock.instant())));
     }
 
