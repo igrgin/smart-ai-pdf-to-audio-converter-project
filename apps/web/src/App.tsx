@@ -25,6 +25,7 @@ import {
   type IdentitySession,
   type Library
 } from "./identity-session";
+import { NarrationReviewEditor } from "./NarrationReviewEditor";
 import { fetchPlatformStatus, type PlatformStatus } from "./platform-status";
 import {
   publicationMediaType,
@@ -257,6 +258,7 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
             {library.audiobooks.map((conversion) => (
               <ConversionCard
                 conversion={conversion}
+                csrf={csrf}
                 key={conversion.conversionId}
                 onChooseNarrator={() => setCreationTarget(conversion)}
               />
@@ -306,9 +308,11 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
 
 function ConversionCard({
   conversion,
+  csrf,
   onChooseNarrator
 }: {
   conversion: AudiobookConversion;
+  csrf: CsrfProof;
   onChooseNarrator: () => void;
 }) {
   const [progress, setProgress] = useState<ConversionProgress>(conversion);
@@ -376,48 +380,48 @@ function ConversionCard({
     );
   }
 
+  if (progress.reasonCode === "NARRATION_REVIEW_APPROVED"
+      || progress.reasonCode === "NARRATION_RECOMMENDATIONS_ACCEPTED") {
+    return (
+      <article className="preparing-audiobook review-frozen-card" aria-live="polite">
+        <span className="empty-mark" aria-hidden="true"><ShieldCheck size={28} /></span>
+        <span className="card-kicker">Frozen decision</span>
+        <h2>Narration Review approved</h2>
+        <p>
+          {progress.reasonCode === "NARRATION_RECOMMENDATIONS_ACCEPTED"
+            ? "Recommended treatments are frozen for generation."
+            : "Your submitted structure, treatments, and Narration Snippets are frozen for generation."}
+        </p>
+      </article>
+    );
+  }
+
   return (
     <article className="preparing-audiobook narration-plan-card" aria-live="polite">
       <span className="empty-mark" aria-hidden="true"><BookOpen size={28} /></span>
       <span className="card-kicker">{progress.reasonCode}</span>
       <h2>Narration Plan ready</h2>
       <p>Review source-backed structure and uncertain or non-prose treatments. Normal prose is not editable.</p>
-      <div className="narration-chapters">
-        {progress.narrationPlan?.chapters.map((chapter) => (
-          <section className="narration-chapter" key={`${chapter.ordinal}-${chapter.provenance.spineItem}`}>
-            <h3>{chapter.title ?? `Unavailable source section ${chapter.ordinal + 1}`}</h3>
-            <p className="narration-provenance">
-              Source: {label(chapter.provenance.source)} · spine {chapter.provenance.spineIndex + 1}
-              {chapter.provenance.anchor ? ` · anchor ${chapter.provenance.anchor}` : ""}
-              {` · confidence ${percent(chapter.provenance.confidence)}`}
-            </p>
-            {chapter.gaps.map((gap) => (
-              <p className="narration-gap" key={`${gap.sourceUnit}-${gap.reasonCode}`}>
-                Explicit gap · {gap.reasonCode}
-              </p>
-            ))}
-            {chapter.reviewItems.map((item) => (
-              <div className="narration-review-item" key={item.ordinal}>
-                <strong>{label(item.type)} · {label(item.recommendedTreatment)}</strong>
-                <span>
-                  Source position {item.sourceOrdinal + 1} · extraction {percent(item.extractionConfidence)}
-                  {` · classification ${percent(item.classificationConfidence)}`}
-                  {` · treatment ${percent(item.treatmentConfidence)}`}
-                </span>
-                <small>
-                  {item.reasonCode} · Source: {label(item.provenance.source)}
-                  {` · spine ${item.provenance.spineIndex + 1} · ${item.provenance.spineItem}`}
-                  {item.provenance.anchor ? ` · anchor ${item.provenance.anchor}` : ""}
-                </small>
-                {item.narrationSnippet && <blockquote>{item.narrationSnippet}</blockquote>}
-              </div>
-            ))}
-          </section>
-        ))}
-      </div>
-      <div className="narration-actions" aria-label="Allowed actions">
-        {progress.allowedActions.map((action) => <span key={action}>{label(action)}</span>)}
-      </div>
+      {progress.narrationPlan && (
+        <NarrationReviewEditor
+          conversionId={progress.conversionId}
+          csrf={csrf}
+          plan={progress.narrationPlan}
+          version={progress.version}
+          onFrozen={(action, version) => setProgress({
+            ...progress,
+            version,
+            reasonCode: action === "SKIP_OPTIONAL"
+              ? "NARRATION_RECOMMENDATIONS_ACCEPTED"
+              : "NARRATION_REVIEW_APPROVED",
+            allowedActions: []
+          })}
+          onReload={async () => {
+            const result = await fetchConversionProgress(progress.conversionId, undefined, new AbortController().signal);
+            if (!result.notModified) setProgress({ ...conversion, ...result.progress });
+          }}
+        />
+      )}
       {progress.explicitNarrationChoiceRequired && (
         <Button type="button" variant="outline" onClick={onChooseNarrator}>
           Choose a new Narrator Voice
@@ -425,14 +429,6 @@ function ConversionCard({
       )}
     </article>
   );
-}
-
-function label(value: string): string {
-  return value.toLowerCase().replaceAll("_", " ").replace(/^./, (character) => character.toUpperCase());
-}
-
-function percent(value: number): string {
-  return `${Math.round(value * 100)}%`;
 }
 
 function CreateAudiobookDialog({

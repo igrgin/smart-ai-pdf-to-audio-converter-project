@@ -54,6 +54,8 @@ class NarrationPlanITest {
     private final InspectionOutcomeRecordingService inspectionOutcomeRecordingService;
     private final AudiobookConversionService conversionService;
     private final NarrationPlanService narrationPlanService;
+    private final NarrationReviewService narrationReviewService;
+    private final NarrationReviewAssetStore reviewAssetStore;
     private final NarrationPlanAssetStore assetStore;
     private final NarrationPlanJobService narrationPlanJobService;
     private final AdmissionOutboxRelayService outboxRelayService;
@@ -68,6 +70,9 @@ class NarrationPlanITest {
     @MockitoSpyBean
     private NarrationPlanAssetStore spiedAssetStore;
 
+    @MockitoSpyBean
+    private NarrationReviewAssetStore spiedReviewAssetStore;
+
     @Autowired
     NarrationPlanITest(
             PublicationSubmissionService submissionService,
@@ -77,6 +82,8 @@ class NarrationPlanITest {
             InspectionOutcomeRecordingService inspectionOutcomeRecordingService,
             AudiobookConversionService conversionService,
             NarrationPlanService narrationPlanService,
+            NarrationReviewService narrationReviewService,
+            NarrationReviewAssetStore reviewAssetStore,
             NarrationPlanAssetStore assetStore,
             NarrationPlanJobService narrationPlanJobService,
             AdmissionOutboxRelayService outboxRelayService,
@@ -88,6 +95,8 @@ class NarrationPlanITest {
         this.inspectionOutcomeRecordingService = inspectionOutcomeRecordingService;
         this.conversionService = conversionService;
         this.narrationPlanService = narrationPlanService;
+        this.narrationReviewService = narrationReviewService;
+        this.reviewAssetStore = reviewAssetStore;
         this.assetStore = assetStore;
         this.narrationPlanJobService = narrationPlanJobService;
         this.outboxRelayService = outboxRelayService;
@@ -226,6 +235,180 @@ class NarrationPlanITest {
         assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
         assertThat(conversionService.conversion(listenerId, conversionId).state())
                 .isEqualTo(AudiobookConversionService.ConversionState.AWAITING_REVIEW);
+    }
+
+    @Test
+    void skippingOptionalReviewFreezesRecommendationsAndReplaysWithoutRelationalPrivateContent()
+            throws Exception {
+        UUID listenerId = entitledListener();
+        UUID conversionId = admit(listenerId, "skip-review");
+        assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
+
+        NarrationReviewService.ReviewCommand command = new NarrationReviewService.ReviewCommand(
+                listenerId,
+                conversionId,
+                NarrationReviewService.ReviewAction.SKIP_OPTIONAL,
+                List.of(),
+                1,
+                "skip-review-operation");
+        NarrationReviewService.ReviewResult first = narrationReviewService.submit(command);
+        NarrationReviewService.ReviewResult replay = narrationReviewService.submit(command);
+
+        assertThat(first.action()).isEqualTo(NarrationReviewService.ReviewAction.SKIP_OPTIONAL);
+        assertThat(first.conversionVersion()).isEqualTo(2);
+        assertThat(first.replayed()).isFalse();
+        assertThat(replay).isEqualTo(new NarrationReviewService.ReviewResult(
+                first.decisionId(),
+                first.action(),
+                first.conversionVersion(),
+                true));
+        assertThat(conversionService.conversion(listenerId, conversionId)).satisfies(conversion -> {
+            assertThat(conversion.reasonCode()).isEqualTo("NARRATION_RECOMMENDATIONS_ACCEPTED");
+            assertThat(conversion.version()).isEqualTo(2);
+            assertThat(conversion.allowedActions()).isEmpty();
+        });
+        assertThat(jdbcTemplate.queryForObject(
+                        """
+                        SELECT to_jsonb(decision)::text || to_jsonb(operation)::text
+                        FROM narration.narration_review_decision decision
+                        JOIN narration.narration_review_operation operation USING (decision_id)
+                        WHERE decision.conversion_id = ?
+                        """,
+                        String.class,
+                        conversionId))
+                .doesNotContain(PRIVATE_PROSE, "Evidence", "Year 2026");
+    }
+
+    @Test
+    void explicitApprovalFreezesAReorderedSplitStructureAndOnlyMutableReviewItemFields()
+            throws Exception {
+        UUID listenerId = entitledListener();
+        UUID conversionId = readyReview(listenerId, "approve-review");
+        List<NarrationReviewService.SectionDecision> sections = List.of(
+                new NarrationReviewService.SectionDecision(
+                        "continued-evidence",
+                        "Findings continued",
+                        true,
+                        List.of(0),
+                        List.of()),
+                new NarrationReviewService.SectionDecision(
+                        "primary-evidence",
+                        "Findings",
+                        false,
+                        List.of(0),
+                        List.of(new NarrationReviewService.ReviewItemDecision(
+                                0,
+                                0,
+                                NarrationReviewService.Treatment.DESCRIBE,
+                                "Describe the 2026 evidence table."))));
+        NarrationReviewService.ReviewCommand command = new NarrationReviewService.ReviewCommand(
+                listenerId,
+                conversionId,
+                NarrationReviewService.ReviewAction.APPROVE,
+                sections,
+                1,
+                "approve-review-operation");
+
+        NarrationReviewService.ReviewResult result = narrationReviewService.submit(command);
+
+        assertThat(result.action()).isEqualTo(NarrationReviewService.ReviewAction.APPROVE);
+        assertThat(result.conversionVersion()).isEqualTo(2);
+        assertThat(conversionService.conversion(listenerId, conversionId)).satisfies(conversion -> {
+            assertThat(conversion.reasonCode()).isEqualTo("NARRATION_REVIEW_APPROVED");
+            assertThat(conversion.allowedActions()).isEmpty();
+        });
+        StoredReview stored = jdbcTemplate.queryForObject(
+                """
+                SELECT decision_id, working_asset_ref, asset_sha256
+                FROM narration.narration_review_decision WHERE conversion_id = ?
+                """,
+                (resultSet, row) -> new StoredReview(
+                        resultSet.getObject("decision_id", UUID.class),
+                        resultSet.getString("working_asset_ref"),
+                        resultSet.getString("asset_sha256")),
+                conversionId);
+        assertThat(stored).isNotNull();
+        byte[] frozen = reviewAssetStore.read(conversionId, stored.decisionId(), stored.reference());
+        assertThat(sha256(frozen)).isEqualTo(stored.sha256());
+        assertThat(new String(frozen, StandardCharsets.UTF_8))
+                .contains("Findings continued", "Findings", "DESCRIBE", "Describe the 2026 evidence table.")
+                .doesNotContain(PRIVATE_PROSE, "provenance", "confidence", "sourceOrdinal", "type");
+
+        NarrationReviewService.ReviewCommand reusedKey = new NarrationReviewService.ReviewCommand(
+                listenerId,
+                conversionId,
+                NarrationReviewService.ReviewAction.SKIP_OPTIONAL,
+                List.of(),
+                1,
+                "approve-review-operation");
+        assertThatThrownBy(() -> narrationReviewService.submit(reusedKey))
+                .isInstanceOfSatisfying(NarrationReviewRejectedException.class,
+                        exception -> assertThat(exception.reason())
+                                .isEqualTo(NarrationReviewRejectionReason.IDEMPOTENCY_KEY_REUSED));
+    }
+
+    @Test
+    void staleAndCrossListenerReviewWritesFailWithoutDisclosingOrChangingThePlan() throws Exception {
+        UUID ownerId = entitledListener();
+        UUID conversionId = readyReview(ownerId, "review-ownership");
+        UUID otherListenerId = entitledListener();
+
+        assertThatThrownBy(() -> narrationReviewService.submit(new NarrationReviewService.ReviewCommand(
+                        ownerId,
+                        conversionId,
+                        NarrationReviewService.ReviewAction.SKIP_OPTIONAL,
+                        List.of(),
+                        0,
+                        "stale-review-operation")))
+                .isInstanceOfSatisfying(NarrationReviewRejectedException.class, exception -> {
+                    assertThat(exception.reason())
+                            .isEqualTo(NarrationReviewRejectionReason.CONVERSION_VERSION_MISMATCH);
+                    assertThat(exception.currentVersion()).isEqualTo(1);
+                });
+        assertThatThrownBy(() -> narrationReviewService.submit(new NarrationReviewService.ReviewCommand(
+                        otherListenerId,
+                        conversionId,
+                        NarrationReviewService.ReviewAction.SKIP_OPTIONAL,
+                        List.of(),
+                        1,
+                        "cross-listener-review-operation")))
+                .isInstanceOfSatisfying(NarrationReviewRejectedException.class,
+                        exception -> assertThat(exception.reason())
+                                .isEqualTo(NarrationReviewRejectionReason.CONVERSION_UNAVAILABLE));
+        assertThat(conversionService.conversion(ownerId, conversionId)).satisfies(conversion -> {
+            assertThat(conversion.reasonCode()).isEqualTo("NARRATION_REVIEW_AVAILABLE");
+            assertThat(conversion.version()).isEqualTo(1);
+        });
+    }
+
+    @Test
+    void reviewWorkingAssetFailureLeavesTheReviewAvailableForARecoverableRetry() throws Exception {
+        UUID listenerId = entitledListener();
+        UUID conversionId = readyReview(listenerId, "review-storage-failure");
+        doThrow(new java.io.IOException("review asset unavailable"))
+                .when(spiedReviewAssetStore)
+                .write(eq(conversionId), any(UUID.class), any(byte[].class));
+
+        assertThatThrownBy(() -> narrationReviewService.submit(new NarrationReviewService.ReviewCommand(
+                        listenerId,
+                        conversionId,
+                        NarrationReviewService.ReviewAction.SKIP_OPTIONAL,
+                        List.of(),
+                        1,
+                        "review-storage-failure-operation")))
+                .isInstanceOfSatisfying(NarrationReviewRejectedException.class,
+                        exception -> assertThat(exception.reason())
+                                .isEqualTo(NarrationReviewRejectionReason.WORKING_ASSET_UNAVAILABLE));
+        assertThat(conversionService.conversion(listenerId, conversionId)).satisfies(conversion -> {
+            assertThat(conversion.reasonCode()).isEqualTo("NARRATION_REVIEW_AVAILABLE");
+            assertThat(conversion.version()).isEqualTo(1);
+        });
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM narration.narration_review_decision WHERE conversion_id = ?",
+                        Integer.class,
+                        conversionId))
+                .isZero();
     }
 
     @Test
@@ -431,6 +614,13 @@ class NarrationPlanITest {
         return submissionService.submission(listenerId, creation.submissionId()).conversionId();
     }
 
+    private UUID readyReview(UUID listenerId, String operationSuffix) throws Exception {
+        UUID conversionId = admit(listenerId, operationSuffix);
+        assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
+        return conversionId;
+    }
+
     private WorkCoordinates narrationWork(UUID conversionId) {
         return jdbcTemplate.queryForObject(
                 """
@@ -518,6 +708,9 @@ class NarrationPlanITest {
     }
 
     private record StoredPlan(String reference, String sha256, String relationalValue) {
+    }
+
+    private record StoredReview(UUID decisionId, String reference, String sha256) {
     }
 
     private record WorkCoordinates(UUID messageId, UUID workId) {

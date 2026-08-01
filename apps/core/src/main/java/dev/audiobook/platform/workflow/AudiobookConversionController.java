@@ -37,7 +37,8 @@ public class AudiobookConversionController {
                     .build();
         }
         NarrationPlanService.PlanView plan = conversion.state()
-                        == AudiobookConversionService.ConversionState.AWAITING_REVIEW
+                                == AudiobookConversionService.ConversionState.AWAITING_REVIEW
+                        && "NARRATION_REVIEW_AVAILABLE".equals(conversion.reasonCode())
                 ? narrationPlanService.plan(principal.listenerId(), conversionId)
                 : null;
         return ResponseEntity.ok()
