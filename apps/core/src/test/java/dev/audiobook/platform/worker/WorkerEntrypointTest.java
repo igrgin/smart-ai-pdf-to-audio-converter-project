@@ -122,7 +122,7 @@ class WorkerEntrypointTest {
     }
 
     @Test
-    void speechAndPackagingStagesAdvanceOnlyTheirGenerationBoundaries() throws Exception {
+    void speechAndPackagingStagesRecordOnlyTheirGenerationBoundaries() throws Exception {
         AudiobookGenerationWorkerService generationWorker =
                 mock(AudiobookGenerationWorkerService.class);
         WorkerEntrypoint speech = new WorkerEntrypoint(
@@ -140,6 +140,6 @@ class WorkerEntrypointTest {
         packaging.run(mock(ApplicationArguments.class));
 
         verify(generationWorker).generatePending();
-        verify(generationWorker).packageAndFinalizePending();
+        verify(generationWorker).packagePending();
     }
 }

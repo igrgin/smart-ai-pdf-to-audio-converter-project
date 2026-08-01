@@ -9,6 +9,8 @@ public interface AudiobookGenerationService {
 
     AcceptedSegment generateSegment(UUID listenerId, UUID conversionId, String operationKey);
 
+    void packageAudiobook(UUID listenerId, UUID conversionId);
+
     PrivateAudiobook finalizeAudiobook(UUID listenerId, UUID conversionId);
 
     record GenerationManifest(UUID manifestId, String manifestDigest, List<Segment> segments) {

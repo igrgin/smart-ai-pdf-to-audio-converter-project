@@ -69,6 +69,10 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
     }
 
     private GenerationManifest prepareLocked(UUID listenerId, UUID conversionId) {
+        jdbcTemplate.queryForObject(
+                "SELECT pg_advisory_xact_lock(hashtextextended(?, 0)) IS NULL",
+                Boolean.class,
+                conversionId.toString());
         GenerationManifest replay = existingManifest(listenerId, conversionId);
         if (replay != null) {
             return replay;
@@ -283,11 +287,10 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
     }
 
     @Override
-    public PrivateAudiobook finalizeAudiobook(UUID listenerId, UUID conversionId) {
+    public void packageAudiobook(UUID listenerId, UUID conversionId) {
         requireIdentity(listenerId, conversionId);
-        PrivateAudiobook replay = privateAudiobook(listenerId, conversionId);
-        if (replay != null) {
-            return replay;
+        if (storedPreparedFinalization(listenerId, conversionId) != null) {
+            return;
         }
         StoredManifest manifest = storedManifest(listenerId, conversionId);
         List<StoredAcceptedPcm> accepted = acceptedPcm(listenerId, conversionId);
@@ -296,7 +299,6 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
         }
         validatePersistedManifest(manifest);
         validateGapless(accepted, manifest.segmentCount());
-        conversionFinalizationService.beginFinalizing(listenerId, conversionId);
         List<AudioPackagingService.Chapter> chapters = packagingChapters(accepted);
         AudioPackagingService.PackagingResult packaged = packagingService.packageAudiobook(
                 new AudioPackagingService.PackagingRequest(
@@ -307,6 +309,20 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                         chapters));
         PreparedFinalization prepared = writeAndVerifyFinalAssets(
                 listenerId, conversionId, manifest, packaged);
+        persistPreparedFinalization(listenerId, conversionId, prepared);
+    }
+
+    @Override
+    public PrivateAudiobook finalizeAudiobook(UUID listenerId, UUID conversionId) {
+        requireIdentity(listenerId, conversionId);
+        PrivateAudiobook replay = privateAudiobook(listenerId, conversionId);
+        if (replay != null) {
+            return replay;
+        }
+        PreparedFinalization prepared = storedPreparedFinalization(listenerId, conversionId);
+        if (prepared == null) {
+            throw new IllegalStateException("Audiobook packaging result is not complete");
+        }
         return transaction().execute(status -> publishFinalization(listenerId, conversionId, prepared));
     }
 
@@ -424,7 +440,6 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                 JOIN narration.narration_plan np ON np.conversion_id = ac.conversion_id
                 JOIN narration.narration_review_decision rd ON rd.conversion_id = ac.conversion_id
                 WHERE ac.listener_id = ? AND ac.conversion_id = ?
-                FOR UPDATE OF ac
                 """,
                 (resultSet, row) -> new StoredInputs(
                         resultSet.getString("state"),
@@ -748,6 +763,7 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
         if (replay != null) {
             return replay;
         }
+        conversionFinalizationService.beginFinalizing(listenerId, conversionId);
         conversionFinalizationService.lockAndRequireFinalizing(listenerId, conversionId);
         Instant now = identityClock.instant();
         AudioPackagingService.PackagingResult packaged = prepared.packaged();
@@ -803,6 +819,46 @@ public class AudiobookGenerationServiceImpl implements AudiobookGenerationServic
                 "AVAILABLE",
                 prepared.manifestDigest(),
                 packaged.totalDurationMs());
+    }
+
+    private void persistPreparedFinalization(
+            UUID listenerId, UUID conversionId, PreparedFinalization prepared) {
+        try {
+            jdbcTemplate.update(
+                    """
+                    INSERT INTO generation.packaged_audiobook_result (
+                        conversion_id, listener_id, manifest_digest, result_json, created_at
+                    ) VALUES (?, ?, ?, CAST(? AS jsonb), ?)
+                    ON CONFLICT (conversion_id) DO NOTHING
+                    """,
+                    conversionId,
+                    listenerId,
+                    prepared.manifestDigest(),
+                    OBJECT_MAPPER.writeValueAsString(prepared),
+                    Timestamp.from(identityClock.instant()));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Packaging result checkpoint is invalid", exception);
+        }
+    }
+
+    private PreparedFinalization storedPreparedFinalization(UUID listenerId, UUID conversionId) {
+        List<String> results = jdbcTemplate.query(
+                """
+                SELECT result_json::text
+                FROM generation.packaged_audiobook_result
+                WHERE listener_id = ? AND conversion_id = ?
+                """,
+                (resultSet, row) -> resultSet.getString(1),
+                listenerId,
+                conversionId);
+        if (results.isEmpty()) {
+            return null;
+        }
+        try {
+            return OBJECT_MAPPER.readValue(results.getFirst(), PreparedFinalization.class);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Packaging result checkpoint is invalid", exception);
+        }
     }
 
     private PrivateAudiobook privateAudiobook(UUID listenerId, UUID conversionId) {

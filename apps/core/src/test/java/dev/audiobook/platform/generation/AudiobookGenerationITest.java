@@ -18,11 +18,17 @@ import dev.audiobook.platform.narration.NarrationSelectionService;
 import dev.audiobook.platform.narration.PublicationNarrationPlanInterpreter;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
 import java.net.URI;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.DriverManager;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterAll;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -35,6 +41,7 @@ class AudiobookGenerationITest {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper().findAndRegisterModules();
     private static final UUID ROWAN_ID = UUID.fromString("10000000-0000-7000-8000-000000000001");
+    private static final FfmpegTestToolchain FFMPEG = startFfmpeg();
 
     private final AudiobookGenerationService generationService;
     private final ListenerIdentityService listenerIdentityService;
@@ -48,12 +55,6 @@ class AudiobookGenerationITest {
 
     @MockitoBean
     private SpeechProvider speechProvider;
-
-    @MockitoBean
-    private CanonicalSpeechDecoder speechDecoder;
-
-    @MockitoBean
-    private AudioPackagingService packagingService;
 
     @Autowired
     AudiobookGenerationITest(
@@ -87,10 +88,8 @@ class AudiobookGenerationITest {
                     request.model(),
                     request.region(),
                     request.voice(),
-                    sine(3_000, 220 + Math.abs(request.spokenText().hashCode() % 200)));
+                    wav(sine(3_000, 220 + Math.abs(request.spokenText().hashCode() % 200))));
         });
-        given(speechDecoder.decode(any())).willAnswer(invocation -> invocation.getArgument(0));
-        given(packagingService.packageAudiobook(any())).willReturn(packagedAudiobook());
 
         AudiobookGenerationService.GenerationManifest manifest =
                 generationService.prepare(conversion.listenerId(), conversion.conversionId());
@@ -102,6 +101,7 @@ class AudiobookGenerationITest {
         AudiobookGenerationService.AcceptedSegment replay = generationService.generateSegment(
                 conversion.listenerId(), conversion.conversionId(), reverse.getFirst().operationKey());
 
+        generationService.packageAudiobook(conversion.listenerId(), conversion.conversionId());
         AudiobookGenerationService.PrivateAudiobook finalized =
                 generationService.finalizeAudiobook(conversion.listenerId(), conversion.conversionId());
         AudiobookGenerationService.PrivateAudiobook finalizationReplay =
@@ -164,9 +164,8 @@ class AudiobookGenerationITest {
         given(speechProvider.synthesize(any())).willAnswer(invocation -> {
             SpeechProvider.SpeechRequest request = invocation.getArgument(0);
             return new SpeechProvider.SpeechResult(
-                    "provider-drift", "unapproved-model", request.region(), request.voice(), sine(3_000, 220));
+                    "provider-drift", "unapproved-model", request.region(), request.voice(), wav(sine(3_000, 220)));
         });
-        given(speechDecoder.decode(any())).willAnswer(invocation -> invocation.getArgument(0));
 
         assertThatThrownBy(() -> generationService.generateSegment(
                         drift.listenerId(), drift.conversionId(), manifest.segments().getFirst().operationKey()))
@@ -177,6 +176,42 @@ class AudiobookGenerationITest {
                         drift.conversionId()))
                 .isEqualTo("FAILED");
         assertThat(audiobookCount(drift.conversionId())).isZero();
+    }
+
+    @AfterAll
+    static void stopFfmpeg() {
+        FFMPEG.close();
+    }
+
+    private static FfmpegTestToolchain startFfmpeg() {
+        try {
+            Path directory = Path.of(
+                    System.getProperty("java.io.tmpdir"), "folio-ffmpeg-itest");
+            Files.createDirectories(directory);
+            return FfmpegTestToolchain.start(directory);
+        } catch (Exception exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
+    }
+
+    private static byte[] wav(byte[] pcm) {
+        ByteBuffer header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
+        header.put(new byte[] {'R', 'I', 'F', 'F'});
+        header.putInt(36 + pcm.length);
+        header.put(new byte[] {'W', 'A', 'V', 'E', 'f', 'm', 't', ' '});
+        header.putInt(16);
+        header.putShort((short) 1);
+        header.putShort((short) 1);
+        header.putInt(24_000);
+        header.putInt(48_000);
+        header.putShort((short) 2);
+        header.putShort((short) 16);
+        header.put(new byte[] {'d', 'a', 't', 'a'});
+        header.putInt(pcm.length);
+        byte[] wav = new byte[44 + pcm.length];
+        System.arraycopy(header.array(), 0, wav, 0, 44);
+        System.arraycopy(pcm, 0, wav, 44, pcm.length);
+        return wav;
     }
 
     @Test
@@ -208,16 +243,67 @@ class AudiobookGenerationITest {
                     request.model(),
                     request.region(),
                     request.voice(),
-                    sine(1_000, 330));
+                    wav(sine(1_000, 330)));
         });
-        given(speechDecoder.decode(any())).willAnswer(invocation -> invocation.getArgument(0));
-        given(packagingService.packageAudiobook(any())).willReturn(packagedAudiobook());
 
         assertThat(workerService.generatePending()).isOne();
-        assertThat(workerService.packageAndFinalizePending()).isOne();
+        assertThat(workerService.packagePending()).isOne();
+        generationService.finalizeAudiobook(conversion.listenerId(), conversion.conversionId());
         assertThat(workerService.generatePending()).isZero();
-        assertThat(workerService.packageAndFinalizePending()).isZero();
+        assertThat(workerService.packagePending()).isZero();
         assertThat(audiobookCount(conversion.conversionId())).isOne();
+    }
+
+    @Test
+    void speechAndPackagingDatabaseRolesAreStageScoped() throws Exception {
+        String databaseUrl;
+        try (var connection = jdbcTemplate.getDataSource().getConnection()) {
+            databaseUrl = connection.getMetaData().getURL().split("\\?", 2)[0];
+        }
+        assertStagePrivileges(
+                databaseUrl,
+                "folio_speech_worker",
+                "speech-integration-test-only",
+                """
+                SELECT
+                  has_table_privilege(current_user, 'generation.speech_attempt', 'UPDATE'),
+                  has_table_privilege(current_user, 'workflow.audiobook_conversion', 'UPDATE'),
+                  has_table_privilege(current_user, 'generation.packaged_audiobook_result', 'INSERT'),
+                  has_schema_privilege(current_user, 'library', 'USAGE'),
+                  pg_has_role(current_user, 'cloudsqlsuperuser', 'member')
+                """,
+                List.of(true, false, false, false, false));
+        assertStagePrivileges(
+                databaseUrl,
+                "folio_packaging_worker",
+                "packaging-integration-test-only",
+                """
+                SELECT
+                  has_table_privilege(current_user, 'generation.accepted_segment', 'SELECT'),
+                  has_table_privilege(current_user, 'generation.packaged_audiobook_result', 'INSERT'),
+                  has_table_privilege(current_user, 'generation.speech_attempt', 'UPDATE'),
+                  has_schema_privilege(current_user, 'library', 'USAGE'),
+                  pg_has_role(current_user, 'cloudsqlsuperuser', 'member')
+                """,
+                List.of(true, true, false, false, false));
+    }
+
+    private static void assertStagePrivileges(
+            String databaseUrl,
+            String user,
+            String password,
+            String query,
+            List<Boolean> expected) throws Exception {
+        try (var connection = DriverManager.getConnection(databaseUrl, user, password);
+                var statement = connection.createStatement();
+                var grants = statement.executeQuery(query)) {
+            assertThat(grants.next()).isTrue();
+            List<Boolean> actual = new java.util.ArrayList<>();
+            for (int column = 1; column <= expected.size(); column++) {
+                actual.add(grants.getBoolean(column));
+            }
+            assertThat(actual).containsExactlyElementsOf(expected);
+        }
     }
 
     private Conversion approvedGeneratingConversion(String suffix) throws Exception {
@@ -337,26 +423,6 @@ class AudiobookGenerationITest {
                 "SELECT count(*) FROM library.private_audiobook WHERE conversion_id = ?",
                 Integer.class,
                 conversionId);
-    }
-
-    private static AudioPackagingService.PackagingResult packagedAudiobook() {
-        byte[] mp3 = new byte[] {73, 68, 51, 29};
-        String digest = SpeechSegmentationServiceImpl.sha256Bytes(mp3);
-        return new AudioPackagingService.PackagingResult(
-                "mono-24k-mp3-v1",
-                List.of(new AudioPackagingService.PackagedChapter(
-                        0,
-                        "A private chapter",
-                        0,
-                        6_000,
-                        List.of(new AudioPackagingService.PackagedPart(
-                                0, "audio/mpeg", mp3, mp3.length, 6_000, digest)))),
-                6_000,
-                mp3.length,
-                -18.0,
-                -1.5,
-                0.0,
-                "b".repeat(64));
     }
 
     private static byte[] sine(int durationMs, double frequency) {

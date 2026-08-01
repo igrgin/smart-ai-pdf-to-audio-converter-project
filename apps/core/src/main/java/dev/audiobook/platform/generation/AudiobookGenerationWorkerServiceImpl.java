@@ -54,26 +54,24 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
     }
 
     @Override
-    public int packageAndFinalizePending() {
+    public int packagePending() {
         List<ConversionCoordinate> candidates = jdbcTemplate.query(
                 """
-                SELECT c.listener_id, c.conversion_id
-                FROM workflow.audiobook_conversion c
-                JOIN generation.segment_manifest m ON m.conversion_id = c.conversion_id
-                WHERE c.state IN ('GENERATING', 'FINALIZING')
-                  AND NOT EXISTS (
+                SELECT m.listener_id, m.conversion_id
+                FROM generation.segment_manifest m
+                WHERE NOT EXISTS (
                     SELECT 1
                     FROM generation.speech_segment s
                     LEFT JOIN generation.accepted_segment a
                       ON a.operation_key = s.operation_key
-                    WHERE s.conversion_id = c.conversion_id
+                    WHERE s.conversion_id = m.conversion_id
                       AND a.operation_key IS NULL
                   )
                   AND NOT EXISTS (
-                    SELECT 1 FROM library.private_audiobook a
-                    WHERE a.conversion_id = c.conversion_id
+                    SELECT 1 FROM generation.packaged_audiobook_result p
+                    WHERE p.conversion_id = m.conversion_id
                   )
-                ORDER BY c.created_at, c.conversion_id
+                ORDER BY m.created_at, m.conversion_id
                 LIMIT 1
                 """,
                 (resultSet, row) -> new ConversionCoordinate(
@@ -83,7 +81,7 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
             return 0;
         }
         ConversionCoordinate candidate = candidates.getFirst();
-        generationService.finalizeAudiobook(candidate.listenerId(), candidate.conversionId());
+        generationService.packageAudiobook(candidate.listenerId(), candidate.conversionId());
         return 1;
     }
 

@@ -20,6 +20,8 @@ spring:
     timeout: 8s
 
 platform:
+  generation:
+    ffmpeg-command: ${java.io.tmpdir}/folio-ffmpeg-itest/ffmpeg-container
   build:
     version: itest
     revision: test-revision

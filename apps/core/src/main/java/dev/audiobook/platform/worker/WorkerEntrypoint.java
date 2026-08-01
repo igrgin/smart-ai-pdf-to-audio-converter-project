@@ -48,7 +48,7 @@ public class WorkerEntrypoint implements ApplicationRunner {
                 audiobookGenerationWorkerService.generatePending();
             }
             if (workerProperties.stage() == WorkerProperties.Stage.PACKAGING) {
-                audiobookGenerationWorkerService.packageAndFinalizePending();
+                audiobookGenerationWorkerService.packagePending();
             }
             if (workerProperties.idle()) {
                 Thread.sleep(1_000);

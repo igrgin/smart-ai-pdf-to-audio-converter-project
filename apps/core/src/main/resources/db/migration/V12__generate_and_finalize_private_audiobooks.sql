@@ -101,6 +101,16 @@ CREATE TABLE generation.accepted_segment (
         REFERENCES workflow.audiobook_conversion(conversion_id, listener_id)
 );
 
+CREATE TABLE generation.packaged_audiobook_result (
+    conversion_id UUID PRIMARY KEY,
+    listener_id UUID NOT NULL REFERENCES public.listener_identity(listener_id),
+    manifest_digest CHAR(64) NOT NULL UNIQUE,
+    result_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    FOREIGN KEY (conversion_id, listener_id)
+        REFERENCES workflow.audiobook_conversion(conversion_id, listener_id)
+);
+
 CREATE TABLE library.private_audiobook (
     audiobook_id UUID PRIMARY KEY,
     listener_id UUID NOT NULL REFERENCES public.listener_identity(listener_id),
@@ -220,6 +230,9 @@ CREATE TRIGGER speech_segment_delete_guard
 CREATE TRIGGER accepted_segment_immutable
     BEFORE UPDATE OR DELETE OR TRUNCATE ON generation.accepted_segment
     FOR EACH STATEMENT EXECUTE FUNCTION generation.reject_immutable_mutation();
+CREATE TRIGGER packaged_audiobook_result_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON generation.packaged_audiobook_result
+    FOR EACH STATEMENT EXECUTE FUNCTION generation.reject_immutable_mutation();
 CREATE TRIGGER audiobook_asset_version_immutable
     BEFORE UPDATE OR DELETE OR TRUNCATE ON library.audiobook_asset_version
     FOR EACH STATEMENT EXECUTE FUNCTION generation.reject_immutable_mutation();
@@ -235,6 +248,7 @@ ALTER TABLE generation.audiobook_chapter_plan ENABLE ROW LEVEL SECURITY;
 ALTER TABLE generation.speech_segment ENABLE ROW LEVEL SECURITY;
 ALTER TABLE generation.speech_attempt ENABLE ROW LEVEL SECURITY;
 ALTER TABLE generation.accepted_segment ENABLE ROW LEVEL SECURITY;
+ALTER TABLE generation.packaged_audiobook_result ENABLE ROW LEVEL SECURITY;
 ALTER TABLE generation.working_asset_erasure_obligation ENABLE ROW LEVEL SECURITY;
 ALTER TABLE library.private_audiobook ENABLE ROW LEVEL SECURITY;
 ALTER TABLE library.audiobook_asset_version ENABLE ROW LEVEL SECURITY;
@@ -251,6 +265,8 @@ CREATE POLICY speech_attempt_listener_policy ON generation.speech_attempt
     USING (listener_id = NULLIF(current_setting('app.listener_id', true), '')::uuid);
 CREATE POLICY accepted_segment_listener_policy ON generation.accepted_segment
     USING (listener_id = NULLIF(current_setting('app.listener_id', true), '')::uuid);
+CREATE POLICY packaged_audiobook_result_listener_policy ON generation.packaged_audiobook_result
+    USING (listener_id = NULLIF(current_setting('app.listener_id', true), '')::uuid);
 CREATE POLICY working_asset_erasure_obligation_listener_policy
     ON generation.working_asset_erasure_obligation
     USING (listener_id = NULLIF(current_setting('app.listener_id', true), '')::uuid);
@@ -262,3 +278,65 @@ CREATE POLICY audiobook_chapter_listener_policy ON library.audiobook_chapter
     USING (listener_id = NULLIF(current_setting('app.listener_id', true), '')::uuid);
 CREATE POLICY final_asset_part_listener_policy ON library.final_asset_part
     USING (listener_id = NULLIF(current_setting('app.listener_id', true), '')::uuid);
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'folio_speech_worker') THEN
+        REVOKE cloudsqlsuperuser FROM folio_speech_worker;
+        GRANT USAGE ON SCHEMA workflow, narration, generation TO folio_speech_worker;
+        GRANT SELECT ON workflow.audiobook_conversion TO folio_speech_worker;
+        GRANT SELECT ON narration.generation_recipe, narration.narration_plan,
+            narration.narration_review_decision, narration.voice_mapping,
+            narration.provider_capability_profile TO folio_speech_worker;
+        GRANT SELECT, INSERT ON generation.segment_manifest,
+            generation.audiobook_chapter_plan, generation.speech_segment,
+            generation.speech_attempt, generation.accepted_segment TO folio_speech_worker;
+        GRANT UPDATE (next_attempt_number) ON generation.speech_segment TO folio_speech_worker;
+        GRANT UPDATE ON generation.speech_attempt TO folio_speech_worker;
+
+        CREATE POLICY audiobook_conversion_speech_worker_policy
+            ON workflow.audiobook_conversion TO folio_speech_worker USING (true);
+        CREATE POLICY generation_recipe_speech_worker_policy
+            ON narration.generation_recipe TO folio_speech_worker USING (true);
+        CREATE POLICY narration_plan_speech_worker_policy
+            ON narration.narration_plan TO folio_speech_worker USING (true);
+        CREATE POLICY narration_review_speech_worker_policy
+            ON narration.narration_review_decision TO folio_speech_worker USING (true);
+        CREATE POLICY segment_manifest_speech_worker_policy
+            ON generation.segment_manifest TO folio_speech_worker USING (true) WITH CHECK (true);
+        CREATE POLICY chapter_plan_speech_worker_policy
+            ON generation.audiobook_chapter_plan TO folio_speech_worker USING (true) WITH CHECK (true);
+        CREATE POLICY speech_segment_speech_worker_policy
+            ON generation.speech_segment TO folio_speech_worker USING (true) WITH CHECK (true);
+        CREATE POLICY speech_attempt_speech_worker_policy
+            ON generation.speech_attempt TO folio_speech_worker USING (true) WITH CHECK (true);
+        CREATE POLICY accepted_segment_speech_worker_policy
+            ON generation.accepted_segment TO folio_speech_worker USING (true) WITH CHECK (true);
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'folio_packaging_worker') THEN
+        REVOKE cloudsqlsuperuser FROM folio_packaging_worker;
+        GRANT USAGE ON SCHEMA narration, generation TO folio_packaging_worker;
+        GRANT SELECT ON narration.generation_recipe TO folio_packaging_worker;
+        GRANT SELECT ON generation.segment_manifest,
+            generation.audiobook_chapter_plan, generation.speech_segment,
+            generation.accepted_segment, generation.packaged_audiobook_result
+            TO folio_packaging_worker;
+        GRANT INSERT ON generation.packaged_audiobook_result TO folio_packaging_worker;
+
+        CREATE POLICY generation_recipe_packaging_worker_policy
+            ON narration.generation_recipe TO folio_packaging_worker USING (true);
+        CREATE POLICY segment_manifest_packaging_worker_policy
+            ON generation.segment_manifest TO folio_packaging_worker USING (true);
+        CREATE POLICY chapter_plan_packaging_worker_policy
+            ON generation.audiobook_chapter_plan TO folio_packaging_worker USING (true);
+        CREATE POLICY speech_segment_packaging_worker_policy
+            ON generation.speech_segment TO folio_packaging_worker USING (true);
+        CREATE POLICY accepted_segment_packaging_worker_policy
+            ON generation.accepted_segment TO folio_packaging_worker USING (true);
+        CREATE POLICY packaged_result_packaging_worker_policy
+            ON generation.packaged_audiobook_result TO folio_packaging_worker
+            USING (true) WITH CHECK (true);
+    END IF;
+END;
+$$;

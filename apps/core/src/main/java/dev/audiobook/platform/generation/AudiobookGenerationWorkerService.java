@@ -4,5 +4,5 @@ public interface AudiobookGenerationWorkerService {
 
     int generatePending();
 
-    int packageAndFinalizePending();
+    int packagePending();
 }
