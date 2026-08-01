@@ -677,8 +677,8 @@ resource "google_cloud_run_v2_job" "workers" {
 
         resources {
           limits = {
-            cpu    = each.key == "extraction" ? "2" : "1"
-            memory = each.key == "extraction" ? "2Gi" : (each.key == "inspection" ? "1Gi" : "512Mi")
+            cpu    = contains(["extraction", "narration-analysis"], each.key) ? "2" : "1"
+            memory = each.key == "narration-analysis" ? "4Gi" : (each.key == "extraction" ? "2Gi" : (each.key == "inspection" ? "1Gi" : "512Mi"))
           }
         }
 

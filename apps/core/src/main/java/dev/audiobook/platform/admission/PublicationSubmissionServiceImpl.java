@@ -385,10 +385,8 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                     epub
                             ? AudiobookConversionService.PreparationReason.NARRATION_PLAN_PENDING
                             : AudiobookConversionService.PreparationReason.EXTRACTION_PENDING);
-            if (epub) {
-                audiobookConversionService.scheduleNarrationPlan(
-                        stored.listenerId(), conversionId, stored.submissionId());
-            }
+            audiobookConversionService.scheduleNarrationPlan(
+                    stored.listenerId(), conversionId, stored.submissionId());
             jdbcTemplate.update(
                     """
                     UPDATE publication_submission

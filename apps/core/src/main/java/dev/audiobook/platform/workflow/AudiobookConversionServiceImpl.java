@@ -156,7 +156,20 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
                     WHERE w.conversion_id = c.conversion_id AND w.state = 'EXHAUSTED'
                 )
                 """);
-        return ready + exhausted;
+        int paused = jdbcTemplate.update(
+                """
+                UPDATE workflow.audiobook_conversion c
+                SET state = 'PAUSED', reason_code = 'SOURCE_TOO_DAMAGED', version = version + 1
+                WHERE c.state = 'PREPARING'
+                  AND c.reason_code <> 'SOURCE_TOO_DAMAGED'
+                  AND EXISTS (
+                    SELECT 1 FROM workflow.narration_plan_work w
+                    WHERE w.conversion_id = c.conversion_id
+                      AND w.state = 'PAUSED'
+                      AND w.pause_reason_code = 'SOURCE_TOO_DAMAGED'
+                )
+                """);
+        return ready + exhausted + paused;
     }
 
     @Override
@@ -164,8 +177,11 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
         Objects.requireNonNull(listenerId, "listenerId");
         return jdbcTemplate.query(
                 """
-                SELECT conversion_id, state, reason_code, version FROM audiobook_conversion
-                WHERE listener_id = ? ORDER BY created_at, conversion_id
+                SELECT c.conversion_id, c.state, c.reason_code, c.version,
+                       w.resume_from_page, w.listener_guidance
+                FROM audiobook_conversion c
+                LEFT JOIN narration_plan_work w ON w.conversion_id = c.conversion_id
+                WHERE c.listener_id = ? ORDER BY c.created_at, c.conversion_id
                 """,
                 (resultSet, row) -> conversion(resultSet),
                 listenerId);
@@ -177,8 +193,11 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
         Objects.requireNonNull(conversionId, "conversionId");
         List<AudiobookConversion> matches = jdbcTemplate.query(
                 """
-                SELECT conversion_id, state, reason_code, version FROM audiobook_conversion
-                WHERE listener_id = ? AND conversion_id = ?
+                SELECT c.conversion_id, c.state, c.reason_code, c.version,
+                       w.resume_from_page, w.listener_guidance
+                FROM audiobook_conversion c
+                LEFT JOIN narration_plan_work w ON w.conversion_id = c.conversion_id
+                WHERE c.listener_id = ? AND c.conversion_id = ?
                 """,
                 (resultSet, row) -> conversion(resultSet),
                 listenerId,
@@ -190,16 +209,105 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
     }
 
     private static AudiobookConversion conversion(java.sql.ResultSet resultSet) throws java.sql.SQLException {
+        String reasonCode = resultSet.getString("reason_code");
         ConversionState state = ConversionState.valueOf(resultSet.getString("state"));
+        Integer resumeFromPage = resultSet.getObject("resume_from_page", Integer.class);
         return new AudiobookConversion(
                 resultSet.getObject("conversion_id", UUID.class),
                 state,
-                resultSet.getString("reason_code"),
+                reasonCode,
                 state == ConversionState.AWAITING_REVIEW
                                 && "NARRATION_REVIEW_AVAILABLE".equals(resultSet.getString("reason_code"))
                         ? List.of(AllowedAction.REVIEW_NARRATION_PLAN, AllowedAction.ACCEPT_RECOMMENDATIONS)
-                        : List.of(),
-                resultSet.getLong("version"));
+                        : state == ConversionState.PAUSED ? List.of(AllowedAction.RETRY_NARRATION_PLAN) : List.of(),
+                resultSet.getLong("version"),
+                resumeFromPage == null
+                        ? null
+                        : new RecoveryDetails(resumeFromPage, resultSet.getString("listener_guidance")));
+    }
+
+    @Override
+    @Transactional
+    public AudiobookConversion resumeNarrationPlan(
+            UUID listenerId, UUID conversionId, long expectedVersion, String idempotencyKey) {
+        Objects.requireNonNull(listenerId, "listenerId");
+        Objects.requireNonNull(conversionId, "conversionId");
+        if (idempotencyKey == null || idempotencyKey.isBlank() || idempotencyKey.length() > 200) {
+            throw new IllegalArgumentException("Idempotency-Key is required and must be at most 200 characters");
+        }
+        conversion(listenerId, conversionId);
+        Timestamp now = Timestamp.from(identityClock.instant());
+        int accepted = jdbcTemplate.update(
+                """
+                INSERT INTO workflow.narration_plan_resume_operation (
+                    operation_key, listener_id, conversion_id, expected_version, created_at
+                ) VALUES (?, ?, ?, ?, ?) ON CONFLICT (operation_key) DO NOTHING
+                """,
+                idempotencyKey,
+                listenerId,
+                conversionId,
+                expectedVersion,
+                now);
+        if (accepted == 0) {
+            Integer replay = jdbcTemplate.queryForObject(
+                    """
+                    SELECT count(*) FROM workflow.narration_plan_resume_operation
+                    WHERE operation_key = ? AND listener_id = ? AND conversion_id = ?
+                      AND expected_version = ?
+                    """,
+                    Integer.class,
+                    idempotencyKey,
+                    listenerId,
+                    conversionId,
+                    expectedVersion);
+            if (replay != null && replay > 0) {
+                return conversion(listenerId, conversionId);
+            }
+            throw new IllegalArgumentException("Idempotency-Key was already used for another recovery action");
+        }
+        int resumed = jdbcTemplate.update(
+                """
+                UPDATE workflow.narration_plan_work w
+                SET state = 'READY', attempt_count = 0, pause_reason_code = NULL,
+                    resume_from_page = NULL, listener_guidance = NULL,
+                    lease_owner = NULL, lease_expires_at = NULL
+                FROM workflow.audiobook_conversion c
+                WHERE w.conversion_id = c.conversion_id
+                  AND w.conversion_id = ? AND w.listener_id = ?
+                  AND w.state = 'PAUSED' AND c.state = 'PAUSED'
+                  AND c.reason_code = 'SOURCE_TOO_DAMAGED'
+                  AND c.version = ?
+                """,
+                conversionId,
+                listenerId,
+                expectedVersion);
+        if (resumed == 0) {
+            throw new IllegalStateException("Damaged-source recovery is unavailable or stale");
+        }
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.audiobook_conversion
+                SET state = 'PREPARING', reason_code = 'NARRATION_PLAN_PENDING', version = version + 1
+                WHERE conversion_id = ? AND listener_id = ? AND state = 'PAUSED' AND version = ?
+                """,
+                conversionId,
+                listenerId,
+                expectedVersion);
+        UUID workId = jdbcTemplate.queryForObject(
+                "SELECT work_id FROM workflow.narration_plan_work WHERE conversion_id = ? AND listener_id = ?",
+                UUID.class,
+                conversionId,
+                listenerId);
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.narration_plan_outbox
+                SET message_id = ?, created_at = ?, published_at = NULL
+                WHERE work_id = ?
+                """,
+                identifierGenerator.generate(),
+                now,
+                workId);
+        return conversion(listenerId, conversionId);
     }
 
     private record PendingMessage(UUID messageId, UUID workId) {

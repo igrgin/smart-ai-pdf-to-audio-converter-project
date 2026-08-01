@@ -19,6 +19,7 @@ import {
   fetchConversionProgress,
   fetchIdentitySession,
   fetchLibrary,
+  retryNarrationPlan,
   type AudiobookConversion,
   type ConversionProgress,
   type CsrfProof,
@@ -316,6 +317,8 @@ function ConversionCard({
   onChooseNarrator: () => void;
 }) {
   const [progress, setProgress] = useState<ConversionProgress>(conversion);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -345,15 +348,22 @@ function ConversionCard({
     };
   }, [conversion.conversionId]);
 
-  if (progress.state === "PREPARING") {
+  if (progress.state === "PREPARING" || progress.state === "PAUSED") {
     const requiresIntervention = progress.reasonCode === "NARRATION_PLAN_REQUIRES_INTERVENTION";
+    const sourceTooDamaged = progress.reasonCode === "SOURCE_TOO_DAMAGED";
     const awaitingExtraction = progress.reasonCode === "EXTRACTION_PENDING";
     return (
       <article className="preparing-audiobook" aria-live="polite">
         <span className="empty-mark" aria-hidden="true"><Sparkles size={28} /></span>
         <span className="card-kicker">{progress.reasonCode}</span>
-        <h2>{requiresIntervention ? "Narration Plan needs attention" : "Preparing your private audiobook"}</h2>
-        <p>{requiresIntervention
+        <h2>{sourceTooDamaged
+          ? "Source copy needs attention"
+          : requiresIntervention
+            ? "Narration Plan needs attention"
+            : "Preparing your private audiobook"}</h2>
+        <p>{sourceTooDamaged
+          ? progress.recovery?.listenerGuidance ?? "Recovery guidance is unavailable."
+          : requiresIntervention
           ? "Preparation could not finish. No further automatic attempts are scheduled."
           : awaitingExtraction
             ? "The PDF passed quarantine inspection and is waiting for bounded extraction or OCR."
@@ -365,6 +375,24 @@ function ConversionCard({
             Choose a new Narrator Voice
           </Button>
         )}
+        {sourceTooDamaged && progress.allowedActions.includes("RETRY_NARRATION_PLAN") && (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={recoveryBusy}
+            onClick={() => {
+              setRecoveryBusy(true);
+              setRecoveryError(false);
+              void retryNarrationPlan(progress.conversionId, progress.version, csrf)
+                .then(setProgress)
+                .catch(() => setRecoveryError(true))
+                .finally(() => setRecoveryBusy(false));
+            }}
+          >
+            {recoveryBusy ? "Retrying extraction…" : "Retry bounded extraction"}
+          </Button>
+        )}
+        {recoveryError && <p role="alert">The retry could not be scheduled. Check the source and try again.</p>}
       </article>
     );
   }

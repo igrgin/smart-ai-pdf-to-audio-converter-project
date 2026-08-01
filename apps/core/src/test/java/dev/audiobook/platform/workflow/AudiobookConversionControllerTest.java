@@ -255,6 +255,47 @@ class AudiobookConversionControllerTest {
                 .andExpect(jsonPath("$.code").value("INVALID_NARRATION_REVIEW"));
     }
 
+    @Test
+    void listenerSeesPersistedDamageGuidanceAndCanRequestAnIdempotentSafeRestart() throws Exception {
+        var recovery = new AudiobookConversionService.RecoveryDetails(
+                7, "Use the saved recovery action after checking the source copy.");
+        when(conversionService.conversion(LISTENER_ID, CONVERSION_ID)).thenReturn(
+                new AudiobookConversionService.AudiobookConversion(
+                        CONVERSION_ID,
+                        AudiobookConversionService.ConversionState.PAUSED,
+                        "SOURCE_TOO_DAMAGED",
+                        List.of(AudiobookConversionService.AllowedAction.RETRY_NARRATION_PLAN),
+                        4,
+                        recovery));
+        when(conversionService.resumeNarrationPlan(LISTENER_ID, CONVERSION_ID, 4, "retry-1"))
+                .thenReturn(new AudiobookConversionService.AudiobookConversion(
+                        CONVERSION_ID,
+                        AudiobookConversionService.ConversionState.PREPARING,
+                        "NARRATION_PLAN_PENDING",
+                        List.of(),
+                        5));
+
+        mockMvc.perform(get("/api/v1/audiobook-conversions/" + CONVERSION_ID)
+                        .with(authentication(listenerAuthentication())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value("PAUSED"))
+                .andExpect(jsonPath("$.recovery.resumeFromPage").value(7))
+                .andExpect(jsonPath("$.recovery.listenerGuidance")
+                        .value("Use the saved recovery action after checking the source copy."));
+
+        mockMvc.perform(post("/api/v1/audiobook-conversions/" + CONVERSION_ID
+                                + "/narration-plan-recovery")
+                        .header("Idempotency-Key", "retry-1")
+                        .header("If-Match", "\"4\"")
+                        .header("Origin", "http://localhost:3000")
+                        .with(authentication(listenerAuthentication()))
+                        .with(csrf()))
+                .andExpect(status().isAccepted())
+                .andExpect(header().string("ETag", "\"5\""))
+                .andExpect(jsonPath("$.state").value("PREPARING"))
+                .andExpect(jsonPath("$.reasonCode").value("NARRATION_PLAN_PENDING"));
+    }
+
     private static UsernamePasswordAuthenticationToken listenerAuthentication() {
         ListenerPrincipal principal = new ListenerPrincipal(
                 LISTENER_ID,

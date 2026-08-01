@@ -162,19 +162,20 @@ class AudiobookConversionServiceTest {
     }
 
     @Test
-    void reconcilesConfirmedPlansThenAppliesCompletedAndExhaustedResults() {
+    void reconcilesConfirmedPlansThenAppliesCompletedExhaustedAndPausedResults() {
         given(jdbcTemplate.update(
                         contains("SET state = 'SUCCEEDED'"),
                         eq(Timestamp.from(clock.instant())),
                         eq(conversionId)))
                 .willReturn(1);
-        given(jdbcTemplate.update(anyString())).willReturn(2, 1);
+        given(jdbcTemplate.update(anyString())).willReturn(2, 1, 1);
 
-        assertThat(service.applyNarrationPlanResults(List.of(conversionId))).isEqualTo(3);
+        assertThat(service.applyNarrationPlanResults(List.of(conversionId))).isEqualTo(4);
 
         verify(jdbcTemplate).update(
                 contains("SET state = 'SUCCEEDED'"),
                 eq(Timestamp.from(clock.instant())),
                 eq(conversionId));
+        verify(jdbcTemplate).update(contains("w.pause_reason_code = 'SOURCE_TOO_DAMAGED'"));
     }
 }

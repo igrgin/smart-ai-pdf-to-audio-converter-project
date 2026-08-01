@@ -190,9 +190,22 @@ services:
 
   worker-narration-analysis:
     <<: *worker
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 4g
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    networks:
+      - inspection-boundary
     environment:
       <<: *worker-environment
       WORKER_STAGE: narration-analysis
+      FINAL_OBJECT_STORE_ENDPOINT: ""
+      NOTIFICATION_ENDPOINT: ""
+      ANALYTICS_ENDPOINT: ""
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
 
   worker-speech:
     <<: *worker

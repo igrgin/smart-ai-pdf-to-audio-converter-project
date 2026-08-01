@@ -32,8 +32,8 @@ public interface NarrationPlanService {
 
     record ProvenanceView(
             String source,
-            int spineIndex,
-            String spineItem,
+            int sourceIndex,
+            String sourceUnit,
             String anchor,
             boolean sourceDeclared,
             double confidence) {

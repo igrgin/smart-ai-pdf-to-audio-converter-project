@@ -201,7 +201,7 @@ export function NarrationReviewEditor({
             </span>
             <small>
               {item.reasonCode} · Source: {label(item.provenance.source)}
-              {` · spine ${item.provenance.spineIndex + 1} · ${item.provenance.spineItem}`}
+              {` · source unit ${item.provenance.sourceIndex + 1} · ${item.provenance.sourceUnit}`}
               {item.provenance.anchor ? ` · anchor ${item.provenance.anchor}` : ""}
             </small>
             <label>
@@ -269,7 +269,7 @@ export function NarrationReviewEditor({
               {section.sourceDetails.map((source) => (
                 <div className="section-source" key={source.ordinal}>
                   <p className="narration-provenance">
-                    Source: {label(source.provenance.source)} · spine {source.provenance.spineIndex + 1} · section {source.ordinal + 1}
+                    Source: {label(source.provenance.source)} · source unit {source.provenance.sourceIndex + 1} · section {source.ordinal + 1}
                     {source.provenance.anchor ? ` · anchor ${source.provenance.anchor}` : ""}
                     {` · confidence ${percent(source.provenance.confidence)}`}
                   </p>

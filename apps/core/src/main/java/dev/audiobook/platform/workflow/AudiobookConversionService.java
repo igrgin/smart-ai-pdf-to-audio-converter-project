@@ -25,6 +25,9 @@ public interface AudiobookConversionService {
 
     AudiobookConversion conversion(UUID listenerId, UUID conversionId);
 
+    AudiobookConversion resumeNarrationPlan(
+            UUID listenerId, UUID conversionId, long expectedVersion, String idempotencyKey);
+
     NarrationSelectionService.GenerationAuthorization beginSpeechGeneration(UUID listenerId, UUID conversionId);
 
     record AudiobookConversion(
@@ -32,7 +35,8 @@ public interface AudiobookConversionService {
             ConversionState state,
             String reasonCode,
             List<AllowedAction> allowedActions,
-            long version) {
+            long version,
+            RecoveryDetails recovery) {
         public AudiobookConversion(UUID conversionId, ConversionState state) {
             this(
                     conversionId,
@@ -41,11 +45,24 @@ public interface AudiobookConversionService {
                         case PREPARING -> "NARRATION_PLAN_PENDING";
                         case AWAITING_REVIEW -> "NARRATION_REVIEW_AVAILABLE";
                         case GENERATING -> "GENERATION_IN_PROGRESS";
+                        case PAUSED -> "SOURCE_TOO_DAMAGED";
                     },
                     state == ConversionState.AWAITING_REVIEW
                             ? List.of(AllowedAction.REVIEW_NARRATION_PLAN, AllowedAction.ACCEPT_RECOMMENDATIONS)
-                            : List.of(),
-                    0);
+                            : state == ConversionState.PAUSED
+                                    ? List.of(AllowedAction.RETRY_NARRATION_PLAN)
+                                    : List.of(),
+                    0,
+                    null);
+        }
+
+        public AudiobookConversion(
+                UUID conversionId,
+                ConversionState state,
+                String reasonCode,
+                List<AllowedAction> allowedActions,
+                long version) {
+            this(conversionId, state, reasonCode, allowedActions, version, null);
         }
 
         public AudiobookConversion {
@@ -56,7 +73,8 @@ public interface AudiobookConversionService {
     enum ConversionState {
         PREPARING,
         AWAITING_REVIEW,
-        GENERATING
+        GENERATING,
+        PAUSED
     }
 
     enum PreparationReason {
@@ -66,6 +84,10 @@ public interface AudiobookConversionService {
 
     enum AllowedAction {
         REVIEW_NARRATION_PLAN,
-        ACCEPT_RECOMMENDATIONS
+        ACCEPT_RECOMMENDATIONS,
+        RETRY_NARRATION_PLAN
+    }
+
+    record RecoveryDetails(int resumeFromPage, String listenerGuidance) {
     }
 }

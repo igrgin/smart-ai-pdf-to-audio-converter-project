@@ -4,7 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doThrow;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.admission.InspectionWorkPublisher;
@@ -12,11 +19,13 @@ import dev.audiobook.platform.admission.AdmissionOutboxRelayService;
 import dev.audiobook.platform.admission.InspectionOutcomeRecordingService;
 import dev.audiobook.platform.admission.MalwareScanner;
 import dev.audiobook.platform.admission.PublicationSubmissionService;
+import dev.audiobook.platform.admission.QpdfValidationService;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import dev.audiobook.platform.identity.ExternalIdentity;
 import dev.audiobook.platform.identity.ListenerIdentityService;
 import dev.audiobook.platform.identity.SignInProvider;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
+import dev.audiobook.platform.workflow.AudiobookConversionUnavailableException;
 import dev.audiobook.platform.workflow.InspectionWorkflowService;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
@@ -32,15 +41,22 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 @ActiveProfiles("itest")
+@AutoConfigureMockMvc
 @SpringBootTest(classes = PlatformApplication.class)
 @Transactional
 class NarrationPlanITest {
@@ -60,12 +76,19 @@ class NarrationPlanITest {
     private final NarrationPlanJobService narrationPlanJobService;
     private final AdmissionOutboxRelayService outboxRelayService;
     private final JdbcTemplate jdbcTemplate;
+    private final MockMvc mockMvc;
 
     @MockitoBean
     private InspectionWorkPublisher inspectionWorkPublisher;
 
     @MockitoBean
     private MalwareScanner malwareScanner;
+
+    @MockitoBean
+    private QpdfValidationService qpdfValidationService;
+
+    @MockitoBean
+    private PdfDocumentUnderstandingBoundary pdfDocumentUnderstandingBoundary;
 
     @MockitoSpyBean
     private NarrationPlanAssetStore spiedAssetStore;
@@ -87,7 +110,8 @@ class NarrationPlanITest {
             NarrationPlanAssetStore assetStore,
             NarrationPlanJobService narrationPlanJobService,
             AdmissionOutboxRelayService outboxRelayService,
-            JdbcTemplate jdbcTemplate) {
+            JdbcTemplate jdbcTemplate,
+            MockMvc mockMvc) {
         this.submissionService = submissionService;
         this.entitlementService = entitlementService;
         this.listenerIdentityService = listenerIdentityService;
@@ -101,12 +125,178 @@ class NarrationPlanITest {
         this.narrationPlanJobService = narrationPlanJobService;
         this.outboxRelayService = outboxRelayService;
         this.jdbcTemplate = jdbcTemplate;
+        this.mockMvc = mockMvc;
     }
 
     @BeforeEach
     void allowCleanPublicationsThroughTheInspectionBoundary() {
         org.mockito.Mockito.when(malwareScanner.scan(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(MalwareScanner.Result.CLEAN);
+        given(qpdfValidationService.validate(any())).willReturn(QpdfValidationService.Result.VALID);
+    }
+
+    @Test
+    void admittedPdfProducesTheSameProvenanceBackedNarrationPlanWorkflow() throws Exception {
+        given(pdfDocumentUnderstandingBoundary.inspect(any())).willReturn(
+                new PdfDocumentUnderstandingBoundary.DocumentProfile(
+                        2,
+                        List.of(new PdfDocumentUnderstandingBoundary.OutlineEntry(
+                                "Scanned evidence", 1, "outline-1"))));
+        given(pdfDocumentUnderstandingBoundary.understandBatch(
+                        any(), any(PdfDocumentUnderstandingBoundary.PageRange.class)))
+                .willAnswer(invocation -> {
+                    PdfDocumentUnderstandingBoundary.PageRange range = invocation.getArgument(1);
+                    return range.pages()
+                            .mapToObj(page -> new PdfDocumentUnderstandingBoundary.PageEvidence(
+                                    page,
+                                    page == 1 ? PRIVATE_PROSE : "A locally recovered scanned page.",
+                                    page == 1
+                                            ? PdfDocumentUnderstandingBoundary.TextSource.PDFBOX_TEXT
+                                            : PdfDocumentUnderstandingBoundary.TextSource.TESSERACT_OCR,
+                                    List.of()))
+                            .toList();
+                });
+        UUID listenerId = entitledListener();
+        UUID conversionId = admit(listenerId, pdf(), "application/pdf", "pdf-success");
+
+        assertThat(conversionService.conversion(listenerId, conversionId).reasonCode())
+                .isEqualTo("EXTRACTION_PENDING");
+        assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
+
+        assertThat(conversionService.conversion(listenerId, conversionId)).satisfies(conversion -> {
+            assertThat(conversion.state())
+                    .isEqualTo(AudiobookConversionService.ConversionState.AWAITING_REVIEW);
+            assertThat(conversion.reasonCode()).isEqualTo("NARRATION_REVIEW_AVAILABLE");
+        });
+        assertThat(narrationPlanService.plan(listenerId, conversionId).chapters())
+                .singleElement()
+                .satisfies(chapter -> {
+                    assertThat(chapter.title()).isEqualTo("Scanned evidence");
+                    assertThat(chapter.provenance().source()).isEqualTo("PDF_OUTLINE");
+                });
+        String assetReference = jdbcTemplate.queryForObject(
+                "SELECT working_asset_ref FROM narration.narration_plan WHERE conversion_id = ?",
+                String.class,
+                conversionId);
+        assertThat(new String(assetStore.read(conversionId, assetReference), StandardCharsets.UTF_8))
+                .contains(PRIVATE_PROSE, "A locally recovered scanned page.", "TESSERACT_OCR");
+    }
+
+    @Test
+    void pdfBeyondTheApprovedConsecutiveGapLimitPausesWithAResumeCheckpoint() throws Exception {
+        given(pdfDocumentUnderstandingBoundary.inspect(any())).willReturn(
+                new PdfDocumentUnderstandingBoundary.DocumentProfile(3, List.of()));
+        given(pdfDocumentUnderstandingBoundary.understandBatch(
+                        any(), any(PdfDocumentUnderstandingBoundary.PageRange.class)))
+                .willAnswer(invocation -> {
+                    PdfDocumentUnderstandingBoundary.PageRange range = invocation.getArgument(1);
+                    return range.pages()
+                            .mapToObj(page -> new PdfDocumentUnderstandingBoundary.PageEvidence(
+                                    page,
+                                    page == 1 ? "Readable beginning." : "",
+                                    page == 1
+                                            ? PdfDocumentUnderstandingBoundary.TextSource.PDFBOX_TEXT
+                                            : PdfDocumentUnderstandingBoundary.TextSource.UNREADABLE,
+                                    List.of()))
+                            .toList();
+                });
+        UUID listenerId = entitledListener();
+        UUID conversionId = admit(listenerId, pdf(3), "application/pdf", "pdf-damaged");
+
+        assertThat(narrationPlanJobService.processPending()).isZero();
+        assertThat(conversionService.applyNarrationPlanResults(List.of())).isEqualTo(1);
+
+        AudiobookConversionService.AudiobookConversion paused =
+                conversionService.conversion(listenerId, conversionId);
+        assertThat(paused).satisfies(conversion -> {
+            assertThat(conversion.state()).isEqualTo(AudiobookConversionService.ConversionState.PAUSED);
+            assertThat(conversion.reasonCode()).isEqualTo("SOURCE_TOO_DAMAGED");
+            assertThat(conversion.allowedActions())
+                    .containsExactly(AudiobookConversionService.AllowedAction.RETRY_NARRATION_PLAN);
+            assertThat(conversion.recovery())
+                    .isEqualTo(new AudiobookConversionService.RecoveryDetails(
+                            3, SourceTooDamagedException.LISTENER_GUIDANCE));
+        });
+        assertThat(jdbcTemplate.queryForObject(
+                        """
+                        SELECT state || ':' || pause_reason_code || ':' || resume_from_page || ':' || listener_guidance
+                        FROM workflow.narration_plan_work WHERE conversion_id = ?
+                        """,
+                        String.class,
+                        conversionId))
+                .isEqualTo("PAUSED:SOURCE_TOO_DAMAGED:3:" + SourceTooDamagedException.LISTENER_GUIDANCE);
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM narration.narration_plan WHERE conversion_id = ?",
+                        Integer.class,
+                        conversionId))
+                .isZero();
+
+        mockMvc.perform(get("/api/v1/audiobook-conversions/" + conversionId)
+                        .with(authentication(listenerAuthentication(listenerId))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value("PAUSED"))
+                .andExpect(jsonPath("$.reasonCode").value("SOURCE_TOO_DAMAGED"))
+                .andExpect(jsonPath("$.recovery.resumeFromPage").value(3))
+                .andExpect(jsonPath("$.recovery.listenerGuidance")
+                        .value(SourceTooDamagedException.LISTENER_GUIDANCE));
+
+        UUID otherListener = entitledListener();
+        mockMvc.perform(get("/api/v1/audiobook-conversions/" + conversionId)
+                        .with(authentication(listenerAuthentication(otherListener))))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("CONVERSION_UNAVAILABLE"));
+        assertThatThrownBy(() -> conversionService.resumeNarrationPlan(
+                        otherListener, conversionId, paused.version(), "cross-listener-retry"))
+                .isInstanceOf(AudiobookConversionUnavailableException.class);
+        assertThatThrownBy(() -> conversionService.resumeNarrationPlan(
+                        listenerId, conversionId, paused.version() + 1, "stale-retry"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("stale");
+
+        mockMvc.perform(post("/api/v1/audiobook-conversions/" + conversionId + "/narration-plan-recovery")
+                        .header("Idempotency-Key", "retry-damaged-pdf")
+                        .header("If-Match", "\"" + paused.version() + "\"")
+                        .header("Origin", "http://localhost:3000")
+                        .with(authentication(listenerAuthentication(listenerId)))
+                        .with(csrf()))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.state").value("PREPARING"))
+                .andExpect(jsonPath("$.reasonCode").value("NARRATION_PLAN_PENDING"));
+        AudiobookConversionService.AudiobookConversion resumed =
+                conversionService.conversion(listenerId, conversionId);
+        assertThat(resumed.state()).isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
+        assertThat(resumed.reasonCode()).isEqualTo("NARRATION_PLAN_PENDING");
+        assertThat(resumed.recovery()).isNull();
+        assertThat(conversionService.resumeNarrationPlan(
+                        listenerId, conversionId, paused.version(), "retry-damaged-pdf"))
+                .isEqualTo(resumed);
+        assertThatThrownBy(() -> conversionService.resumeNarrationPlan(
+                        listenerId, conversionId, paused.version() + 1, "retry-damaged-pdf"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("already used");
+        assertThat(jdbcTemplate.queryForObject(
+                        """
+                        SELECT w.state || ':' || (o.published_at IS NULL)
+                        FROM workflow.narration_plan_work w
+                        JOIN workflow.narration_plan_outbox o ON o.work_id = w.work_id
+                        WHERE w.conversion_id = ?
+                        """,
+                        String.class,
+                        conversionId))
+                .isEqualTo("READY:true");
+    }
+
+    private static UsernamePasswordAuthenticationToken listenerAuthentication(UUID listenerId) {
+        var principal = new dev.audiobook.platform.identity.ListenerPrincipal(
+                listenerId,
+                "Narration Listener",
+                null,
+                java.util.Set.of(SignInProvider.GOOGLE),
+                SignInProvider.GOOGLE,
+                Instant.now());
+        return UsernamePasswordAuthenticationToken.authenticated(
+                principal, null, List.of(new SimpleGrantedAuthority("ROLE_LISTENER")));
     }
 
     @Test
@@ -567,12 +757,15 @@ class NarrationPlanITest {
     }
 
     private UUID admit(UUID listenerId, String operationSuffix) throws Exception {
-        byte[] source = epub();
+        return admit(listenerId, epub(), "application/epub+zip", operationSuffix);
+    }
+
+    private UUID admit(UUID listenerId, byte[] source, String mediaType, String operationSuffix) throws Exception {
         String digest = sha256(source);
         PublicationSubmissionService.Creation creation = submissionService.create(
                 new PublicationSubmissionService.CreateCommand(
                         listenerId,
-                        "application/epub+zip",
+                        mediaType,
                         source.length,
                         digest,
                         "rights-v1",
@@ -693,6 +886,21 @@ class NarrationPlanITest {
                       <table id="facts"><tr><td>Year</td><td>2026</td></tr></table>
                     </body></html>
                     """.formatted(PRIVATE_PROSE));
+        }
+        return bytes.toByteArray();
+    }
+
+    private static byte[] pdf() throws Exception {
+        return pdf(2);
+    }
+
+    private static byte[] pdf(int pageCount) throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (PDDocument document = new PDDocument()) {
+            for (int page = 0; page < pageCount; page++) {
+                document.addPage(new PDPage());
+            }
+            document.save(bytes);
         }
         return bytes.toByteArray();
     }

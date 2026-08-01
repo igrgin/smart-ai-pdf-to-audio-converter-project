@@ -69,7 +69,7 @@ class EpubNarrationPlanInterpreterTest {
                 .extracting(EpubNarrationPlanInterpreter.Chapter::title)
                 .containsExactly("Evidence", "Opening");
         assertThat(plan.chapters())
-                .extracting(chapter -> chapter.provenance().spineIndex())
+                .extracting(chapter -> chapter.provenance().sourceIndex())
                 .containsExactly(0, 1);
         assertThat(plan.chapters().getFirst().provenance())
                 .extracting(
@@ -96,7 +96,7 @@ class EpubNarrationPlanInterpreterTest {
             assertThat(item.classificationConfidence().value()).isBetween(0.0, 1.0);
             assertThat(item.treatmentConfidence().value()).isBetween(0.0, 1.0);
             assertThat(item.recommendedTreatment()).isNotNull();
-            assertThat(item.provenance().spineItem()).startsWith("OPS/");
+            assertThat(item.provenance().sourceUnit()).startsWith("OPS/");
         });
         assertThat(plan.reviewItems().getFirst())
                 .extracting(
@@ -172,7 +172,7 @@ class EpubNarrationPlanInterpreterTest {
                 .extracting(EpubNarrationPlanInterpreter.Chapter::title)
                 .containsExactly("One", "Two");
         assertThat(plan.chapters())
-                .extracting(chapter -> chapter.provenance().spineIndex())
+                .extracting(chapter -> chapter.provenance().sourceIndex())
                 .containsExactly(0, 0);
         assertThat(plan.chapters().getFirst().normalProse())
                 .extracting(EpubNarrationPlanInterpreter.NormalProse::text)
@@ -212,7 +212,7 @@ class EpubNarrationPlanInterpreterTest {
         assertThat(plan.chapters().getFirst().gaps()).containsExactly(
                 new EpubNarrationPlanInterpreter.Gap(
                         "manifest-idref:missing-chapter", "UNREADABLE_LINEAR_SPINE_RESOURCE"));
-        assertThat(plan.chapters().getFirst().provenance().spineItem())
+        assertThat(plan.chapters().getFirst().provenance().sourceUnit())
                 .isEqualTo("manifest-idref:missing-chapter");
     }
 

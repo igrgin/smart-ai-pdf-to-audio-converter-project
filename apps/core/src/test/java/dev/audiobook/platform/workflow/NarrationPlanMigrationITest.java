@@ -25,7 +25,7 @@ class NarrationPlanMigrationITest {
             .withPassword("audiobook-test");
 
     @Test
-    void migrationBackfillsOnlyPreparingEpubConversions() throws SQLException {
+    void migrationBackfillsPreparingEpubAndPdfConversions() throws SQLException {
         Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
@@ -45,8 +45,9 @@ class NarrationPlanMigrationITest {
         assertThat(reasonCode("a")).isEqualTo("NARRATION_PLAN_PENDING");
         assertThat(reasonCode("b")).isEqualTo("EXTRACTION_PENDING");
         assertThat(workCount("a")).isOne();
-        assertThat(workCount("b")).isZero();
+        assertThat(workCount("b")).isOne();
         assertThat(outboxCount("a")).isOne();
+        assertThat(outboxCount("b")).isOne();
     }
 
     private static void seedPreparingConversion(String suffix, String mediaType) throws SQLException {

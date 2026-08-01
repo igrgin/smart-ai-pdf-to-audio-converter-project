@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -50,7 +51,41 @@ public class AudiobookConversionController {
                         conversion.reasonCode(),
                         conversion.allowedActions(),
                         conversion.version(),
+                        conversion.recovery(),
                         plan));
+    }
+
+    @PostMapping("/{conversionId}/narration-plan-recovery")
+    public ResponseEntity<ConversionProgress> resumeNarrationPlan(
+            @AuthenticationPrincipal ListenerPrincipal principal,
+            @PathVariable UUID conversionId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestHeader("If-Match") String ifMatch) {
+        long expectedVersion = expectedVersion(ifMatch);
+        AudiobookConversionService.AudiobookConversion conversion = conversionService.resumeNarrationPlan(
+                principal.listenerId(), conversionId, expectedVersion, idempotencyKey);
+        return ResponseEntity.accepted()
+                .cacheControl(CacheControl.noStore())
+                .eTag(Long.toString(conversion.version()))
+                .body(new ConversionProgress(
+                        conversion.conversionId(),
+                        conversion.state(),
+                        conversion.reasonCode(),
+                        conversion.allowedActions(),
+                        conversion.version(),
+                        conversion.recovery(),
+                        null));
+    }
+
+    private static long expectedVersion(String ifMatch) {
+        String value = ifMatch.strip();
+        if (value.startsWith("W/")) {
+            value = value.substring(2);
+        }
+        if (value.length() < 3 || value.charAt(0) != '"' || value.charAt(value.length() - 1) != '"') {
+            throw new IllegalArgumentException("If-Match must contain the quoted conversion version");
+        }
+        return Long.parseLong(value.substring(1, value.length() - 1));
     }
 
     private static boolean matches(String ifNoneMatch, String entityTag) {
@@ -72,6 +107,7 @@ public class AudiobookConversionController {
             String reasonCode,
             java.util.List<AudiobookConversionService.AllowedAction> allowedActions,
             long version,
+            AudiobookConversionService.RecoveryDetails recovery,
             NarrationPlanService.PlanView narrationPlan) {
     }
 }

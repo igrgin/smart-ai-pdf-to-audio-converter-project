@@ -76,6 +76,9 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
                     workId,
                     messageId));
             return true;
+        } catch (SourceTooDamagedException exception) {
+            pauseAfterDamage(workId, messageId, exception);
+            return false;
         } catch (IOException exception) {
             releaseAfterFailure(workId, messageId);
             throw new IllegalStateException("Narration Plan source Working Asset is unavailable", exception);
@@ -136,6 +139,22 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
                 WHERE work_id = ? AND state = 'CLAIMED' AND lease_owner = ?
                 """,
                 MAX_ATTEMPTS,
+                workId,
+                messageId));
+    }
+
+    private void pauseAfterDamage(
+            UUID workId, UUID messageId, SourceTooDamagedException exception) {
+        transactions().executeWithoutResult(status -> jdbcTemplate.update(
+                """
+                UPDATE workflow.narration_plan_work
+                SET state = 'PAUSED', pause_reason_code = ?, resume_from_page = ?,
+                    listener_guidance = ?, lease_owner = NULL, lease_expires_at = NULL
+                WHERE work_id = ? AND state = 'CLAIMED' AND lease_owner = ?
+                """,
+                exception.reasonCode(),
+                exception.resumeFromPage(),
+                exception.listenerGuidance(),
                 workId,
                 messageId));
     }

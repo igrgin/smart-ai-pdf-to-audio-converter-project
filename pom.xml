@@ -13,6 +13,7 @@
     <description>Deployable walking skeleton for the private AI audiobook platform.</description>
 
     <modules>
+        <module>apps/pdfbox-helper</module>
         <module>apps/core</module>
     </modules>
 
