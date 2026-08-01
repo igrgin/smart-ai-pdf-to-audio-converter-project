@@ -35,7 +35,6 @@ public interface ConversionWorkflowAdministrationService {
             UUID conversionId,
             long expectedConversionVersion,
             String failureCode,
-            long incurredProviderCostMicros,
             String idempotencyKey) {
     }
 

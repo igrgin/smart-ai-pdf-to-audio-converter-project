@@ -207,21 +207,31 @@ class JdbcConversionWorkflowAuthority {
             recordLateResult(result, conversion.state());
             return new ResultDecision(ResultDisposition.LATE, null, "CONVERSION_TERMINAL");
         }
-        AcceptedResult replay = findAcceptedResult(result.conversionId(), result.operationKey());
+        AcceptedResultReplay replay = findAcceptedResult(result.conversionId(), result.operationKey());
         if (replay != null) {
-            if (!replay.resultDigest().equals(result.resultDigest())) {
+            if (!replay.acceptedResult().resultDigest().equals(result.resultDigest())) {
                 return new ResultDecision(
-                        ResultDisposition.AMBIGUOUS, replay.acceptedResultId(), "RESULT_DIGEST_MISMATCH");
+                        ResultDisposition.AMBIGUOUS,
+                        replay.acceptedResult().acceptedResultId(),
+                        "RESULT_DIGEST_MISMATCH");
+            }
+            if (!replay.matches(result)) {
+                return new ResultDecision(
+                        ResultDisposition.AMBIGUOUS,
+                        replay.acceptedResult().acceptedResultId(),
+                        "RESULT_IDENTITY_MISMATCH");
             }
             StageLease replayLease = lockedStageLease(result.conversionId(), result.stage());
             if (replayLease != null
+                    && replay.stageRunId().equals(replayLease.stageRunId())
                     && replayLease.state() == StageState.CLAIMED
                     && result.messageId().equals(replayLease.leaseMessageId())
                     && replayLease.leaseExpiresAt() != null
                     && replayLease.leaseExpiresAt().isAfter(identityClock.instant())) {
                 completeStage(replayLease.stageRunId());
             }
-            return new ResultDecision(ResultDisposition.REPLAYED, replay.acceptedResultId(), null);
+            return new ResultDecision(
+                    ResultDisposition.REPLAYED, replay.acceptedResult().acceptedResultId(), null);
         }
         StageLease lease = lockedStageLease(result.conversionId(), result.stage());
         if (lease == null
@@ -260,7 +270,9 @@ class JdbcConversionWorkflowAuthority {
         StageLease lease = lockedStageLease(failure.conversionId(), failure.stage());
         if (lease == null
                 || lease.state() != StageState.CLAIMED
-                || !failure.messageId().equals(lease.leaseMessageId())) {
+                || !failure.messageId().equals(lease.leaseMessageId())
+                || lease.leaseExpiresAt() == null
+                || !lease.leaseExpiresAt().isAfter(identityClock.instant())) {
             throw new IllegalStateException("Stage failure lease is stale or unavailable");
         }
         StageState nextState = failure.retryable() && lease.attemptCount() < lease.maximumAttempts()
@@ -390,7 +402,9 @@ class JdbcConversionWorkflowAuthority {
         if (lease == null
                 || !lease.listenerId().equals(command.listenerId())
                 || lease.state() != StageState.CLAIMED
-                || !command.messageId().equals(lease.leaseMessageId())) {
+                || !command.messageId().equals(lease.leaseMessageId())
+                || lease.leaseExpiresAt() == null
+                || !lease.leaseExpiresAt().isAfter(identityClock.instant())) {
             throw new IllegalStateException("Conversion pause lease is stale or unavailable");
         }
         Instant now = identityClock.instant();
@@ -604,52 +618,12 @@ class JdbcConversionWorkflowAuthority {
         if (conversion == null || conversion.version() != expectedConversionVersion || conversion.terminal()) {
             throw new IllegalStateException("Conversion cancellation is stale or unavailable");
         }
-        Long incurredCost = jdbcTemplate.queryForObject(
-                """
-                WITH reservation AS (
-                    SELECT characters.reserved_delta AS reserved_characters,
-                           provider.reserved_delta AS reserved_cost_micros
-                    FROM character_entitlement_ledger_entry characters
-                    JOIN provider_spend_ledger_entry provider
-                      ON provider.reservation_id = characters.reservation_id
-                    WHERE characters.listener_id = ? AND characters.conversion_id = ?
-                      AND characters.entry_type = 'RESERVATION'
-                      AND provider.entry_type = 'RESERVATION'
-                ), recorded AS (
-                    SELECT COALESCE(SUM(incurred_provider_cost_micros), 0) AS cost_micros
-                    FROM workflow.conversion_provider_cost_entry
-                    WHERE listener_id = ? AND conversion_id = ?
-                ), calling AS (
-                    SELECT COALESCE(SUM(GREATEST(1, CEIL(
-                        reservation.reserved_cost_micros::numeric * segment.character_count
-                        / reservation.reserved_characters
-                    )::bigint)), 0) AS cost_micros
-                    FROM generation.speech_attempt attempt
-                    JOIN generation.speech_segment segment ON segment.segment_id = attempt.segment_id
-                    CROSS JOIN reservation
-                    WHERE attempt.listener_id = ? AND attempt.conversion_id = ?
-                      AND attempt.state = 'CALLING_PROVIDER'
-                      AND NOT EXISTS (
-                          SELECT 1 FROM workflow.conversion_provider_cost_entry cost
-                          WHERE cost.operation_key = 'provider-cost:' || attempt.attempt_id
-                      )
-                )
-                SELECT LEAST(reservation.reserved_cost_micros,
-                            recorded.cost_micros + calling.cost_micros)
-                FROM reservation, recorded, calling
-                """,
-                Long.class,
-                listenerId,
-                conversionId,
-                listenerId,
-                conversionId,
-                listenerId,
-                conversionId);
+        long incurredCost = incurredProviderCost(listenerId, conversionId);
         return cancelLocked(new CancellationCommand(
                 listenerId,
                 conversionId,
                 expectedConversionVersion,
-                incurredCost == null ? 0 : incurredCost,
+                incurredCost,
                 "listener-requested",
                 idempotencyKey));
     }
@@ -694,10 +668,11 @@ class JdbcConversionWorkflowAuthority {
             throw new IllegalStateException("Terminal conversion failure is stale or unavailable");
         }
         long reusableCharacters = reusableCharacters(command.listenerId(), command.conversionId());
+        long incurredProviderCostMicros = incurredProviderCost(command.listenerId(), command.conversionId());
         entitlementService.settle(new ConversionEntitlementService.SettlementRequest(
                 reservationId(command.listenerId(), command.conversionId()),
                 reusableCharacters,
-                command.incurredProviderCostMicros(),
+                incurredProviderCostMicros,
                 "conversion-failure-settlement:" + command.conversionId()));
         Instant now = identityClock.instant();
         jdbcTemplate.update(
@@ -755,9 +730,54 @@ class JdbcConversionWorkflowAuthority {
                 command.expectedConversionVersion(),
                 command.failureCode(),
                 reusableCharacters,
-                command.incurredProviderCostMicros(),
+                incurredProviderCostMicros,
                 timestamp(now));
         return cancellationResult(command.listenerId(), command.conversionId());
+    }
+
+    private long incurredProviderCost(UUID listenerId, UUID conversionId) {
+        Long incurredCost = jdbcTemplate.queryForObject(
+                """
+                WITH reservation AS (
+                    SELECT characters.reserved_delta AS reserved_characters,
+                           provider.reserved_delta AS reserved_cost_micros
+                    FROM character_entitlement_ledger_entry characters
+                    JOIN provider_spend_ledger_entry provider
+                      ON provider.reservation_id = characters.reservation_id
+                    WHERE characters.listener_id = ? AND characters.conversion_id = ?
+                      AND characters.entry_type = 'RESERVATION'
+                      AND provider.entry_type = 'RESERVATION'
+                ), recorded AS (
+                    SELECT COALESCE(SUM(incurred_provider_cost_micros), 0) AS cost_micros
+                    FROM workflow.conversion_provider_cost_entry
+                    WHERE listener_id = ? AND conversion_id = ?
+                ), calling AS (
+                    SELECT COALESCE(SUM(GREATEST(1, CEIL(
+                        reservation.reserved_cost_micros::numeric * segment.character_count
+                        / reservation.reserved_characters
+                    )::bigint)), 0) AS cost_micros
+                    FROM generation.speech_attempt attempt
+                    JOIN generation.speech_segment segment ON segment.segment_id = attempt.segment_id
+                    CROSS JOIN reservation
+                    WHERE attempt.listener_id = ? AND attempt.conversion_id = ?
+                      AND attempt.state = 'CALLING_PROVIDER'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM workflow.conversion_provider_cost_entry cost
+                          WHERE cost.operation_key = 'provider-cost:' || attempt.attempt_id
+                      )
+                )
+                SELECT LEAST(reservation.reserved_cost_micros,
+                            recorded.cost_micros + calling.cost_micros)
+                FROM reservation, recorded, calling
+                """,
+                Long.class,
+                listenerId,
+                conversionId,
+                listenerId,
+                conversionId,
+                listenerId,
+                conversionId);
+        return incurredCost == null ? 0 : incurredCost;
     }
 
     private long reusableCharacters(UUID listenerId, UUID conversionId) {
@@ -1076,15 +1096,17 @@ class JdbcConversionWorkflowAuthority {
         return matches.isEmpty() ? null : matches.getFirst();
     }
 
-    private AcceptedResult findAcceptedResult(UUID conversionId, String operationKey) {
-        List<AcceptedResult> matches = jdbcTemplate.query(
+    private AcceptedResultReplay findAcceptedResult(UUID conversionId, String operationKey) {
+        List<AcceptedResultReplay> matches = jdbcTemplate.query(
                 """
-                SELECT accepted_result_id, stage, operation_key, result_reference,
+                SELECT stage_run_id, accepted_result_id, stage, operation_key, result_reference,
                        result_sha256, provider_work, accepted_at
                 FROM workflow.conversion_accepted_result
                 WHERE conversion_id = ? AND operation_key = ?
                 """,
-                (resultSet, row) -> acceptedResult(resultSet),
+                (resultSet, row) -> new AcceptedResultReplay(
+                        resultSet.getObject("stage_run_id", UUID.class),
+                        acceptedResult(resultSet)),
                 conversionId,
                 operationKey);
         return matches.isEmpty() ? null : matches.getFirst();
@@ -1223,9 +1245,6 @@ class JdbcConversionWorkflowAuthority {
                 || command.failureCode().length() > 64) {
             throw new IllegalArgumentException("failureCode is required and must be at most 64 characters");
         }
-        if (command.incurredProviderCostMicros() < 0) {
-            throw new IllegalArgumentException("Incurred provider cost cannot be negative");
-        }
     }
 
     private static void validate(ProviderCost command) {
@@ -1356,8 +1375,15 @@ class JdbcConversionWorkflowAuthority {
             return listenerId.equals(command.listenerId())
                     && conversionId.equals(command.conversionId())
                     && expectedConversionVersion == command.expectedConversionVersion()
-                    && failureCode.equals(command.failureCode())
-                    && incurredProviderCostMicros == command.incurredProviderCostMicros();
+                    && failureCode.equals(command.failureCode());
+        }
+    }
+
+    private record AcceptedResultReplay(UUID stageRunId, AcceptedResult acceptedResult) {
+        boolean matches(StageResult result) {
+            return acceptedResult.stage() == result.stage()
+                    && acceptedResult.resultReference().equals(result.resultReference())
+                    && acceptedResult.providerWork() == result.providerWork();
         }
     }
 }

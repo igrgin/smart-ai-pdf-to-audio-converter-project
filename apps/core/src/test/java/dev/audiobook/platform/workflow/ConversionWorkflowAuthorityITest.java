@@ -249,6 +249,90 @@ class ConversionWorkflowAuthorityITest {
     }
 
     @Test
+    void replayFromAnotherStageCannotCompleteTheCurrentLease() {
+        workflowService.scheduleStage(
+                LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.INSPECTION, 2);
+        UUID inspectionMessageId = UUID.randomUUID();
+        workflowService.claimDelivery(delivery(
+                inspectionMessageId, ConversionWorkflowService.Stage.INSPECTION, "inspection-worker"));
+        workflowService.acceptResult(new ConversionWorkflowService.StageResult(
+                inspectionMessageId,
+                CONVERSION_ID,
+                ConversionWorkflowService.Stage.INSPECTION,
+                "inspect:" + CONVERSION_ID,
+                "working/inspection/result.json",
+                "a".repeat(64),
+                false));
+
+        workflowService.scheduleStage(
+                LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.NARRATION_ANALYSIS, 2);
+        UUID narrationMessageId = UUID.randomUUID();
+        workflowService.claimDelivery(delivery(
+                narrationMessageId, ConversionWorkflowService.Stage.NARRATION_ANALYSIS, "narration-worker"));
+
+        var replay = workflowService.acceptResult(new ConversionWorkflowService.StageResult(
+                narrationMessageId,
+                CONVERSION_ID,
+                ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
+                "inspect:" + CONVERSION_ID,
+                "working/inspection/result.json",
+                "a".repeat(64),
+                false));
+
+        assertThat(replay)
+                .extracting(
+                        ConversionWorkflowService.ResultDecision::disposition,
+                        ConversionWorkflowService.ResultDecision::reasonCode)
+                .containsExactly(
+                        ConversionWorkflowService.ResultDisposition.AMBIGUOUS,
+                        "RESULT_IDENTITY_MISMATCH");
+        assertThat(workflowService.stage(
+                        LISTENER_ID,
+                        CONVERSION_ID,
+                        ConversionWorkflowService.Stage.NARRATION_ANALYSIS).state())
+                .isEqualTo(ConversionWorkflowService.StageState.CLAIMED);
+    }
+
+    @Test
+    void expiredLeaseCannotFailOrPauseAConversion() {
+        workflowService.scheduleStage(
+                LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.NARRATION_ANALYSIS, 3);
+        UUID messageId = UUID.randomUUID();
+        workflowService.claimDelivery(delivery(
+                messageId, ConversionWorkflowService.Stage.NARRATION_ANALYSIS, "analysis-worker"));
+        jdbcTemplate.update(
+                "UPDATE workflow.conversion_stage_run SET lease_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 second' "
+                        + "WHERE conversion_id = ? AND stage = 'NARRATION_ANALYSIS'",
+                CONVERSION_ID);
+
+        assertThatThrownBy(() -> workflowService.failStage(new ConversionWorkflowService.StageFailure(
+                        messageId,
+                        CONVERSION_ID,
+                        ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
+                        "EXPIRED_WORKER_FAILURE",
+                        true)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("stale or unavailable");
+        assertThatThrownBy(() -> lifecycleService.pause(new ConversionLifecycleService.PauseCommand(
+                        messageId,
+                        LISTENER_ID,
+                        CONVERSION_ID,
+                        ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
+                        "EXPIRED_WORKER_PAUSE",
+                        ConversionLifecycleService.ResponsibleParty.PLATFORM,
+                        null)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("stale or unavailable");
+        assertThat(workflowService.stage(
+                        LISTENER_ID,
+                        CONVERSION_ID,
+                        ConversionWorkflowService.Stage.NARRATION_ANALYSIS).state())
+                .isEqualTo(ConversionWorkflowService.StageState.CLAIMED);
+        assertThat(conversionService.conversion(LISTENER_ID, CONVERSION_ID).state())
+                .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
+    }
+
+    @Test
     void pausePersistsSafeResumeContextAndResumeRevalidatesCurrentEligibility() {
         workflowService.scheduleStage(
                 LISTENER_ID, CONVERSION_ID, ConversionWorkflowService.Stage.NARRATION_ANALYSIS, 3);
@@ -420,13 +504,18 @@ class ConversionWorkflowAuthorityITest {
         UUID inFlightMessageId = UUID.randomUUID();
         workflowService.claimDelivery(delivery(
                 inFlightMessageId, ConversionWorkflowService.Stage.PACKAGING, "packaging-worker"));
+        lifecycleService.recordProviderCost(new ConversionLifecycleService.ProviderCost(
+                LISTENER_ID,
+                CONVERSION_ID,
+                600_000,
+                "provider-request:terminal-failure-31",
+                "provider-cost:terminal-failure-31"));
 
         var failed = administrationService.failTerminal(new ConversionWorkflowAdministrationService.TerminalFailureCommand(
                 LISTENER_ID,
                 CONVERSION_ID,
                 0,
                 "PACKAGING_RESULT_INVALID",
-                600_000,
                 "terminal-packaging-failure-31"));
         var lateResult = workflowService.acceptResult(new ConversionWorkflowService.StageResult(
                 inFlightMessageId,
@@ -469,7 +558,6 @@ class ConversionWorkflowAuthorityITest {
                 CONVERSION_ID,
                 0,
                 "FINALIZATION_PUBLICATION_FAILED",
-                600_000,
                 "terminal-reusable-failure-31"));
 
         assertThat(entitlementService.allowance(LISTENER_ID))
@@ -478,8 +566,7 @@ class ConversionWorkflowAuthorityITest {
                         ConversionEntitlementService.Allowance::reservedCharacters,
                         ConversionEntitlementService.Allowance::committedCharacters)
                 .containsExactly(500_000L, 0L, 0L);
-        assertThat(entitlementService.providerSpend("openai").committedMicros())
-                .isEqualTo(600_000L);
+        assertThat(entitlementService.providerSpend("openai").committedMicros()).isZero();
     }
 
     private static ConversionWorkflowService.WorkDelivery delivery(
