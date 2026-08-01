@@ -69,8 +69,8 @@ function renderEditor(onFrozen = vi.fn()) {
 function plan(): NarrationPlan {
   const source = (ordinal: number) => ({
     source: "EPUB_XHTML",
-    spineIndex: ordinal,
-    spineItem: `OPS/chapter-${ordinal}.xhtml`,
+    sourceIndex: ordinal,
+    sourceUnit: `OPS/chapter-${ordinal}.xhtml`,
     sourceDeclared: true,
     confidence: 1
   });

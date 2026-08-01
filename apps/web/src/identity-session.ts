@@ -26,10 +26,11 @@ export interface Library {
 
 export interface AudiobookConversion {
   conversionId: string;
-  state: "PREPARING" | "AWAITING_REVIEW" | "GENERATING";
-  reasonCode: "EXTRACTION_PENDING" | "NARRATION_PLAN_PENDING" | "NARRATION_PLAN_REQUIRES_INTERVENTION" | "NARRATION_REVIEW_AVAILABLE" | "NARRATION_REVIEW_APPROVED" | "NARRATION_RECOMMENDATIONS_ACCEPTED" | "GENERATION_IN_PROGRESS";
+  state: "PREPARING" | "PAUSED" | "AWAITING_REVIEW" | "GENERATING";
+  reasonCode: "EXTRACTION_PENDING" | "NARRATION_PLAN_PENDING" | "NARRATION_PLAN_REQUIRES_INTERVENTION" | "SOURCE_TOO_DAMAGED" | "NARRATION_REVIEW_AVAILABLE" | "NARRATION_REVIEW_APPROVED" | "NARRATION_RECOMMENDATIONS_ACCEPTED" | "GENERATION_IN_PROGRESS";
   allowedActions: AllowedAction[];
   version: number;
+  recovery?: { resumeFromPage: number; listenerGuidance: string };
   recipeId?: string;
   voiceId?: string;
   voiceDisplayName?: string;
@@ -37,7 +38,7 @@ export interface AudiobookConversion {
   explicitNarrationChoiceRequired: boolean;
 }
 
-export type AllowedAction = "REVIEW_NARRATION_PLAN" | "ACCEPT_RECOMMENDATIONS";
+export type AllowedAction = "REVIEW_NARRATION_PLAN" | "ACCEPT_RECOMMENDATIONS" | "RETRY_NARRATION_PLAN";
 
 export interface ConversionProgress extends AudiobookConversion {
   narrationPlan?: NarrationPlan;
@@ -58,8 +59,8 @@ export interface NarrationChapter {
 
 export interface SourceProvenance {
   source: string;
-  spineIndex: number;
-  spineItem: string;
+  sourceIndex: number;
+  sourceUnit: string;
   anchor?: string;
   sourceDeclared: boolean;
   confidence: number;
@@ -131,4 +132,25 @@ export async function fetchConversionProgress(
     entityTag: nextEntityTag,
     progress: await response.json() as ConversionProgress
   };
+}
+
+export async function retryNarrationPlan(
+  conversionId: string,
+  version: number,
+  csrf: CsrfProof
+): Promise<ConversionProgress> {
+  const response = await fetch(
+    `/api/v1/audiobook-conversions/${conversionId}/narration-plan-recovery`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+        "If-Match": `"${version}"`,
+        [csrf.headerName]: csrf.token
+      }
+    }
+  );
+  if (!response.ok) throw new Error(`Narration Plan recovery returned ${response.status}`);
+  return response.json() as Promise<ConversionProgress>;
 }

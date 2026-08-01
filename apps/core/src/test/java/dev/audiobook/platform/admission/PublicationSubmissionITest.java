@@ -382,7 +382,7 @@ class PublicationSubmissionITest {
                         "SELECT count(*) FROM workflow.narration_plan_work WHERE conversion_id = ?",
                         Long.class,
                         conversionId))
-                .isZero();
+                .isOne();
     }
 
     @Test

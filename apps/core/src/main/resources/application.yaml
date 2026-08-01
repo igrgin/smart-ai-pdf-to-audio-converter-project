@@ -82,6 +82,20 @@ platform:
   narration:
     working-asset-path: ${NARRATION_WORKING_ASSET_PATH:${java.io.tmpdir}/folio-working/narration-plans}
     working-bucket: local-working
+    pdf:
+      page-batch-size: 8
+      maximum-unreadable-pages: 5
+      maximum-consecutive-unreadable-pages: 2
+      maximum-rendered-pixels: 40000000
+      command-timeout: 2m
+      scratch-path: ${DOCUMENT_UNDERSTANDING_SCRATCH_PATH:${java.io.tmpdir}/folio-document-understanding}
+      pdf-box-java-command: ${PDFBOX_JAVA_COMMAND:java}
+      pdf-box-classpath: ${PDFBOX_CLASSPATH:/app/pdfbox-helper.jar}
+      pdf-box-main-class: ${PDFBOX_MAIN_CLASS:dev.audiobook.pdfbox.PdfBoxBoundaryMain}
+      maximum-pdf-box-heap-megabytes: ${PDFBOX_MAX_HEAP_MEGABYTES:384}
+      python-command: ${DOCLING_PYTHON_COMMAND:python3}
+      docling-script: ${DOCLING_SCRIPT:/app/bin/docling_extract.py}
+      tesseract-command: ${TESSERACT_COMMAND:tesseract}
   admission:
     rights-terms-version: rights-v1
     rights-notice-version: notice-v1

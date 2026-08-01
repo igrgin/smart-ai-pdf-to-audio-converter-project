@@ -27,7 +27,7 @@ public class NarrationPlanServiceImpl implements NarrationPlanService {
     private static final String SCHEMA_VERSION = "narration-plan-v1";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper().findAndRegisterModules();
 
-    private final EpubNarrationPlanInterpreter interpreter;
+    private final AdmittedPublicationNarrationPlanInterpreter interpreter;
     private final NarrationPlanAssetStore assetStore;
     private final JdbcTemplate jdbcTemplate;
     private final PlatformIdentifierGenerator identifierGenerator;
@@ -35,10 +35,10 @@ public class NarrationPlanServiceImpl implements NarrationPlanService {
     private final Clock identityClock;
 
     @Override
-    public void prepare(UUID listenerId, UUID conversionId, InputStream admittedEpub) {
+    public void prepare(UUID listenerId, UUID conversionId, InputStream admittedPublication) {
         Objects.requireNonNull(listenerId, "listenerId");
         Objects.requireNonNull(conversionId, "conversionId");
-        Objects.requireNonNull(admittedEpub, "admittedEpub");
+        Objects.requireNonNull(admittedPublication, "admittedPublication");
         AudiobookConversionService.AudiobookConversion conversion =
                 conversionService.conversion(listenerId, conversionId);
         if (conversion.state() == AudiobookConversionService.ConversionState.AWAITING_REVIEW) {
@@ -48,7 +48,7 @@ public class NarrationPlanServiceImpl implements NarrationPlanService {
             return;
         }
 
-        EpubNarrationPlanInterpreter.NarrationPlan plan = interpreter.interpret(admittedEpub);
+        PublicationNarrationPlanInterpreter.NarrationPlan plan = interpreter.interpret(admittedPublication);
         byte[] serialized = serialize(plan);
         NarrationPlanAssetStore.StoredAsset asset;
         try {
@@ -120,11 +120,13 @@ public class NarrationPlanServiceImpl implements NarrationPlanService {
                 stored.getFirst().sha256().getBytes(StandardCharsets.US_ASCII))) {
             throw new IllegalStateException("Narration Plan Working Asset integrity check failed");
         }
-        EpubNarrationPlanInterpreter.NarrationPlan asset = deserialize(serialized);
-        Map<Integer, List<EpubNarrationPlanInterpreter.ReviewItem>> itemsByChapter = asset.reviewItems().stream()
-                .collect(Collectors.groupingBy(EpubNarrationPlanInterpreter.ReviewItem::chapterOrdinal));
+        PublicationNarrationPlanInterpreter.NarrationPlan asset = deserialize(serialized);
+        Map<Integer, List<PublicationNarrationPlanInterpreter.ReviewItem>> itemsByChapter =
+                asset.reviewItems().stream()
+                        .collect(Collectors.groupingBy(
+                                PublicationNarrationPlanInterpreter.ReviewItem::chapterOrdinal));
         List<ChapterView> chapters = new ArrayList<>(asset.chapters().size());
-        for (EpubNarrationPlanInterpreter.Chapter chapter : asset.chapters()) {
+        for (PublicationNarrationPlanInterpreter.Chapter chapter : asset.chapters()) {
             chapters.add(new ChapterView(
                     chapter.ordinal(),
                     chapter.title(),
@@ -146,7 +148,7 @@ public class NarrationPlanServiceImpl implements NarrationPlanService {
         return count != null && count > 0;
     }
 
-    private byte[] serialize(EpubNarrationPlanInterpreter.NarrationPlan plan) {
+    private byte[] serialize(PublicationNarrationPlanInterpreter.NarrationPlan plan) {
         try {
             return OBJECT_MAPPER.writeValueAsBytes(plan);
         } catch (JsonProcessingException exception) {
@@ -154,25 +156,26 @@ public class NarrationPlanServiceImpl implements NarrationPlanService {
         }
     }
 
-    private EpubNarrationPlanInterpreter.NarrationPlan deserialize(byte[] plan) {
+    private PublicationNarrationPlanInterpreter.NarrationPlan deserialize(byte[] plan) {
         try {
-            return OBJECT_MAPPER.readValue(plan, EpubNarrationPlanInterpreter.NarrationPlan.class);
+            return OBJECT_MAPPER.readValue(plan, PublicationNarrationPlanInterpreter.NarrationPlan.class);
         } catch (IOException exception) {
             throw new IllegalStateException("Narration Plan schema validation failed", exception);
         }
     }
 
-    private static ProvenanceView provenance(EpubNarrationPlanInterpreter.StructuralProvenance provenance) {
+    private static ProvenanceView provenance(
+            PublicationNarrationPlanInterpreter.StructuralProvenance provenance) {
         return new ProvenanceView(
                 provenance.source().name(),
-                provenance.spineIndex(),
-                provenance.spineItem(),
+                provenance.sourceIndex(),
+                provenance.sourceUnit(),
                 provenance.anchor(),
                 provenance.sourceDeclared(),
                 provenance.confidence().value());
     }
 
-    private static ReviewItemView reviewItem(EpubNarrationPlanInterpreter.ReviewItem item) {
+    private static ReviewItemView reviewItem(PublicationNarrationPlanInterpreter.ReviewItem item) {
         return new ReviewItemView(
                 item.ordinal(),
                 item.sourceOrdinal(),

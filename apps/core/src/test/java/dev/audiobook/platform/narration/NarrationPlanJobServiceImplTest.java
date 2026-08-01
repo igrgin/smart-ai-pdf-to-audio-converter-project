@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -99,6 +100,30 @@ class NarrationPlanJobServiceImplTest {
         verify(jdbcTemplate).update(
                 contains("CASE WHEN attempt_count"),
                 eq(4),
+                eq(workId),
+                eq(messageId));
+    }
+
+    @Test
+    void excessivePdfDamagePausesAtTheSafeResumeCheckpointWithoutRetrying() throws Exception {
+        UUID listenerId = UUID.randomUUID();
+        UUID conversionId = UUID.randomUUID();
+        UUID submissionId = UUID.randomUUID();
+        UUID workId = UUID.randomUUID();
+        UUID messageId = UUID.randomUUID();
+        stubPending(messageId, workId, listenerId, conversionId, submissionId, true);
+        given(objectStore.read(submissionId)).willReturn(new ByteArrayInputStream(new byte[] {1}));
+        doThrow(new SourceTooDamagedException(17))
+                .when(narrationPlanService)
+                .prepare(eq(listenerId), eq(conversionId), any(ByteArrayInputStream.class));
+
+        assertThat(service.processPending()).isZero();
+
+        verify(jdbcTemplate).update(
+                contains("SET state = 'PAUSED'"),
+                eq("SOURCE_TOO_DAMAGED"),
+                eq(17),
+                eq(SourceTooDamagedException.LISTENER_GUIDANCE),
                 eq(workId),
                 eq(messageId));
     }

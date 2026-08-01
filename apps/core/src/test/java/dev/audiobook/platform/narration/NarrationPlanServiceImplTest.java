@@ -27,7 +27,8 @@ import org.springframework.jdbc.core.RowMapper;
 
 class NarrationPlanServiceImplTest {
 
-    private final EpubNarrationPlanInterpreter interpreter = mock(EpubNarrationPlanInterpreter.class);
+    private final AdmittedPublicationNarrationPlanInterpreter interpreter =
+            mock(AdmittedPublicationNarrationPlanInterpreter.class);
     private final NarrationPlanAssetStore assetStore = mock(NarrationPlanAssetStore.class);
     private final JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
     private final PlatformIdentifierGenerator identifierGenerator = mock(PlatformIdentifierGenerator.class);

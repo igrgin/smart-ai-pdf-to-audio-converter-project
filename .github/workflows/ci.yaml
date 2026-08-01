@@ -35,6 +35,35 @@ jobs:
         if: always()
         run: docker compose down --volumes
 
+  pdf-toolchain-corpus:
+    name: Isolated PDF extraction corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build the pinned offline document-understanding runtime
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: apps/core/Dockerfile
+          load: true
+          tags: folio-pdf-toolchain:corpus
+          cache-from: type=gha,scope=pdf-toolchain-corpus
+          cache-to: type=gha,mode=max,scope=pdf-toolchain-corpus
+      - name: Qualify real Docling and Tesseract with networking disabled
+        env:
+          PDF_TOOLCHAIN_IMAGE: folio-pdf-toolchain:corpus
+        run: >-
+          ./mvnw --batch-mode --no-transfer-progress -pl apps/core -am
+          -Dtest=PublicationNarrationPlanInterpreterTest
+          -Dsurefire.failIfNoSpecifiedTests=false
+          -Dit.test=PdfExtractionCorpusITest verify
+
   web:
     name: PWA test and production build
     runs-on: ubuntu-latest
@@ -150,7 +179,7 @@ jobs:
   containers:
     name: Immutable containers, SBOM, provenance, and image scans
     if: github.event_name == 'push'
-    needs: [core, web, environment-contracts, secret-scan, filesystem-scan, codeql]
+    needs: [core, pdf-toolchain-corpus, web, environment-contracts, secret-scan, filesystem-scan, codeql]
     runs-on: ubuntu-latest
     permissions:
       contents: read
