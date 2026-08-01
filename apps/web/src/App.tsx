@@ -23,7 +23,9 @@ import {
   type ConversionProgress,
   type CsrfProof,
   type IdentitySession,
-  type Library
+  type Library,
+  type NarrationReviewItem,
+  type SourceProvenance
 } from "./identity-session";
 import { fetchPlatformStatus, type PlatformStatus } from "./platform-status";
 import {
@@ -40,6 +42,13 @@ import {
   type NarratorVoice,
   type VoiceCatalog
 } from "./narration-selection";
+import {
+  NarrationReviewProblem,
+  submitNarrationReview,
+  type NarrationReviewAction,
+  type NarrationSectionDecision,
+  type NarrationTreatment
+} from "./narration-review";
 
 type Theme = "light" | "dark";
 
@@ -257,6 +266,7 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
             {library.audiobooks.map((conversion) => (
               <ConversionCard
                 conversion={conversion}
+                csrf={csrf}
                 key={conversion.conversionId}
                 onChooseNarrator={() => setCreationTarget(conversion)}
               />
@@ -306,9 +316,11 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
 
 function ConversionCard({
   conversion,
+  csrf,
   onChooseNarrator
 }: {
   conversion: AudiobookConversion;
+  csrf: CsrfProof;
   onChooseNarrator: () => void;
 }) {
   const [progress, setProgress] = useState<ConversionProgress>(conversion);
@@ -376,29 +388,205 @@ function ConversionCard({
     );
   }
 
+  if (progress.reasonCode === "NARRATION_REVIEW_APPROVED"
+      || progress.reasonCode === "NARRATION_RECOMMENDATIONS_ACCEPTED") {
+    return (
+      <article className="preparing-audiobook review-frozen-card" aria-live="polite">
+        <span className="empty-mark" aria-hidden="true"><ShieldCheck size={28} /></span>
+        <span className="card-kicker">Frozen decision</span>
+        <h2>Narration Review approved</h2>
+        <p>
+          {progress.reasonCode === "NARRATION_RECOMMENDATIONS_ACCEPTED"
+            ? "Recommended treatments are frozen for generation."
+            : "Your submitted structure, treatments, and Narration Snippets are frozen for generation."}
+        </p>
+      </article>
+    );
+  }
+
   return (
     <article className="preparing-audiobook narration-plan-card" aria-live="polite">
       <span className="empty-mark" aria-hidden="true"><BookOpen size={28} /></span>
       <span className="card-kicker">{progress.reasonCode}</span>
       <h2>Narration Plan ready</h2>
       <p>Review source-backed structure and uncertain or non-prose treatments. Normal prose is not editable.</p>
+      {progress.narrationPlan && (
+        <NarrationReviewEditor
+          conversionId={progress.conversionId}
+          csrf={csrf}
+          plan={progress.narrationPlan}
+          version={progress.version}
+          onFrozen={(action, version) => setProgress({
+            ...progress,
+            version,
+            reasonCode: action === "SKIP_OPTIONAL"
+              ? "NARRATION_RECOMMENDATIONS_ACCEPTED"
+              : "NARRATION_REVIEW_APPROVED",
+            allowedActions: []
+          })}
+          onReload={async () => {
+            const result = await fetchConversionProgress(progress.conversionId, undefined, new AbortController().signal);
+            if (!result.notModified) setProgress({ ...conversion, ...result.progress });
+          }}
+        />
+      )}
+      {progress.explicitNarrationChoiceRequired && (
+        <Button type="button" variant="outline" onClick={onChooseNarrator}>
+          Choose a new Narrator Voice
+        </Button>
+      )}
+    </article>
+  );
+}
+
+interface EditableReviewItem extends Omit<NarrationReviewItem, "recommendedTreatment" | "narrationSnippet"> {
+  sourceChapterOrdinal: number;
+  treatment: NarrationTreatment;
+  narrationSnippet: string;
+}
+
+interface EditableSection extends NarrationSectionDecision {
+  provenance: SourceProvenance;
+  gaps: Array<{ sourceUnit: string; reasonCode: string }>;
+  reviewItems: EditableReviewItem[];
+}
+
+function NarrationReviewEditor({
+  conversionId,
+  version,
+  plan,
+  csrf,
+  onFrozen,
+  onReload
+}: {
+  conversionId: string;
+  version: number;
+  plan: NonNullable<ConversionProgress["narrationPlan"]>;
+  csrf: CsrfProof;
+  onFrozen: (action: NarrationReviewAction, version: number) => void;
+  onReload: () => Promise<void>;
+}) {
+  const initialSections = () => plan.chapters.map((chapter): EditableSection => ({
+    clientId: `section-${chapter.ordinal}`,
+    title: chapter.title ?? `Unavailable source section ${chapter.ordinal + 1}`,
+    excluded: false,
+    sourceChapterOrdinals: [chapter.ordinal],
+    provenance: chapter.provenance,
+    gaps: chapter.gaps,
+    reviewItems: chapter.reviewItems.map((item) => ({
+      ...item,
+      sourceChapterOrdinal: chapter.ordinal,
+      treatment: item.recommendedTreatment,
+      narrationSnippet: item.narrationSnippet ?? ""
+    }))
+  }));
+  const [sections, setSections] = useState<EditableSection[]>(initialSections);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<NarrationReviewProblem | null>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => setSections(initialSections()), [plan, version]);
+
+  const updateSection = (index: number, update: (section: EditableSection) => EditableSection) => {
+    setSections((current) => current.map((section, candidate) => candidate === index ? update(section) : section));
+  };
+  const move = (index: number, offset: number) => {
+    setSections((current) => {
+      const next = [...current];
+      const [section] = next.splice(index, 1);
+      next.splice(index + offset, 0, section);
+      return next;
+    });
+  };
+  const mergeNext = (index: number) => {
+    setSections((current) => {
+      const first = current[index];
+      const second = current[index + 1];
+      if (!first || !second) return current;
+      const merged: EditableSection = {
+        ...first,
+        sourceChapterOrdinals: [...new Set([...first.sourceChapterOrdinals, ...second.sourceChapterOrdinals])],
+        reviewItems: [...first.reviewItems, ...second.reviewItems],
+        gaps: [...first.gaps, ...second.gaps],
+        excluded: first.excluded && second.excluded
+      };
+      return [...current.slice(0, index), merged, ...current.slice(index + 2)];
+    });
+  };
+  const split = (index: number) => {
+    setSections((current) => {
+      const section = current[index];
+      const splitAt = Math.ceil(section.reviewItems.length / 2);
+      const first = { ...section, reviewItems: section.reviewItems.slice(0, splitAt) };
+      const second = {
+        ...section,
+        clientId: `section-${crypto.randomUUID()}`,
+        title: `${section.title} (continued)`,
+        reviewItems: section.reviewItems.slice(splitAt)
+      };
+      return [...current.slice(0, index), first, second, ...current.slice(index + 1)];
+    });
+  };
+  const submit = async (action: NarrationReviewAction) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await submitNarrationReview(conversionId, version, action, sections, csrf);
+      onFrozen(result.action, result.conversionVersion);
+    } catch (problem) {
+      setError(problem instanceof NarrationReviewProblem
+        ? problem
+        : new NarrationReviewProblem("NARRATION_REVIEW_FAILED", "The Narration Review could not be saved. Try again.", false));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const reload = async () => {
+    setBusy(true);
+    try {
+      await onReload();
+      setError(null);
+    } catch {
+      setError(new NarrationReviewProblem(
+        "NARRATION_REVIEW_RELOAD_FAILED",
+        "The latest Narration Review could not be loaded. Try again.",
+        true
+      ));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="narration-review-editor">
+      <div className="review-guidance" role="note">
+        <strong>Bounded review</strong>
+        <span>Rename and arrange sections, or adjust only each Review Item’s treatment and Narration Snippet. Normal prose is never editable here.</span>
+      </div>
+      {error && (
+        <div
+          className="review-error"
+          role="alert"
+          tabIndex={-1}
+          ref={(node) => {
+            errorRef.current = node;
+            node?.focus();
+          }}
+        >
+          <strong>Review not saved</strong>
+          <span>{error.message}</span>
+          {error.recoverable && (
+            <Button type="button" variant="outline" disabled={busy} onClick={() => void reload()}>Reload latest review</Button>
+          )}
+        </div>
+      )}
       <div className="narration-chapters">
-        {progress.narrationPlan?.chapters.map((chapter) => (
-          <section className="narration-chapter" key={`${chapter.ordinal}-${chapter.provenance.spineItem}`}>
-            <h3>{chapter.title ?? `Unavailable source section ${chapter.ordinal + 1}`}</h3>
-            <p className="narration-provenance">
-              Source: {label(chapter.provenance.source)} · spine {chapter.provenance.spineIndex + 1}
-              {chapter.provenance.anchor ? ` · anchor ${chapter.provenance.anchor}` : ""}
-              {` · confidence ${percent(chapter.provenance.confidence)}`}
-            </p>
-            {chapter.gaps.map((gap) => (
-              <p className="narration-gap" key={`${gap.sourceUnit}-${gap.reasonCode}`}>
-                Explicit gap · {gap.reasonCode}
-              </p>
-            ))}
-            {chapter.reviewItems.map((item) => (
-              <div className="narration-review-item" key={item.ordinal}>
-                <strong>{label(item.type)} · {label(item.recommendedTreatment)}</strong>
+        {sections.map((section, sectionIndex) => (
+          <section className={`narration-chapter${section.excluded ? " narration-chapter--excluded" : ""}`} key={section.clientId}>
+            <h3>{section.title}</h3>
+            {section.reviewItems.map((item, itemIndex) => (
+              <fieldset className="narration-review-item" key={`${item.sourceChapterOrdinal}-${item.ordinal}`}>
+                <legend>{label(item.type)} · {label(item.treatment)}</legend>
                 <span>
                   Source position {item.sourceOrdinal + 1} · extraction {percent(item.extractionConfidence)}
                   {` · classification ${percent(item.classificationConfidence)}`}
@@ -409,21 +597,80 @@ function ConversionCard({
                   {` · spine ${item.provenance.spineIndex + 1} · ${item.provenance.spineItem}`}
                   {item.provenance.anchor ? ` · anchor ${item.provenance.anchor}` : ""}
                 </small>
-                {item.narrationSnippet && <blockquote>{item.narrationSnippet}</blockquote>}
-              </div>
+                <label>
+                  Treatment for {label(item.type)} in {section.title}
+                  <select
+                    value={item.treatment}
+                    onChange={(event) => updateSection(sectionIndex, (current) => ({
+                      ...current,
+                      reviewItems: current.reviewItems.map((candidate, candidateIndex) => candidateIndex === itemIndex
+                        ? { ...candidate, treatment: event.target.value as NarrationTreatment }
+                        : candidate)
+                    }))}
+                  >
+                    <option value="OMIT">Omit</option>
+                    <option value="READ_VERBATIM">Read verbatim</option>
+                    <option value="SUMMARIZE">Summarize</option>
+                    <option value="DESCRIBE">Describe</option>
+                  </select>
+                </label>
+                <label>
+                  Narration Snippet for {label(item.type)} in {section.title}
+                  <textarea
+                    value={item.narrationSnippet}
+                    maxLength={4000}
+                    onChange={(event) => updateSection(sectionIndex, (current) => ({
+                      ...current,
+                      reviewItems: current.reviewItems.map((candidate, candidateIndex) => candidateIndex === itemIndex
+                        ? { ...candidate, narrationSnippet: event.target.value }
+                        : candidate)
+                    }))}
+                  />
+                </label>
+              </fieldset>
+            ))}
+            <div className="section-title-field">
+              <label htmlFor={`${section.clientId}-title`}>Section {sectionIndex + 1} title</label>
+              <input
+                id={`${section.clientId}-title`}
+                value={section.title}
+                maxLength={300}
+                onChange={(event) => updateSection(sectionIndex, (current) => ({ ...current, title: event.target.value }))}
+              />
+            </div>
+            <div className="section-tools" aria-label={`Arrange ${section.title}`}>
+              <Button type="button" variant="outline" disabled={sectionIndex === 0 || busy} onClick={() => move(sectionIndex, -1)} aria-label={`Move ${section.title} up`}>Move up</Button>
+              <Button type="button" variant="outline" disabled={sectionIndex === sections.length - 1 || busy} onClick={() => move(sectionIndex, 1)} aria-label={`Move ${section.title} down`}>Move down</Button>
+              <Button type="button" variant="outline" disabled={sectionIndex === sections.length - 1 || busy} onClick={() => mergeNext(sectionIndex)} aria-label={`Merge ${section.title} with next section`}>Merge next</Button>
+              <Button type="button" variant="outline" disabled={busy || sections.length >= 400} onClick={() => split(sectionIndex)} aria-label={`Split ${section.title} section`}>Split</Button>
+            </div>
+            <label className="exclude-section">
+              <input
+                type="checkbox"
+                checked={section.excluded}
+                onChange={(event) => updateSection(sectionIndex, (current) => ({ ...current, excluded: event.target.checked }))}
+              />
+              Exclude {section.title} from narration
+            </label>
+            <p className="narration-provenance">
+              Source: {label(section.provenance.source)} · spine {section.provenance.spineIndex + 1}
+              {section.provenance.anchor ? ` · anchor ${section.provenance.anchor}` : ""}
+              {` · confidence ${percent(section.provenance.confidence)}`}
+            </p>
+            {section.gaps.map((gap) => (
+              <p className="narration-gap" key={`${gap.sourceUnit}-${gap.reasonCode}`}>
+                Explicit gap · {gap.reasonCode}
+              </p>
             ))}
           </section>
         ))}
       </div>
-      <div className="narration-actions" aria-label="Allowed actions">
-        {progress.allowedActions.map((action) => <span key={action}>{label(action)}</span>)}
+      <div className="review-submit-actions">
+        <Button type="button" variant="outline" disabled={busy} onClick={() => void submit("SKIP_OPTIONAL")}>Skip optional review</Button>
+        <Button type="button" disabled={busy || sections.some((section) => !section.title.trim())} onClick={() => void submit("APPROVE")}>Approve Narration Review</Button>
       </div>
-      {progress.explicitNarrationChoiceRequired && (
-        <Button type="button" variant="outline" onClick={onChooseNarrator}>
-          Choose a new Narrator Voice
-        </Button>
-      )}
-    </article>
+      <p className="review-status" aria-live="polite">{busy ? "Freezing review decisions…" : "Review decisions are not frozen until you approve or skip."}</p>
+    </div>
   );
 }
 

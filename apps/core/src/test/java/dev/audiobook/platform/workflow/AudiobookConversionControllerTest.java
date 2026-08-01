@@ -1,8 +1,11 @@
 package dev.audiobook.platform.workflow;
 
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -18,6 +21,9 @@ import dev.audiobook.platform.identity.ListenerIdentityService;
 import dev.audiobook.platform.identity.ListenerPrincipal;
 import dev.audiobook.platform.identity.SignInProvider;
 import dev.audiobook.platform.narration.NarrationPlanService;
+import dev.audiobook.platform.narration.NarrationReviewService;
+import dev.audiobook.platform.narration.NarrationReviewRejectedException;
+import dev.audiobook.platform.narration.NarrationReviewRejectionReason;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -29,6 +35,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -46,6 +53,9 @@ class AudiobookConversionControllerTest {
 
     @MockitoBean
     private NarrationPlanService narrationPlanService;
+
+    @MockitoBean
+    private NarrationReviewService narrationReviewService;
 
     @MockitoBean
     private PublicationSubmissionService submissionService;
@@ -143,6 +153,106 @@ class AudiobookConversionControllerTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("CONVERSION_UNAVAILABLE"))
                 .andExpect(jsonPath("$.detail").value("The Audiobook Conversion is unavailable."));
+    }
+
+    @Test
+    void frozenReviewProgressDoesNotReExposeTheEditablePlan() throws Exception {
+        when(conversionService.conversion(LISTENER_ID, CONVERSION_ID)).thenReturn(
+                new AudiobookConversionService.AudiobookConversion(
+                        CONVERSION_ID,
+                        AudiobookConversionService.ConversionState.AWAITING_REVIEW,
+                        "NARRATION_REVIEW_APPROVED",
+                        List.of(),
+                        2));
+
+        mockMvc.perform(get("/api/v1/audiobook-conversions/" + CONVERSION_ID)
+                        .with(authentication(listenerAuthentication())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reasonCode").value("NARRATION_REVIEW_APPROVED"))
+                .andExpect(jsonPath("$.allowedActions").isEmpty())
+                .andExpect(jsonPath("$.narrationPlan").doesNotExist());
+        verifyNoInteractions(narrationPlanService);
+    }
+
+    @Test
+    void listenerApprovesOnlyBoundedNarrationReviewFieldsAgainstTheSeenVersion() throws Exception {
+        UUID decisionId = UUID.fromString("01985f42-5f8d-7000-8000-000000000225");
+        when(narrationReviewService.submit(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new NarrationReviewService.ReviewResult(
+                        decisionId,
+                        NarrationReviewService.ReviewAction.APPROVE,
+                        2,
+                        false));
+        mockMvc.perform(post("/api/v1/audiobook-conversions/" + CONVERSION_ID + "/narration-review")
+                        .header("Origin", "http://localhost:3000")
+                        .header("Idempotency-Key", "approve-review-25")
+                        .header("If-Match", "\"1\"")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "action":"APPROVE",
+                                  "sections":[{
+                                    "clientId":"section-evidence",
+                                    "title":"Evidence and findings",
+                                    "excluded":false,
+                                    "sourceChapterOrdinals":[0],
+                                    "reviewItems":[{
+                                      "sourceChapterOrdinal":0,
+                                      "ordinal":0,
+                                      "treatment":"DESCRIBE",
+                                      "narrationSnippet":"A concise description of the evidence table."
+                                    }]
+                                  }]
+                                }
+                                """)
+                        .with(authentication(listenerAuthentication()))
+                        .with(csrf()))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("ETag", "\"2\""))
+                .andExpect(jsonPath("$.action").value("APPROVE"))
+                .andExpect(jsonPath("$.conversionVersion").value(2));
+    }
+
+    @Test
+    void staleReviewReturnsAFocusedRecoverableConflictWithTheLatestVersion() throws Exception {
+        when(narrationReviewService.submit(org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new NarrationReviewRejectedException(
+                        NarrationReviewRejectionReason.CONVERSION_VERSION_MISMATCH,
+                        3L));
+
+        mockMvc.perform(post("/api/v1/audiobook-conversions/" + CONVERSION_ID + "/narration-review")
+                        .header("Origin", "http://localhost:3000")
+                        .header("Idempotency-Key", "stale-review-25")
+                        .header("If-Match", "\"1\"")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"action\":\"SKIP_OPTIONAL\",\"sections\":[]}")
+                        .with(authentication(listenerAuthentication()))
+                        .with(csrf()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CONVERSION_VERSION_MISMATCH"))
+                .andExpect(jsonPath("$.currentVersion").value(3))
+                .andExpect(jsonPath("$.recoverable").value(true))
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("Reload")));
+    }
+
+    @Test
+    void publicationProseIsNotAcceptedAsAReviewField() throws Exception {
+        mockMvc.perform(post("/api/v1/audiobook-conversions/" + CONVERSION_ID + "/narration-review")
+                        .header("Origin", "http://localhost:3000")
+                        .header("Idempotency-Key", "prose-review-25")
+                        .header("If-Match", "\"1\"")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "action":"APPROVE",
+                                  "normalProse":"This must never become an editable transcript.",
+                                  "sections":[]
+                                }
+                                """)
+                        .with(authentication(listenerAuthentication()))
+                        .with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_NARRATION_REVIEW"));
     }
 
     private static UsernamePasswordAuthenticationToken listenerAuthentication() {

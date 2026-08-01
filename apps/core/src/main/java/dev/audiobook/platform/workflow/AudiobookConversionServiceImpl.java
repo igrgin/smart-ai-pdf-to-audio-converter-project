@@ -196,6 +196,7 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
                 state,
                 resultSet.getString("reason_code"),
                 state == ConversionState.AWAITING_REVIEW
+                                && "NARRATION_REVIEW_AVAILABLE".equals(resultSet.getString("reason_code"))
                         ? List.of(AllowedAction.REVIEW_NARRATION_PLAN, AllowedAction.ACCEPT_RECOMMENDATIONS)
                         : List.of(),
                 resultSet.getLong("version"));

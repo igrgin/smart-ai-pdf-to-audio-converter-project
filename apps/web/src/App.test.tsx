@@ -128,7 +128,7 @@ describe("public sample", () => {
   });
 
   it("enters the private responsive Library without exposing a Listener identifier", async () => {
-    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/v1/auth/session")) {
         return Promise.resolve({
@@ -539,7 +539,7 @@ describe("public sample", () => {
   });
 
   it("polls conversion progress and shows provenance-backed review without normal prose", async () => {
-    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/v1/auth/session")) {
         return Promise.resolve({
@@ -573,6 +573,17 @@ describe("public sample", () => {
               canStartConversion: false,
               denialReason: "ACTIVE_CONVERSION_LIMIT"
             }
+          })
+        });
+      }
+      if (url.endsWith("/narration-review") && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          status: 201,
+          json: async () => ({
+            decisionId: "01985f42-5f8d-7000-8000-000000000225",
+            action: "APPROVE",
+            conversionVersion: 2
           })
         });
       }
@@ -639,8 +650,63 @@ describe("public sample", () => {
     expect(screen.getByText(/table_detected · source: epub xhtml · spine 1 · ops\/chapter.xhtml · anchor facts/i))
       .toBeVisible();
     expect(screen.getByText("Year 2026")).toBeVisible();
-    expect(screen.getByText(/review narration plan/i)).toBeVisible();
+    const sectionTitle = screen.getByRole("textbox", { name: /section 1 title/i });
+    expect(sectionTitle).toHaveValue("Evidence");
+    expect(screen.getByRole("checkbox", { name: /exclude evidence/i })).not.toBeChecked();
+    expect(screen.getByRole("combobox", { name: /treatment for table in evidence/i }))
+      .toHaveValue("READ_VERBATIM");
+    expect(screen.getByRole("textbox", { name: /narration snippet for table in evidence/i }))
+      .toHaveValue("Year 2026");
+    expect(screen.getByRole("button", { name: /move evidence up/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /move evidence down/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /merge evidence with next section/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /split evidence section/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /skip optional review/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /approve narration review/i })).toBeEnabled();
     expect(container.textContent).not.toContain("private normal prose");
+
+    fireEvent.click(screen.getByRole("button", { name: /split evidence section/i }));
+    fireEvent.click(screen.getByRole("button", { name: /move evidence down/i }));
+    fireEvent.click(screen.getByRole("button", { name: /merge evidence \(continued\) with next section/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: /section 1 title/i }), {
+      target: { value: "Findings" }
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: /exclude findings/i }));
+    fireEvent.change(screen.getByRole("combobox", { name: /treatment for table in findings/i }), {
+      target: { value: "DESCRIBE" }
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /narration snippet for table in findings/i }), {
+      target: { value: "Describe the 2026 evidence table." }
+    });
+    fireEvent.click(screen.getByRole("button", { name: /approve narration review/i }));
+
+    expect(await screen.findByRole("heading", { name: /narration review approved/i })).toBeVisible();
+    const reviewCall = fetchMock.mock.calls.find(([input, options]) =>
+      String(input).endsWith("/narration-review") && options?.method === "POST"
+    );
+    expect(reviewCall).toBeDefined();
+    const reviewOptions = reviewCall?.[1] as RequestInit;
+    expect(reviewOptions.headers).toMatchObject({
+      "If-Match": "\"1\"",
+      "X-CSRF-TOKEN": "private-csrf"
+    });
+    const reviewBody = JSON.parse(String(reviewOptions.body));
+    expect(reviewBody).toEqual({
+      action: "APPROVE",
+      sections: [{
+        clientId: "section-00000000-0000-4000-8000-000000000023",
+        title: "Findings",
+        excluded: true,
+        sourceChapterOrdinals: [0],
+        reviewItems: [{
+          sourceChapterOrdinal: 0,
+          ordinal: 0,
+          treatment: "DESCRIBE",
+          narrationSnippet: "Describe the 2026 evidence table."
+        }]
+      }]
+    });
+    expect(JSON.stringify(reviewBody)).not.toMatch(/provenance|confidence|normalProse|sourceOrdinal|type/i);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/audiobook-conversions/01985f42-5f8d-7000-8000-000000000125",
       { headers: { Accept: "application/json" }, signal: expect.any(AbortSignal) }
@@ -707,6 +773,110 @@ describe("public sample", () => {
 
     expect(await screen.findByRole("heading", { name: /narration plan needs attention/i })).toBeVisible();
     expect(screen.getByText(/no further automatic attempts are scheduled/i)).toBeVisible();
+  });
+
+  it("focuses a recoverable stale-review error and reloads the latest plan without a page refresh", async () => {
+    const conversionId = "01985f42-5f8d-7000-8000-000000000127";
+    let progressReads = 0;
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            authenticated: true,
+            listener: { displayName: "Mara", signInMethods: ["google"] },
+            csrf: { headerName: "X-CSRF-TOKEN", parameterName: "_csrf", token: "private-csrf" }
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/library")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            displayName: "Mara",
+            signInMethods: ["google"],
+            audiobooks: [{
+              conversionId,
+              state: "AWAITING_REVIEW",
+              reasonCode: "NARRATION_REVIEW_AVAILABLE",
+              allowedActions: ["REVIEW_NARRATION_PLAN", "ACCEPT_RECOMMENDATIONS"],
+              version: 1
+            }],
+            conversionEntitlement: {
+              status: "EXHAUSTED",
+              grantedCharacters: 500000,
+              availableCharacters: 0,
+              reservedCharacters: 500000,
+              committedCharacters: 0,
+              canStartConversion: false
+            }
+          })
+        });
+      }
+      if (url.endsWith("/narration-review") && init?.method === "POST") {
+        return Promise.resolve({
+          ok: false,
+          status: 409,
+          json: async () => ({
+            code: "CONVERSION_VERSION_MISMATCH",
+            detail: "The Narration Review changed after it was loaded. Reload the latest review and try again.",
+            recoverable: true,
+            currentVersion: 2
+          })
+        });
+      }
+      if (url.endsWith(`/api/v1/audiobook-conversions/${conversionId}`)) {
+        progressReads += 1;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: () => `"${progressReads === 1 ? 1 : 2}"` },
+          json: async () => ({
+            conversionId,
+            state: "AWAITING_REVIEW",
+            reasonCode: "NARRATION_REVIEW_AVAILABLE",
+            allowedActions: ["REVIEW_NARRATION_PLAN", "ACCEPT_RECOMMENDATIONS"],
+            version: progressReads === 1 ? 1 : 2,
+            narrationPlan: {
+              normalProseEditable: false,
+              chapters: [{
+                ordinal: 0,
+                title: progressReads === 1 ? "Evidence" : "Latest evidence",
+                provenance: { source: "EPUB_NAVIGATION", spineIndex: 0, spineItem: "OPS/chapter.xhtml", sourceDeclared: true, confidence: 1 },
+                gaps: [],
+                reviewItems: [{
+                  ordinal: 0,
+                  sourceOrdinal: 1,
+                  type: "TABLE",
+                  provenance: { source: "EPUB_XHTML", spineIndex: 0, spineItem: "OPS/chapter.xhtml", sourceDeclared: true, confidence: 1 },
+                  extractionConfidence: 1,
+                  classificationConfidence: 1,
+                  treatmentConfidence: 1,
+                  recommendedTreatment: "READ_VERBATIM",
+                  narrationSnippet: "Year 2026",
+                  reasonCode: "TABLE_DETECTED"
+                }]
+              }]
+            }
+          })
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /approve narration review/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveFocus();
+    expect(alert).toHaveTextContent(/changed after it was loaded/i);
+    fireEvent.click(within(alert).getByRole("button", { name: /reload latest review/i }));
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: /section 1 title/i }))
+      .toHaveValue("Latest evidence"));
+    expect(progressReads).toBeGreaterThanOrEqual(2);
   });
 });
 

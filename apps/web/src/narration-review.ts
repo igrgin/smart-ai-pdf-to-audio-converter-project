@@ -1,0 +1,83 @@
+import type { CsrfProof } from "./identity-session";
+
+export type NarrationReviewAction = "APPROVE" | "SKIP_OPTIONAL";
+export type NarrationTreatment = "OMIT" | "READ_VERBATIM" | "SUMMARIZE" | "DESCRIBE";
+
+export interface NarrationReviewItemDecision {
+  sourceChapterOrdinal: number;
+  ordinal: number;
+  treatment: NarrationTreatment;
+  narrationSnippet?: string;
+}
+
+export interface NarrationSectionDecision {
+  clientId: string;
+  title: string;
+  excluded: boolean;
+  sourceChapterOrdinals: number[];
+  reviewItems: NarrationReviewItemDecision[];
+}
+
+export interface NarrationReviewResult {
+  decisionId: string;
+  action: NarrationReviewAction;
+  conversionVersion: number;
+}
+
+export class NarrationReviewProblem extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly recoverable: boolean,
+    readonly currentVersion?: number
+  ) {
+    super(message);
+  }
+}
+
+export async function submitNarrationReview(
+  conversionId: string,
+  version: number,
+  action: NarrationReviewAction,
+  sections: NarrationSectionDecision[],
+  csrf: CsrfProof
+): Promise<NarrationReviewResult> {
+  const boundedSections = sections.map((section) => ({
+    clientId: section.clientId,
+    title: section.title,
+    excluded: section.excluded,
+    sourceChapterOrdinals: [...section.sourceChapterOrdinals],
+    reviewItems: section.reviewItems.map((item) => ({
+      sourceChapterOrdinal: item.sourceChapterOrdinal,
+      ordinal: item.ordinal,
+      treatment: item.treatment,
+      narrationSnippet: item.narrationSnippet
+    }))
+  }));
+  const response = await fetch(`/api/v1/audiobook-conversions/${conversionId}/narration-review`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "Idempotency-Key": `narration-review:${conversionId}:${crypto.randomUUID()}`,
+      "If-Match": `"${version}"`,
+      [csrf.headerName]: csrf.token
+    },
+    body: JSON.stringify({ action, sections: action === "APPROVE" ? boundedSections : [] })
+  });
+  if (!response.ok) {
+    const problem = await response.json().catch(() => ({})) as {
+      code?: string;
+      detail?: string;
+      recoverable?: boolean;
+      currentVersion?: number;
+    };
+    throw new NarrationReviewProblem(
+      problem.code ?? "NARRATION_REVIEW_FAILED",
+      problem.detail ?? "The Narration Review could not be saved. Try again.",
+      problem.recoverable === true,
+      problem.currentVersion
+    );
+  }
+  return response.json() as Promise<NarrationReviewResult>;
+}
