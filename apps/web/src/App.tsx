@@ -16,9 +16,11 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "./components/ui/button";
 import {
+  fetchConversionProgress,
   fetchIdentitySession,
   fetchLibrary,
   type AudiobookConversion,
+  type ConversionProgress,
   type CsrfProof,
   type IdentitySession,
   type Library
@@ -253,21 +255,11 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
         ) : (
           <div className="conversion-list" aria-label="Private audiobooks">
             {library.audiobooks.map((conversion) => (
-              <article className="preparing-audiobook" key={conversion.conversionId}>
-                <span className="empty-mark" aria-hidden="true"><Sparkles size={28} /></span>
-                <span className="card-kicker">{conversion.state}</span>
-                <h2>Preparing your private audiobook</h2>
-                <p>
-                  {conversion.explicitNarrationChoiceRequired
-                    ? "The current Generation Recipe is no longer eligible. Choose explicitly before speech can begin."
-                    : `Folio is preparing ${conversion.voiceDisplayName ?? "the selected Narrator Voice"} at ${conversion.pace ? paceLabel(conversion.pace) : "Natural"} pace.`}
-                </p>
-                {conversion.explicitNarrationChoiceRequired && (
-                  <Button type="button" variant="outline" onClick={() => setCreationTarget(conversion)}>
-                    Choose a new Narrator Voice
-                  </Button>
-                )}
-              </article>
+              <ConversionCard
+                conversion={conversion}
+                key={conversion.conversionId}
+                onChooseNarrator={() => setCreationTarget(conversion)}
+              />
             ))}
           </div>
         )}
@@ -310,6 +302,137 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
       )}
     </section>
   );
+}
+
+function ConversionCard({
+  conversion,
+  onChooseNarrator
+}: {
+  conversion: AudiobookConversion;
+  onChooseNarrator: () => void;
+}) {
+  const [progress, setProgress] = useState<ConversionProgress>(conversion);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let entityTag: string | undefined;
+    let currentState = conversion.state;
+    let timeout: number | undefined;
+    const poll = async () => {
+      let delay = currentState === "PREPARING" ? 3_000 : 15_000;
+      try {
+        const result = await fetchConversionProgress(conversion.conversionId, entityTag, controller.signal);
+        entityTag = result.entityTag;
+        if (!result.notModified) {
+          setProgress({ ...conversion, ...result.progress });
+          currentState = result.progress.state;
+          delay = currentState === "PREPARING" ? 3_000 : 15_000;
+        }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        delay = 10_000;
+      }
+      if (!controller.signal.aborted) timeout = window.setTimeout(() => void poll(), delay);
+    };
+    void poll();
+    return () => {
+      controller.abort();
+      if (timeout !== undefined) window.clearTimeout(timeout);
+    };
+  }, [conversion.conversionId]);
+
+  if (progress.state === "PREPARING") {
+    const requiresIntervention = progress.reasonCode === "NARRATION_PLAN_REQUIRES_INTERVENTION";
+    const awaitingExtraction = progress.reasonCode === "EXTRACTION_PENDING";
+    return (
+      <article className="preparing-audiobook" aria-live="polite">
+        <span className="empty-mark" aria-hidden="true"><Sparkles size={28} /></span>
+        <span className="card-kicker">{progress.reasonCode}</span>
+        <h2>{requiresIntervention ? "Narration Plan needs attention" : "Preparing your private audiobook"}</h2>
+        <p>{requiresIntervention
+          ? "Preparation could not finish. No further automatic attempts are scheduled."
+          : awaitingExtraction
+            ? "The PDF passed quarantine inspection and is waiting for bounded extraction or OCR."
+          : conversion.explicitNarrationChoiceRequired
+            ? "The current Generation Recipe is no longer eligible. Choose explicitly before speech can begin."
+            : `The publication passed quarantine inspection. Folio is preparing its Narration Plan with ${conversion.voiceDisplayName ?? "the selected Narrator Voice"} at ${conversion.pace ? paceLabel(conversion.pace) : "Natural"} pace.`}</p>
+        {conversion.explicitNarrationChoiceRequired && (
+          <Button type="button" variant="outline" onClick={onChooseNarrator}>
+            Choose a new Narrator Voice
+          </Button>
+        )}
+      </article>
+    );
+  }
+
+  if (progress.state === "GENERATING") {
+    return (
+      <article className="preparing-audiobook" aria-live="polite">
+        <span className="empty-mark" aria-hidden="true"><Headphones size={28} /></span>
+        <span className="card-kicker">{progress.reasonCode}</span>
+        <h2>Generating your private audiobook</h2>
+        <p>Folio is rendering the reviewed Narration Plan with {progress.voiceDisplayName ?? "your selected Narrator Voice"}.</p>
+      </article>
+    );
+  }
+
+  return (
+    <article className="preparing-audiobook narration-plan-card" aria-live="polite">
+      <span className="empty-mark" aria-hidden="true"><BookOpen size={28} /></span>
+      <span className="card-kicker">{progress.reasonCode}</span>
+      <h2>Narration Plan ready</h2>
+      <p>Review source-backed structure and uncertain or non-prose treatments. Normal prose is not editable.</p>
+      <div className="narration-chapters">
+        {progress.narrationPlan?.chapters.map((chapter) => (
+          <section className="narration-chapter" key={`${chapter.ordinal}-${chapter.provenance.spineItem}`}>
+            <h3>{chapter.title ?? `Unavailable source section ${chapter.ordinal + 1}`}</h3>
+            <p className="narration-provenance">
+              Source: {label(chapter.provenance.source)} · spine {chapter.provenance.spineIndex + 1}
+              {chapter.provenance.anchor ? ` · anchor ${chapter.provenance.anchor}` : ""}
+              {` · confidence ${percent(chapter.provenance.confidence)}`}
+            </p>
+            {chapter.gaps.map((gap) => (
+              <p className="narration-gap" key={`${gap.sourceUnit}-${gap.reasonCode}`}>
+                Explicit gap · {gap.reasonCode}
+              </p>
+            ))}
+            {chapter.reviewItems.map((item) => (
+              <div className="narration-review-item" key={item.ordinal}>
+                <strong>{label(item.type)} · {label(item.recommendedTreatment)}</strong>
+                <span>
+                  Source position {item.sourceOrdinal + 1} · extraction {percent(item.extractionConfidence)}
+                  {` · classification ${percent(item.classificationConfidence)}`}
+                  {` · treatment ${percent(item.treatmentConfidence)}`}
+                </span>
+                <small>
+                  {item.reasonCode} · Source: {label(item.provenance.source)}
+                  {` · spine ${item.provenance.spineIndex + 1} · ${item.provenance.spineItem}`}
+                  {item.provenance.anchor ? ` · anchor ${item.provenance.anchor}` : ""}
+                </small>
+                {item.narrationSnippet && <blockquote>{item.narrationSnippet}</blockquote>}
+              </div>
+            ))}
+          </section>
+        ))}
+      </div>
+      <div className="narration-actions" aria-label="Allowed actions">
+        {progress.allowedActions.map((action) => <span key={action}>{label(action)}</span>)}
+      </div>
+      {progress.explicitNarrationChoiceRequired && (
+        <Button type="button" variant="outline" onClick={onChooseNarrator}>
+          Choose a new Narrator Voice
+        </Button>
+      )}
+    </article>
+  );
+}
+
+function label(value: string): string {
+  return value.toLowerCase().replaceAll("_", " ").replace(/^./, (character) => character.toUpperCase());
+}
+
+function percent(value: number): string {
+  return `${Math.round(value * 100)}%`;
 }
 
 function CreateAudiobookDialog({

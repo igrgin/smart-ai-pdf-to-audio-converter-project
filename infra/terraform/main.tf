@@ -12,10 +12,12 @@ locals {
     "erasure",
     "reconciliation"
   ])
+  worker_stages_without_narration = setsubtract(local.worker_stages, toset(["narration-analysis"]))
   required_services = toset([
     "artifactregistry.googleapis.com",
     "cloudkms.googleapis.com",
     "compute.googleapis.com",
+    "eventarc.googleapis.com",
     "firebase.googleapis.com",
     "firebasehosting.googleapis.com",
     "iam.googleapis.com",
@@ -25,7 +27,8 @@ locals {
     "secretmanager.googleapis.com",
     "servicenetworking.googleapis.com",
     "sqladmin.googleapis.com",
-    "storage.googleapis.com"
+    "storage.googleapis.com",
+    "workflows.googleapis.com"
   ])
 }
 
@@ -84,6 +87,11 @@ resource "random_password" "database" {
   special = true
 }
 
+resource "random_password" "narration_database" {
+  length  = 32
+  special = true
+}
+
 resource "random_password" "inspection_database" {
   length  = 32
   special = true
@@ -137,6 +145,12 @@ resource "google_sql_user" "platform" {
   password = random_password.database.result
 }
 
+resource "google_sql_user" "narration_worker" {
+  name     = "folio_narration_worker"
+  instance = google_sql_database_instance.postgres.name
+  password = random_password.narration_database.result
+}
+
 resource "google_sql_user" "inspection" {
   name     = "audiobook_inspection"
   instance = google_sql_database_instance.postgres.name
@@ -161,6 +175,19 @@ resource "google_secret_manager_secret_version" "database_password" {
   secret_data = random_password.database.result
 }
 
+resource "google_secret_manager_secret" "narration_database_password" {
+  secret_id = "${local.prefix}-narration-database-password"
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.required["secretmanager.googleapis.com"]]
+}
+
 resource "google_secret_manager_secret" "inspection_database_password" {
   secret_id = "${local.prefix}-inspection-database-password"
   replication {
@@ -172,6 +199,11 @@ resource "google_secret_manager_secret" "inspection_database_password" {
   }
 
   depends_on = [google_project_service.required["secretmanager.googleapis.com"]]
+}
+
+resource "google_secret_manager_secret_version" "narration_database_password" {
+  secret      = google_secret_manager_secret.narration_database_password.id
+  secret_data = random_password.narration_database.result
 }
 
 resource "google_secret_manager_secret_version" "inspection_database_password" {
@@ -226,7 +258,7 @@ resource "google_pubsub_topic" "work" {
 }
 
 resource "google_pubsub_subscription" "stages" {
-  for_each = local.worker_stages
+  for_each = local.worker_stages_without_narration
 
   name                       = "${local.prefix}-${each.key}"
   topic                      = google_pubsub_topic.work.id
@@ -243,7 +275,7 @@ resource "google_pubsub_subscription" "stages" {
     content {
       push_endpoint = "${google_cloud_run_v2_service.core.uri}/internal/v1/inspection-work-deliveries"
       oidc_token {
-        service_account_email = google_service_account.worker.email
+        service_account_email = google_service_account.workers["inspection"].email
         audience              = local.inspection_push_audience
       }
     }
@@ -277,9 +309,16 @@ resource "google_service_account" "core" {
   display_name = "${local.prefix} core"
 }
 
-resource "google_service_account" "worker" {
-  account_id   = "${local.prefix}-worker"
-  display_name = "${local.prefix} workers"
+resource "google_service_account" "workers" {
+  for_each = local.worker_stages
+
+  account_id   = "folio-w-${substr(replace(each.key, "-", ""), 0, 12)}-${substr(sha1("${var.environment_name}-${each.key}"), 0, 8)}"
+  display_name = "${local.prefix} ${each.key} worker"
+}
+
+resource "google_service_account" "narration_dispatcher" {
+  account_id   = "folio-narr-dispatch-${substr(sha1(var.environment_name), 0, 8)}"
+  display_name = "${local.prefix} Narration Plan dispatcher"
 }
 
 resource "google_service_account" "inspection_worker" {
@@ -311,9 +350,17 @@ resource "google_secret_manager_secret_iam_member" "core_upload_capability" {
 }
 
 resource "google_secret_manager_secret_iam_member" "worker_database_password" {
+  for_each = setsubtract(local.worker_stages_without_narration, toset(["inspection"]))
+
   secret_id = google_secret_manager_secret.database_password.id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.worker.email}"
+  member    = "serviceAccount:${google_service_account.workers[each.key].email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "narration_database_password" {
+  secret_id = google_secret_manager_secret.narration_database_password.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workers["narration-analysis"].email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "inspection_database_password" {
@@ -329,21 +376,47 @@ resource "google_pubsub_topic_iam_member" "core_publisher" {
 }
 
 resource "google_project_iam_member" "worker_subscriber" {
+  for_each = local.worker_stages_without_narration
+
   project = var.project_id
   role    = "roles/pubsub.subscriber"
-  member  = "serviceAccount:${google_service_account.worker.email}"
+  member  = "serviceAccount:${google_service_account.workers[each.key].email}"
 }
 
 resource "google_service_account_iam_member" "pubsub_push_token_creator" {
-  service_account_id = google_service_account.worker.name
+  service_account_id = google_service_account.workers["inspection"].name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
 
 resource "google_storage_bucket_iam_member" "worker_working_objects" {
+  for_each = setsubtract(local.worker_stages_without_narration, toset(["inspection"]))
+
   bucket = google_storage_bucket.working.name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.worker.email}"
+  member = "serviceAccount:${google_service_account.workers[each.key].email}"
+}
+
+resource "google_storage_bucket_iam_member" "narration_working_reader" {
+  bucket = google_storage_bucket.working.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.workers["narration-analysis"].email}"
+
+  condition {
+    title      = "NarrationSourceAndPlanRead"
+    expression = "resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.working.name}/objects/quarantine/\") || resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.working.name}/objects/narration-plans/\")"
+  }
+}
+
+resource "google_storage_bucket_iam_member" "narration_plan_creator" {
+  bucket = google_storage_bucket.working.name
+  role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.workers["narration-analysis"].email}"
+
+  condition {
+    title      = "NarrationPlanCreate"
+    expression = "resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.working.name}/objects/narration-plans/\")"
+  }
 }
 
 resource "google_project_iam_custom_role" "inspection_object_reader" {
@@ -366,9 +439,11 @@ resource "google_storage_bucket_iam_member" "core_working_objects" {
 }
 
 resource "google_storage_bucket_iam_member" "worker_finalized_objects" {
+  for_each = setsubtract(local.worker_stages_without_narration, toset(["inspection"]))
+
   bucket = google_storage_bucket.finalized.name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.worker.email}"
+  member = "serviceAccount:${google_service_account.workers[each.key].email}"
 }
 
 resource "google_storage_bucket_iam_member" "core_finalized_objects" {
@@ -451,7 +526,7 @@ resource "google_cloud_run_v2_service" "core" {
       }
       env {
         name  = "PUBSUB_PUSH_SERVICE_ACCOUNT"
-        value = google_service_account.worker.email
+        value = google_service_account.workers["inspection"].email
       }
       env {
         name  = "TRACING_SAMPLE_RATE"
@@ -560,6 +635,7 @@ resource "google_cloud_run_v2_service" "core" {
     google_secret_manager_secret_iam_member.core_zitadel_client_secret,
     google_secret_manager_secret_iam_member.core_upload_capability,
     google_storage_bucket_iam_member.core_working_objects,
+    google_sql_user.narration_worker,
     google_sql_user.platform,
     google_sql_user.inspection
   ]
@@ -578,7 +654,7 @@ resource "google_cloud_run_v2_service_iam_member" "inspection_push_core" {
   location = google_cloud_run_v2_service.core.location
   name     = google_cloud_run_v2_service.core.name
   role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.worker.email}"
+  member   = "serviceAccount:${google_service_account.workers["inspection"].email}"
 }
 
 resource "google_cloud_run_v2_job" "workers" {
@@ -592,7 +668,7 @@ resource "google_cloud_run_v2_job" "workers" {
   template {
     task_count = 1
     template {
-      service_account = each.key == "inspection" ? google_service_account.inspection_worker.email : google_service_account.worker.email
+      service_account = each.key == "inspection" ? google_service_account.inspection_worker.email : google_service_account.workers[each.key].email
       max_retries     = each.key == "inspection" ? 0 : 3
       timeout         = each.key == "inspection" ? "600s" : "3600s"
 
@@ -643,8 +719,10 @@ resource "google_cloud_run_v2_job" "workers" {
           value = "jdbc:postgresql://${google_sql_database_instance.postgres.private_ip_address}:5432/${google_sql_database.platform.name}"
         }
         env {
-          name  = "DATABASE_USER"
-          value = each.key == "inspection" ? google_sql_user.inspection.name : google_sql_user.platform.name
+          name = "DATABASE_USER"
+          value = each.key == "inspection" ? google_sql_user.inspection.name : (
+            each.key == "narration-analysis" ? google_sql_user.narration_worker.name : google_sql_user.platform.name
+          )
         }
         env {
           name  = "WORKING_BUCKET"
@@ -671,7 +749,7 @@ resource "google_cloud_run_v2_job" "workers" {
         }
         env {
           name  = "PUBSUB_PUSH_SERVICE_ACCOUNT"
-          value = google_service_account.worker.email
+          value = google_service_account.workers["inspection"].email
         }
         env {
           name  = "UPLOAD_TOKEN_SECRET"
@@ -769,7 +847,9 @@ resource "google_cloud_run_v2_job" "workers" {
           name = "DATABASE_PASSWORD"
           value_source {
             secret_key_ref {
-              secret  = each.key == "inspection" ? google_secret_manager_secret.inspection_database_password.secret_id : google_secret_manager_secret.database_password.secret_id
+              secret = each.key == "inspection" ? google_secret_manager_secret.inspection_database_password.secret_id : (
+                each.key == "narration-analysis" ? google_secret_manager_secret.narration_database_password.secret_id : google_secret_manager_secret.database_password.secret_id
+              )
               version = "latest"
             }
           }
@@ -777,7 +857,7 @@ resource "google_cloud_run_v2_job" "workers" {
       }
 
       vpc_access {
-        egress = each.key == "inspection" ? "ALL_TRAFFIC" : "PRIVATE_RANGES_ONLY"
+        egress = contains(["inspection", "extraction", "narration-analysis"], each.key) ? "ALL_TRAFFIC" : "PRIVATE_RANGES_ONLY"
         network_interfaces {
           network    = google_compute_network.private.name
           subnetwork = google_compute_subnetwork.private.name
@@ -789,8 +869,10 @@ resource "google_cloud_run_v2_job" "workers" {
   depends_on = [
     google_project_service.required["run.googleapis.com"],
     google_secret_manager_secret_iam_member.worker_database_password,
+    google_secret_manager_secret_iam_member.narration_database_password,
     google_secret_manager_secret_iam_member.inspection_database_password,
     google_storage_bucket_iam_member.inspection_working_objects,
+    google_sql_user.narration_worker,
     google_sql_user.platform,
     google_sql_user.inspection
   ]
@@ -823,6 +905,84 @@ resource "google_cloud_scheduler_job" "inspection" {
   depends_on = [
     google_project_service.required["cloudscheduler.googleapis.com"],
     google_cloud_run_v2_job_iam_member.inspection_launcher
+  ]
+}
+
+resource "google_cloud_run_v2_job_iam_member" "narration_dispatcher" {
+  project  = var.project_id
+  location = google_cloud_run_v2_job.workers["narration-analysis"].location
+  name     = google_cloud_run_v2_job.workers["narration-analysis"].name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.narration_dispatcher.email}"
+}
+
+resource "google_project_iam_member" "narration_dispatcher_event_receiver" {
+  project = var.project_id
+  role    = "roles/eventarc.eventReceiver"
+  member  = "serviceAccount:${google_service_account.narration_dispatcher.email}"
+}
+
+resource "google_workflows_workflow" "narration_dispatch" {
+  name            = "${local.prefix}-narration-dispatch"
+  region          = var.region
+  service_account = google_service_account.narration_dispatcher.email
+
+  source_contents = <<-YAML
+    main:
+      params: [event]
+      steps:
+        - route:
+            switch:
+              - condition: $${event.data.message.attributes.workerStage == "narration-analysis"}
+                next: run_job
+            next: done
+        - run_job:
+            call: googleapis.run.v2.projects.locations.jobs.run
+            args:
+              name: $${"projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.workers["narration-analysis"].name}"}
+              body:
+                overrides:
+                  containerOverrides:
+                    - env:
+                        - name: WORKER_MESSAGE_ID
+                          value: $${event.data.message.attributes.messageId}
+                        - name: WORKER_WORK_ID
+                          value: $${event.data.message.attributes.workId}
+        - done:
+            return: null
+  YAML
+
+  depends_on = [google_cloud_run_v2_job_iam_member.narration_dispatcher]
+}
+
+resource "google_project_iam_member" "narration_event_workflow_invoker" {
+  project = var.project_id
+  role    = "roles/workflows.invoker"
+  member  = "serviceAccount:${google_service_account.narration_dispatcher.email}"
+}
+
+resource "google_eventarc_trigger" "narration_work" {
+  name     = "${local.prefix}-narration-work"
+  location = var.region
+
+  matching_criteria {
+    attribute = "type"
+    value     = "google.cloud.pubsub.topic.v1.messagePublished"
+  }
+
+  destination {
+    workflow = google_workflows_workflow.narration_dispatch.id
+  }
+
+  transport {
+    pubsub { topic = google_pubsub_topic.work.id }
+  }
+
+  service_account = google_service_account.narration_dispatcher.email
+
+  depends_on = [
+    google_project_iam_member.narration_dispatcher_event_receiver,
+    google_project_iam_member.narration_event_workflow_invoker
   ]
 }
 

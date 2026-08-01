@@ -164,7 +164,10 @@ class PublicationSubmissionITest {
         assertThat(audiobookConversionService.conversions(listenerId))
                 .containsExactly(new AudiobookConversionService.AudiobookConversion(
                         conversionId,
-                        AudiobookConversionService.ConversionState.PREPARING));
+                        AudiobookConversionService.ConversionState.PREPARING,
+                        "NARRATION_PLAN_PENDING",
+                        java.util.List.of(),
+                        0));
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM source_publication WHERE submission_id = ?",
                 Long.class,
@@ -372,6 +375,14 @@ class PublicationSubmissionITest {
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT toolchain_version FROM inspection_result WHERE work_id = ?", String.class, workId))
                 .isEqualTo("qpdf-pdfbox-v1");
+        UUID conversionId = submissionService.submission(listenerId, creation.submissionId()).conversionId();
+        assertThat(audiobookConversionService.conversion(listenerId, conversionId).reasonCode())
+                .isEqualTo("EXTRACTION_PENDING");
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM workflow.narration_plan_work WHERE conversion_id = ?",
+                        Long.class,
+                        conversionId))
+                .isZero();
     }
 
     @Test

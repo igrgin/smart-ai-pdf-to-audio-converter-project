@@ -196,7 +196,7 @@ class NarrationSelectionITest {
                 .isEqualTo(NarrationRejectionReason.EXPLICIT_NEW_CHOICE_REQUIRED);
         assertThat(audiobookConversionService.conversions(staleAtGeneration.listenerId()))
                 .extracting(AudiobookConversionService.AudiobookConversion::state)
-                .containsExactly(AudiobookConversionService.ConversionState.PREPARING);
+                .containsExactly(AudiobookConversionService.ConversionState.AWAITING_REVIEW);
         assertThat(narrationSelectionService.narrationChoice(
                         staleAtGeneration.listenerId(), staleAtGeneration.conversionId()))
                 .extracting(
@@ -315,8 +315,8 @@ class NarrationSelectionITest {
         jdbcTemplate.update(
                 """
                 INSERT INTO workflow.audiobook_conversion (
-                    conversion_id, listener_id, source_publication_id, state, created_at
-                ) VALUES (?, ?, ?, 'PREPARING', ?)
+                    conversion_id, listener_id, source_publication_id, state, reason_code, created_at
+                ) VALUES (?, ?, ?, 'AWAITING_REVIEW', 'NARRATION_REVIEW_AVAILABLE', ?)
                 """,
                 conversionId,
                 listenerId,

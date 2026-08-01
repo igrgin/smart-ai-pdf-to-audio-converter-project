@@ -376,7 +376,19 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                     result.mediaType(),
                     stored.declaredByteLength(),
                     databaseTime(now));
-            audiobookConversionService.createPreparing(stored.plannedConversionId(), stored.listenerId(), sourceId);
+            UUID conversionId = stored.plannedConversionId();
+            boolean epub = "application/epub+zip".equals(result.mediaType());
+            audiobookConversionService.createPreparing(
+                    conversionId,
+                    stored.listenerId(),
+                    sourceId,
+                    epub
+                            ? AudiobookConversionService.PreparationReason.NARRATION_PLAN_PENDING
+                            : AudiobookConversionService.PreparationReason.EXTRACTION_PENDING);
+            if (epub) {
+                audiobookConversionService.scheduleNarrationPlan(
+                        stored.listenerId(), conversionId, stored.submissionId());
+            }
             jdbcTemplate.update(
                     """
                     UPDATE publication_submission

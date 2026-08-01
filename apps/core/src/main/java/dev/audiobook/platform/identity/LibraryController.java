@@ -54,6 +54,8 @@ public class LibraryController {
     public record AudiobookView(
             java.util.UUID conversionId,
             AudiobookConversionService.ConversionState state,
+            String reasonCode,
+            List<AudiobookConversionService.AllowedAction> allowedActions,
             long version,
             java.util.UUID recipeId,
             java.util.UUID voiceId,
@@ -67,6 +69,8 @@ public class LibraryController {
             return new AudiobookView(
                     conversion.conversionId(),
                     conversion.state(),
+                    conversion.reasonCode(),
+                    conversion.allowedActions(),
                     choice.conversionVersion(),
                     choice.recipeId(),
                     choice.voiceId(),
