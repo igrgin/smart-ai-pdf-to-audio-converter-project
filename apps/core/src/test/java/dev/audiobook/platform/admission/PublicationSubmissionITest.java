@@ -63,7 +63,7 @@ class PublicationSubmissionITest {
     }
 
     @Test
-    void authorizedDrmFreeEnglishEpubMovesFromQuarantineToPreparingExactlyOnce() throws Exception {
+    void authorizedDrmFreeEnglishEpubMovesFromQuarantineToAwaitingNarrationReviewExactlyOnce() throws Exception {
         UUID listenerId = entitledListener("accepted");
         byte[] epub = validEnglishEpub();
         String digest = sha256(epub);
@@ -137,7 +137,12 @@ class PublicationSubmissionITest {
         assertThat(audiobookConversionService.conversions(listenerId))
                 .containsExactly(new AudiobookConversionService.AudiobookConversion(
                         inspected.conversionId(),
-                        AudiobookConversionService.ConversionState.PREPARING));
+                        AudiobookConversionService.ConversionState.AWAITING_REVIEW,
+                        "NARRATION_REVIEW_AVAILABLE",
+                        java.util.List.of(
+                                AudiobookConversionService.AllowedAction.REVIEW_NARRATION_PLAN,
+                                AudiobookConversionService.AllowedAction.ACCEPT_RECOMMENDATIONS),
+                        1));
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM source_publication WHERE submission_id = ?",
                 Long.class,

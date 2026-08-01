@@ -16,8 +16,11 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "./components/ui/button";
 import {
+  fetchConversionProgress,
   fetchIdentitySession,
   fetchLibrary,
+  type AudiobookConversion,
+  type ConversionProgress,
   type CsrfProof,
   type IdentitySession,
   type Library
@@ -239,12 +242,7 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
         ) : (
           <div className="conversion-list" aria-label="Private audiobooks">
             {library.audiobooks.map((conversion) => (
-              <article className="preparing-audiobook" key={conversion.conversionId}>
-                <span className="empty-mark" aria-hidden="true"><Sparkles size={28} /></span>
-                <span className="card-kicker">{conversion.state}</span>
-                <h2>Preparing your private audiobook</h2>
-                <p>The publication passed quarantine inspection. Folio is preparing its narration plan.</p>
-              </article>
+              <ConversionCard conversion={conversion} key={conversion.conversionId} />
             ))}
           </div>
         )}
@@ -281,6 +279,97 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
       {creationOpen && <CreateAudiobookDialog csrf={csrf} onClose={() => setCreationOpen(false)} />}
     </section>
   );
+}
+
+function ConversionCard({ conversion }: { conversion: AudiobookConversion }) {
+  const [progress, setProgress] = useState<ConversionProgress>(conversion);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let entityTag: string | undefined;
+    let currentState = conversion.state;
+    let timeout: number | undefined;
+    const poll = async () => {
+      let delay = currentState === "PREPARING" ? 3_000 : 15_000;
+      try {
+        const result = await fetchConversionProgress(conversion.conversionId, entityTag, controller.signal);
+        entityTag = result.entityTag;
+        if (!result.notModified) {
+          setProgress(result.progress);
+          currentState = result.progress.state;
+          delay = currentState === "PREPARING" ? 3_000 : 15_000;
+        }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        delay = 10_000;
+      }
+      if (!controller.signal.aborted) timeout = window.setTimeout(() => void poll(), delay);
+    };
+    void poll();
+    return () => {
+      controller.abort();
+      if (timeout !== undefined) window.clearTimeout(timeout);
+    };
+  }, [conversion.conversionId]);
+
+  if (progress.state === "PREPARING") {
+    return (
+      <article className="preparing-audiobook" aria-live="polite">
+        <span className="empty-mark" aria-hidden="true"><Sparkles size={28} /></span>
+        <span className="card-kicker">{progress.reasonCode}</span>
+        <h2>Preparing your private audiobook</h2>
+        <p>The publication passed quarantine inspection. Folio is preparing its Narration Plan.</p>
+      </article>
+    );
+  }
+
+  return (
+    <article className="preparing-audiobook narration-plan-card" aria-live="polite">
+      <span className="empty-mark" aria-hidden="true"><BookOpen size={28} /></span>
+      <span className="card-kicker">{progress.reasonCode}</span>
+      <h2>Narration Plan ready</h2>
+      <p>Review source-backed structure and uncertain or non-prose treatments. Normal prose is not editable.</p>
+      <div className="narration-chapters">
+        {progress.narrationPlan?.chapters.map((chapter) => (
+          <section className="narration-chapter" key={`${chapter.ordinal}-${chapter.provenance.spineItem}`}>
+            <h3>{chapter.title ?? `Unavailable source section ${chapter.ordinal + 1}`}</h3>
+            <p className="narration-provenance">
+              Source: {label(chapter.provenance.source)} · spine {chapter.provenance.spineIndex + 1}
+              {chapter.provenance.anchor ? ` · anchor ${chapter.provenance.anchor}` : ""}
+              {` · confidence ${percent(chapter.provenance.confidence)}`}
+            </p>
+            {chapter.gaps.map((gap) => (
+              <p className="narration-gap" key={`${gap.sourceUnit}-${gap.reasonCode}`}>
+                Explicit gap · {gap.reasonCode}
+              </p>
+            ))}
+            {chapter.reviewItems.map((item) => (
+              <div className="narration-review-item" key={item.ordinal}>
+                <strong>{label(item.type)} · {label(item.recommendedTreatment)}</strong>
+                <span>
+                  Extraction {percent(item.extractionConfidence)} · classification {percent(item.classificationConfidence)}
+                  {` · treatment ${percent(item.treatmentConfidence)}`}
+                </span>
+                <small>{item.reasonCode} · {label(item.provenance.source)}</small>
+                {item.narrationSnippet && <blockquote>{item.narrationSnippet}</blockquote>}
+              </div>
+            ))}
+          </section>
+        ))}
+      </div>
+      <div className="narration-actions" aria-label="Allowed actions">
+        {progress.allowedActions.map((action) => <span key={action}>{label(action)}</span>)}
+      </div>
+    </article>
+  );
+}
+
+function label(value: string): string {
+  return value.toLowerCase().replaceAll("_", " ").replace(/^./, (character) => character.toUpperCase());
+}
+
+function percent(value: number): string {
+  return `${Math.round(value * 100)}%`;
 }
 
 function CreateAudiobookDialog({ csrf, onClose }: { csrf: CsrfProof; onClose: () => void }) {

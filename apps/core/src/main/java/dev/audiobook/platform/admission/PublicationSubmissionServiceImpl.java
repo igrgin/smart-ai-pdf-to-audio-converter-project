@@ -4,6 +4,7 @@ import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
 import dev.audiobook.platform.workflow.InspectionWorkflowService;
+import dev.audiobook.platform.narration.NarrationPlanService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -44,6 +45,7 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
     private final PlatformIdentifierGenerator identifierGenerator;
     private final AudiobookConversionService audiobookConversionService;
     private final InspectionWorkflowService inspectionWorkflowService;
+    private final NarrationPlanService narrationPlanService;
 
     @Override
     @Transactional
@@ -354,6 +356,16 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                 claim.submission(), command.workId(), workerId, operationKey, completedInspection));
         if (completed == null) {
             throw new IllegalStateException("Inspection completion transaction did not return a result");
+        }
+        if (completed.outcome() == InspectionOutcome.ADMITTED) {
+            try (var publication = objectStore.read(completed.submissionId())) {
+                narrationPlanService.prepare(
+                        claim.submission().listenerId(),
+                        completed.conversionId(),
+                        publication);
+            } catch (IOException exception) {
+                throw new IllegalStateException("Narration Plan source Working Asset is unavailable", exception);
+            }
         }
         return completed;
     }

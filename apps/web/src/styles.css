@@ -113,6 +113,18 @@ footer { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 26px 0 
 .preparing-audiobook { min-height: 260px; padding: clamp(30px, 5vw, 54px); border: 1px solid var(--line); border-radius: 16px; background: var(--folio); box-shadow: 0 18px 50px rgb(34 29 24 / 8%); }
 .preparing-audiobook h2 { margin: 10px 0 0; font-family: Georgia, serif; font-size: clamp(1.6rem, 3vw, 2.5rem); font-weight: 500; letter-spacing: -.03em; }
 .preparing-audiobook p { max-width: 580px; color: var(--muted); line-height: 1.65; }
+.narration-plan-card { padding: clamp(26px, 4vw, 42px); }
+.narration-chapters { display: grid; gap: 16px; margin-top: 26px; }
+.narration-chapter { padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--canvas) 55%, var(--folio)); }
+.narration-chapter h3 { margin: 0; font-family: Georgia, serif; font-size: 1.3rem; font-weight: 500; }
+.narration-chapter .narration-provenance { margin: 6px 0 16px; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
+.narration-gap { padding: 10px 12px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); font-size: .84rem; }
+.narration-review-item { display: grid; gap: 6px; margin-top: 12px; padding: 14px; border-radius: 10px; background: var(--canvas); }
+.narration-review-item strong { font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; }
+.narration-review-item span, .narration-review-item small { color: var(--muted); font-size: .75rem; }
+.narration-review-item blockquote { margin: 4px 0 0; padding-left: 12px; border-left: 2px solid var(--accent); color: var(--ink); }
+.narration-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.narration-actions span { padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: .72rem; font-weight: 600; }
 .identity-card { align-self: start; padding: 28px; }
 .library-sidebar { display: grid; align-self: start; gap: 18px; }
 .entitlement-card { padding: 28px; }

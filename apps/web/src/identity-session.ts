@@ -26,8 +26,55 @@ export interface Library {
 
 export interface AudiobookConversion {
   conversionId: string;
-  state: "PREPARING";
+  state: "PREPARING" | "AWAITING_REVIEW";
+  reasonCode: "NARRATION_PLAN_PENDING" | "NARRATION_REVIEW_AVAILABLE";
+  allowedActions: AllowedAction[];
+  version: number;
 }
+
+export type AllowedAction = "REVIEW_NARRATION_PLAN" | "ACCEPT_RECOMMENDATIONS";
+
+export interface ConversionProgress extends AudiobookConversion {
+  narrationPlan?: NarrationPlan;
+}
+
+export interface NarrationPlan {
+  normalProseEditable: false;
+  chapters: NarrationChapter[];
+}
+
+export interface NarrationChapter {
+  ordinal: number;
+  title?: string;
+  provenance: SourceProvenance;
+  gaps: Array<{ sourceUnit: string; reasonCode: string }>;
+  reviewItems: NarrationReviewItem[];
+}
+
+export interface SourceProvenance {
+  source: string;
+  spineIndex: number;
+  spineItem: string;
+  anchor?: string;
+  sourceDeclared: boolean;
+  confidence: number;
+}
+
+export interface NarrationReviewItem {
+  ordinal: number;
+  type: string;
+  provenance: SourceProvenance;
+  extractionConfidence: number;
+  classificationConfidence: number;
+  treatmentConfidence: number;
+  recommendedTreatment: "OMIT" | "READ_VERBATIM" | "SUMMARIZE" | "DESCRIBE";
+  narrationSnippet?: string;
+  reasonCode: string;
+}
+
+export type ConversionPollResult =
+  | { notModified: true; entityTag?: string }
+  | { notModified: false; entityTag?: string; progress: ConversionProgress };
 
 export interface ConversionEntitlement {
   status: "NO_GRANT" | "AVAILABLE" | "EXHAUSTED" | "EXPIRED";
@@ -55,4 +102,24 @@ export async function fetchLibrary(signal: AbortSignal): Promise<Library> {
   });
   if (!response.ok) throw new Error(`Library returned ${response.status}`);
   return response.json() as Promise<Library>;
+}
+
+export async function fetchConversionProgress(
+  conversionId: string,
+  entityTag: string | undefined,
+  signal: AbortSignal
+): Promise<ConversionPollResult> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (entityTag) headers["If-None-Match"] = entityTag;
+  const response = await fetch(`/api/v1/audiobook-conversions/${conversionId}`, { headers, signal });
+  const nextEntityTag = response.headers.get("ETag") ?? entityTag;
+  if (response.status === 304) {
+    return { notModified: true, entityTag: nextEntityTag };
+  }
+  if (!response.ok) throw new Error(`Audiobook Conversion returned ${response.status}`);
+  return {
+    notModified: false,
+    entityTag: nextEntityTag,
+    progress: await response.json() as ConversionProgress
+  };
 }

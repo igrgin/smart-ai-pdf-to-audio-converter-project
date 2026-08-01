@@ -73,6 +73,9 @@ server:
       tracking-modes: cookie
 
 platform:
+  narration:
+    working-asset-path: ${NARRATION_WORKING_ASSET_PATH:${java.io.tmpdir}/folio-working/narration-plans}
+    working-bucket: ${WORKING_BUCKET:local-working}
   admission:
     rights-terms-version: rights-v1
     rights-notice-version: notice-v1

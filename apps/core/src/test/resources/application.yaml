@@ -47,6 +47,9 @@ server:
         secure: false
 
 platform:
+  narration:
+    working-asset-path: ${java.io.tmpdir}/folio-working-tests/narration-plans
+    working-bucket: local-working-test
   admission:
     rights-terms-version: rights-v1
     rights-notice-version: notice-v1
