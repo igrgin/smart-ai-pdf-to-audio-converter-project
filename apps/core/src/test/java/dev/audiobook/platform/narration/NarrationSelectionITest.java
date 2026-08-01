@@ -119,19 +119,21 @@ class NarrationSelectionITest {
                 .containsEntry("capability_profile_version", "openai-speech-eu-v1")
                 .containsEntry("provider", "openai")
                 .containsEntry("service", "speech")
+                .containsEntry("endpoint", "https://eu.api.openai.com/v1/audio/speech")
                 .containsEntry("model_snapshot", "gpt-4o-mini-tts-2025-12-15")
                 .containsEntry("region", "eu")
                 .containsEntry("data_policy_version", "eu-private-v1")
                 .containsEntry("voice_mapping_id", ROWAN_MAPPING_ID)
                 .containsEntry("mapping_version", "rowan-openai-v1")
                 .containsEntry("preview_version", "folio-preview-v1")
-                .containsEntry("evaluation_version", "speech-eval-2026-07")
+                .containsEntry("evaluation_version", "speech-eval-2026-08")
                 .containsEntry("segmentation_policy_version", "semantic-segments-v1")
                 .containsEntry("audio_policy_version", "mono-24k-mp3-v1")
                 .containsEntry("toolchain_version", "speech-worker-ffmpeg-v1");
         assertThat(frozen.get("native_controls").toString())
                 .contains("\"speed\": 1.0")
-                .contains("Natural, warm audiobook narration.");
+                .contains("Voice: Warm and grounded audiobook narration.")
+                .contains("Delivery: Natural pace, attentive phrasing, and calm confidence.");
     }
 
     @Test
