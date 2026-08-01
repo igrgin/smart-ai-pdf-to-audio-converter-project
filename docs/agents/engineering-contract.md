@@ -62,6 +62,14 @@ This document contains binding project instructions for implementation. Resolve 
 
 ## Spring Boot code
 
+### Persistence
+
+**Applies to:** Spring Boot persistence code.
+
+**Contract:** Use Spring JDBC when correctness or performance depends on explicit SQL, including database-specific operations, ledgers, outbox/inbox and idempotency records, leases, locking or compare-and-set flows, bulk operations, and set-oriented projections. JPA with Hibernate may be used for a module-owned aggregate when its primary use cases manage the lifecycle of a stable, bounded object graph and the ORM materially reduces mapping and update work. Each aggregate has one normal persistence mechanism; do not routinely write the same aggregate through both JDBC and JPA.
+
+**Verify:** Every persistence area satisfies the JDBC or JPA criteria above, and no aggregate has competing JDBC and JPA writers.
+
 ### Lombok
 
 **Applies to:** Spring Boot production and test code.
