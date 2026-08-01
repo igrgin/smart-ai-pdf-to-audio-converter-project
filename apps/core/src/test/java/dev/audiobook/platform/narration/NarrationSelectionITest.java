@@ -54,7 +54,7 @@ class NarrationSelectionITest {
         assertThat(catalog.voices()).hasSize(6);
         assertThat(catalog.voices())
                 .extracting(NarrationSelectionService.NarratorVoice::displayName)
-                .containsExactly("Rowan", "Marlowe", "Ellis", "Clara", "Ansel", "Sloane");
+                .containsExactly("Rowan", "Marlowe", "Ellis", "Callum", "Ansel", "Sloane");
         assertThat(catalog.voices())
                 .extracting(voice -> voice.preview().passageVersion())
                 .containsOnly("folio-preview-v1");

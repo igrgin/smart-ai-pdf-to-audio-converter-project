@@ -176,7 +176,7 @@ function PublicStudio({
             <div className="book-lines"><i /><i /><i /><i /></div>
             <span className="sample-kicker">A Folio original</span>
             <strong>The Midnight Library<br />of Small Beginnings</strong>
-            <span className="sample-author">Narrated by Clara · Natural pace</span>
+            <span className="sample-author">Narrated by Callum · Natural pace</span>
           </div>
           <div className="player">
             <div className="player-heading">

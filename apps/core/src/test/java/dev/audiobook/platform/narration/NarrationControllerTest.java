@@ -70,7 +70,7 @@ class NarrationControllerTest {
                         voice(VOICE_ID, "Rowan", "British English", "Warm", "Grounded"),
                         voice("10000000-0000-7000-8000-000000000002", "Marlowe", "American English", "Clear", "Assured"),
                         voice("10000000-0000-7000-8000-000000000003", "Ellis", "Irish English", "Bright", "Expressive"),
-                        voice("10000000-0000-7000-8000-000000000004", "Clara", "British English", "Calm", "Intimate"),
+                        voice("10000000-0000-7000-8000-000000000004", "Callum", "British English", "Calm", "Intimate"),
                         voice("10000000-0000-7000-8000-000000000005", "Ansel", "Australian English", "Open", "Conversational"),
                         voice("10000000-0000-7000-8000-000000000006", "Sloane", "American English", "Poised", "Reflective")),
                 List.of(

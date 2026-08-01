@@ -42,6 +42,6 @@ render_preview() {
 render_preview rowan cedar "Voice: Warm and grounded audiobook narration. Delivery: Natural pace, attentive phrasing, and calm confidence."
 render_preview marlowe marin "Voice: Clear and assured audiobook narration. Delivery: Natural pace, precise phrasing, and composed confidence."
 render_preview ellis coral "Voice: Bright and expressive audiobook narration. Delivery: Natural pace, lively phrasing, and emotionally attentive restraint."
-render_preview clara ballad "Voice: Calm and intimate audiobook narration. Delivery: Natural pace, gentle phrasing, and close, reassuring presence."
+render_preview callum ballad "Voice: Calm and intimate audiobook narration. Delivery: Natural pace, gentle phrasing, and close, reassuring presence."
 render_preview ansel ash "Voice: Open and conversational audiobook narration. Delivery: Natural pace, easy phrasing, and an inviting, unforced presence."
 render_preview sloane sage "Voice: Poised and reflective audiobook narration. Delivery: Natural pace, thoughtful phrasing, and quiet emotional depth."
