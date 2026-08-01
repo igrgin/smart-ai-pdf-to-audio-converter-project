@@ -10,10 +10,12 @@ COPY apps/core/src apps/core/src
 COPY apps/pdfbox-helper/src apps/pdfbox-helper/src
 RUN ./mvnw --batch-mode --no-transfer-progress -pl apps/core,apps/pdfbox-helper -am package -DskipTests
 
-FROM eclipse-temurin:25-jre
+FROM eclipse-temurin:25.0.3_9-jre-noble
 ARG DOCLING_VERSION=2.104.0
 ARG TORCH_VERSION=2.9.1
 ARG TORCHVISION_VERSION=0.24.1
+ARG PILLOW_VERSION=12.3.0
+ARG SETUPTOOLS_VERSION=83.0.0
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
@@ -23,7 +25,10 @@ RUN apt-get update \
 RUN python3 -m pip install --break-system-packages --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}"
-RUN python3 -m pip install --break-system-packages --no-cache-dir "docling==${DOCLING_VERSION}"
+RUN python3 -m pip install --break-system-packages --no-cache-dir "docling==${DOCLING_VERSION}" \
+    && python3 -m pip install --break-system-packages --no-cache-dir \
+        "pillow==${PILLOW_VERSION}" "setuptools==${SETUPTOOLS_VERSION}" \
+    && python3 -m pip check
 RUN docling-tools models download --output-dir /opt/docling-models layout tableformer \
     && groupadd --system platform \
     && useradd --system --gid platform --uid 10001 platform
