@@ -9,6 +9,28 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice(assignableTypes = AudiobookConversionController.class)
 public class AudiobookConversionExceptionHandler {
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    ProblemDetail invalidCommand() {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.BAD_REQUEST,
+                "The Audiobook Conversion command is invalid.");
+        problem.setType(URI.create("urn:folio:problem:invalid-audiobook-conversion-command"));
+        problem.setTitle("Invalid Audiobook Conversion command");
+        problem.setProperty("code", "INVALID_CONVERSION_COMMAND");
+        return problem;
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    ProblemDetail conflictingCommand() {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.CONFLICT,
+                "The Audiobook Conversion changed or cannot accept this command in its current state.");
+        problem.setType(URI.create("urn:folio:problem:audiobook-conversion-command-conflict"));
+        problem.setTitle("Audiobook Conversion command conflict");
+        problem.setProperty("code", "CONVERSION_COMMAND_CONFLICT");
+        return problem;
+    }
+
     @ExceptionHandler(AudiobookConversionUnavailableException.class)
     ProblemDetail unavailable() {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(

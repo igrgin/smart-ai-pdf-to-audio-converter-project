@@ -365,6 +365,15 @@ class AudiobookGenerationITest {
         assertThat(workerService.generatePending()).isZero();
         assertThat(workerService.packagePending()).isZero();
         assertThat(audiobookCount(conversion.conversionId())).isOne();
+        assertThat(jdbcTemplate.queryForList(
+                        """
+                        SELECT stage, state FROM workflow.conversion_stage_run
+                        WHERE conversion_id = ? AND stage IN ('SPEECH', 'PACKAGING')
+                        ORDER BY stage
+                        """,
+                        conversion.conversionId()))
+                .extracting(row -> row.get("stage") + ":" + row.get("state"))
+                .containsExactly("PACKAGING:SUCCEEDED", "SPEECH:SUCCEEDED");
     }
 
     @Test

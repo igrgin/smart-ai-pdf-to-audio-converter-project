@@ -33,9 +33,15 @@ class AudiobookConversionServiceTest {
     private final JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
     private final NarrationSelectionService narrationSelectionService = mock(NarrationSelectionService.class);
     private final PlatformIdentifierGenerator identifierGenerator = mock(PlatformIdentifierGenerator.class);
+    private final ConversionWorkflowService conversionWorkflowService = mock(ConversionWorkflowService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-08-01T10:00:00Z"), ZoneOffset.UTC);
     private final AudiobookConversionService service =
-            new AudiobookConversionServiceImpl(jdbcTemplate, clock, narrationSelectionService, identifierGenerator);
+            new AudiobookConversionServiceImpl(
+                    jdbcTemplate,
+                    clock,
+                    narrationSelectionService,
+                    identifierGenerator,
+                    conversionWorkflowService);
     private final UUID listenerId = UUID.randomUUID();
     private final UUID conversionId = UUID.randomUUID();
     private final NarrationSelectionService.GenerationAuthorization authorization =

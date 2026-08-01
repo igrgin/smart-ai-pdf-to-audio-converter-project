@@ -13,6 +13,8 @@ public interface ConversionEntitlementService {
 
     Settlement settle(SettlementRequest request);
 
+    ResumeEligibility resumeEligibility(UUID listenerId, UUID conversionId);
+
     ProviderSpend providerSpend(String provider);
 
     Correction correctCharacters(CorrectionRequest request);
@@ -86,6 +88,9 @@ public interface ConversionEntitlementService {
             long committedCharacters,
             long committedProviderCostMicros,
             boolean replayed) {
+    }
+
+    record ResumeEligibility(boolean eligible, String denialReason) {
     }
 
     record ProviderSpend(long reservedMicros, long committedMicros) {

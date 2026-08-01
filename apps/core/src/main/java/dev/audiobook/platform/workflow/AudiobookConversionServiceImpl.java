@@ -21,6 +21,7 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
     private final Clock identityClock;
     private final NarrationSelectionService narrationSelectionService;
     private final PlatformIdentifierGenerator identifierGenerator;
+    private final ConversionWorkflowService conversionWorkflowService;
 
     @Override
     @Transactional
@@ -44,6 +45,13 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
                 sourcePublicationId,
                 preparationReason.name(),
                 Timestamp.from(identityClock.instant()));
+        conversionWorkflowService.scheduleStage(
+                listenerId,
+                conversionId,
+                preparationReason == PreparationReason.EXTRACTION_PENDING
+                        ? ConversionWorkflowService.Stage.EXTRACTION
+                        : ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
+                4);
     }
 
     @Override
@@ -75,6 +83,11 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
                 identifierGenerator.generate(),
                 workId,
                 now);
+        conversionWorkflowService.scheduleStage(
+                listenerId,
+                conversionId,
+                ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
+                4);
     }
 
     @Override
@@ -159,7 +172,9 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
         int paused = jdbcTemplate.update(
                 """
                 UPDATE workflow.audiobook_conversion c
-                SET state = 'PAUSED', reason_code = 'SOURCE_TOO_DAMAGED', version = version + 1
+                SET state = 'PAUSED', reason_code = 'SOURCE_TOO_DAMAGED',
+                    pause_responsible_party = 'LISTENER', safe_resume_stage = 'NARRATION_ANALYSIS',
+                    version = version + 1
                 WHERE c.state = 'PREPARING'
                   AND c.reason_code <> 'SOURCE_TOO_DAMAGED'
                   AND EXISTS (
@@ -169,6 +184,28 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
                       AND w.pause_reason_code = 'SOURCE_TOO_DAMAGED'
                 )
                 """);
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.conversion_stage_run stage
+                SET state = CASE work.state
+                        WHEN 'SUCCEEDED' THEN 'SUCCEEDED'
+                        WHEN 'PAUSED' THEN 'PAUSED'
+                        WHEN 'EXHAUSTED' THEN 'FAILED'
+                        ELSE stage.state
+                    END,
+                    failure_code = CASE work.state
+                        WHEN 'PAUSED' THEN work.pause_reason_code
+                        WHEN 'EXHAUSTED' THEN 'NARRATION_PLAN_RETRIES_EXHAUSTED'
+                        ELSE NULL
+                    END,
+                    lease_owner = NULL, lease_message_id = NULL, lease_expires_at = NULL,
+                    updated_at = ?
+                FROM workflow.narration_plan_work work
+                WHERE work.conversion_id = stage.conversion_id
+                  AND stage.stage = 'NARRATION_ANALYSIS'
+                  AND work.state IN ('SUCCEEDED', 'PAUSED', 'EXHAUSTED')
+                """,
+                now);
         return ready + exhausted + paused;
     }
 
@@ -287,12 +324,24 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
         jdbcTemplate.update(
                 """
                 UPDATE workflow.audiobook_conversion
-                SET state = 'PREPARING', reason_code = 'NARRATION_PLAN_PENDING', version = version + 1
+                SET state = 'PREPARING', reason_code = 'NARRATION_PLAN_PENDING',
+                    pause_responsible_party = NULL, safe_resume_stage = NULL, pause_deadline = NULL,
+                    version = version + 1
                 WHERE conversion_id = ? AND listener_id = ? AND state = 'PAUSED' AND version = ?
                 """,
                 conversionId,
                 listenerId,
                 expectedVersion);
+        jdbcTemplate.update(
+                """
+                UPDATE workflow.conversion_stage_run
+                SET state = 'READY', failure_code = NULL, updated_at = ?
+                WHERE conversion_id = ? AND listener_id = ?
+                  AND stage = 'NARRATION_ANALYSIS' AND state = 'PAUSED'
+                """,
+                now,
+                conversionId,
+                listenerId);
         UUID workId = jdbcTemplate.queryForObject(
                 "SELECT work_id FROM workflow.narration_plan_work WHERE conversion_id = ? AND listener_id = ?",
                 UUID.class,
@@ -342,6 +391,11 @@ public class AudiobookConversionServiceImpl implements AudiobookConversionServic
                 throw new IllegalStateException("Audiobook Conversion cannot begin speech generation");
             }
         }
+        conversionWorkflowService.scheduleStage(
+                listenerId,
+                conversionId,
+                ConversionWorkflowService.Stage.SPEECH,
+                4);
         return authorization;
     }
 }

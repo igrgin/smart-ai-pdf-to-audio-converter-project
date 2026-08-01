@@ -52,6 +52,9 @@ class AudiobookConversionControllerTest {
     private AudiobookConversionService conversionService;
 
     @MockitoBean
+    private ConversionWorkflowService workflowService;
+
+    @MockitoBean
     private NarrationPlanService narrationPlanService;
 
     @MockitoBean
@@ -294,6 +297,109 @@ class AudiobookConversionControllerTest {
                 .andExpect(header().string("ETag", "\"5\""))
                 .andExpect(jsonPath("$.state").value("PREPARING"))
                 .andExpect(jsonPath("$.reasonCode").value("NARRATION_PLAN_PENDING"));
+    }
+
+    @Test
+    void listenerCancelsAgainstTheSeenVersionWithoutSupplyingLedgerAmounts() throws Exception {
+        when(workflowService.cancelListener(LISTENER_ID, CONVERSION_ID, 4, "cancel-31"))
+                .thenReturn(new ConversionWorkflowService.CancellationResult(
+                        CONVERSION_ID,
+                        AudiobookConversionService.ConversionState.CANCELLED,
+                        "LISTENER_CANCELLED",
+                        5));
+
+        mockMvc.perform(post("/api/v1/audiobook-conversions/" + CONVERSION_ID + "/cancellation")
+                        .header("Idempotency-Key", "cancel-31")
+                        .header("If-Match", "\"4\"")
+                        .header("Origin", "http://localhost:3000")
+                        .with(authentication(listenerAuthentication()))
+                        .with(csrf()))
+                .andExpect(status().isAccepted())
+                .andExpect(header().string("ETag", "\"5\""))
+                .andExpect(jsonPath("$.state").value("CANCELLED"))
+                .andExpect(jsonPath("$.reasonCode").value("LISTENER_CANCELLED"))
+                .andExpect(jsonPath("$.version").value(5));
+    }
+
+    @Test
+    void invalidCancellationPreconditionIsAClientError() throws Exception {
+        mockMvc.perform(post("/api/v1/audiobook-conversions/" + CONVERSION_ID + "/cancellation")
+                        .header("Idempotency-Key", "cancel-31-invalid")
+                        .header("If-Match", "4")
+                        .header("Origin", "http://localhost:3000")
+                        .with(authentication(listenerAuthentication()))
+                        .with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_CONVERSION_COMMAND"));
+    }
+
+    @Test
+    void staleResumeIsAConflict() throws Exception {
+        when(workflowService.resume(new ConversionWorkflowService.ResumeCommand(
+                        LISTENER_ID, CONVERSION_ID, 3, "resume-stale-31")))
+                .thenThrow(new IllegalStateException("Conversion resume is stale or unavailable"));
+
+        mockMvc.perform(post("/api/v1/audiobook-conversions/" + CONVERSION_ID + "/resume")
+                        .header("Idempotency-Key", "resume-stale-31")
+                        .header("If-Match", "\"3\"")
+                        .header("Origin", "http://localhost:3000")
+                        .with(authentication(listenerAuthentication()))
+                        .with(csrf()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CONVERSION_COMMAND_CONFLICT"));
+    }
+
+    @Test
+    void listenerSeesStablePauseOwnershipAndResumesAgainstCurrentPolicy() throws Exception {
+        Instant deadline = Instant.parse("2026-08-08T10:00:00Z");
+        var paused = new AudiobookConversionService.AudiobookConversion(
+                CONVERSION_ID,
+                AudiobookConversionService.ConversionState.PAUSED,
+                "PROVIDER_RESULT_AMBIGUOUS",
+                List.of(),
+                3);
+        var resumed = new AudiobookConversionService.AudiobookConversion(
+                CONVERSION_ID,
+                AudiobookConversionService.ConversionState.PREPARING,
+                "NARRATION_PLAN_PENDING",
+                List.of(),
+                4);
+        when(conversionService.conversion(LISTENER_ID, CONVERSION_ID)).thenReturn(paused, resumed);
+        when(workflowService.pauseDetails(LISTENER_ID, CONVERSION_ID)).thenReturn(
+                new ConversionWorkflowService.PauseDetails(
+                        "PROVIDER_RESULT_AMBIGUOUS",
+                        ConversionWorkflowService.ResponsibleParty.PROVIDER,
+                        ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
+                        deadline));
+        when(workflowService.resume(new ConversionWorkflowService.ResumeCommand(
+                        LISTENER_ID, CONVERSION_ID, 3, "resume-31")))
+                .thenReturn(new ConversionWorkflowService.StageView(
+                        UUID.randomUUID(),
+                        ConversionWorkflowService.Stage.NARRATION_ANALYSIS,
+                        ConversionWorkflowService.StageState.READY,
+                        1,
+                        3,
+                        null,
+                        null));
+
+        mockMvc.perform(get("/api/v1/audiobook-conversions/" + CONVERSION_ID)
+                        .with(authentication(listenerAuthentication())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.pause.reasonCode").value("PROVIDER_RESULT_AMBIGUOUS"))
+                .andExpect(jsonPath("$.pause.responsibleParty").value("PROVIDER"))
+                .andExpect(jsonPath("$.pause.safeResumeStage").value("NARRATION_ANALYSIS"))
+                .andExpect(jsonPath("$.pause.deadline").value("2026-08-08T10:00:00Z"));
+
+        mockMvc.perform(post("/api/v1/audiobook-conversions/" + CONVERSION_ID + "/resume")
+                        .header("Idempotency-Key", "resume-31")
+                        .header("If-Match", "\"3\"")
+                        .header("Origin", "http://localhost:3000")
+                        .with(authentication(listenerAuthentication()))
+                        .with(csrf()))
+                .andExpect(status().isAccepted())
+                .andExpect(header().string("ETag", "\"4\""))
+                .andExpect(jsonPath("$.state").value("PREPARING"))
+                .andExpect(jsonPath("$.version").value(4));
     }
 
     private static UsernamePasswordAuthenticationToken listenerAuthentication() {

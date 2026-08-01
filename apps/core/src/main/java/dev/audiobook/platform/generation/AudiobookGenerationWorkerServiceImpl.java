@@ -1,5 +1,8 @@
 package dev.audiobook.platform.generation;
 
+import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
+import dev.audiobook.platform.workflow.ConversionWorkflowService;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -12,12 +15,16 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
 
     private final JdbcTemplate jdbcTemplate;
     private final AudiobookGenerationService generationService;
+    private final ConversionWorkflowService workflowService;
+    private final PlatformIdentifierGenerator identifierGenerator;
+    private final String speechWorkerId = "speech-worker-" + UUID.randomUUID();
+    private final String packagingWorkerId = "packaging-worker-" + UUID.randomUUID();
 
     @Override
     public int generatePending() {
         List<ConversionCoordinate> candidates = jdbcTemplate.query(
                 """
-                SELECT c.listener_id, c.conversion_id
+                SELECT c.listener_id, c.conversion_id, c.version
                 FROM workflow.audiobook_conversion c
                 WHERE c.state = 'GENERATING'
                   AND (
@@ -41,16 +48,50 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
                 """,
                 (resultSet, row) -> new ConversionCoordinate(
                         resultSet.getObject("listener_id", UUID.class),
-                        resultSet.getObject("conversion_id", UUID.class)));
+                        resultSet.getObject("conversion_id", UUID.class),
+                        resultSet.getLong("version")));
         if (candidates.isEmpty()) {
             return 0;
         }
         ConversionCoordinate candidate = candidates.getFirst();
-        AudiobookGenerationService.GenerationManifest manifest = generationService.prepare(
-                candidate.listenerId(), candidate.conversionId());
-        for (AudiobookGenerationService.Segment segment : manifest.segments()) {
-            generationService.generateSegment(
-                    candidate.listenerId(), candidate.conversionId(), segment.operationKey());
+        workflowService.scheduleStage(
+                candidate.listenerId(), candidate.conversionId(), ConversionWorkflowService.Stage.SPEECH, 4);
+        UUID messageId = identifierGenerator.generate();
+        ConversionWorkflowService.DeliveryDecision claim = workflowService.claimDelivery(
+                new ConversionWorkflowService.WorkDelivery(
+                        messageId,
+                        candidate.conversionId(),
+                        ConversionWorkflowService.Stage.SPEECH,
+                        1,
+                        candidate.version(),
+                        speechWorkerId,
+                        Duration.ofMinutes(30)));
+        if (claim.disposition() != ConversionWorkflowService.DeliveryDisposition.CLAIMED) {
+            return 0;
+        }
+        try {
+            AudiobookGenerationService.GenerationManifest manifest = generationService.prepare(
+                    candidate.listenerId(), candidate.conversionId());
+            for (AudiobookGenerationService.Segment segment : manifest.segments()) {
+                generationService.generateSegment(
+                        candidate.listenerId(), candidate.conversionId(), segment.operationKey());
+            }
+            workflowService.acceptResult(new ConversionWorkflowService.StageResult(
+                    messageId,
+                    candidate.conversionId(),
+                    ConversionWorkflowService.Stage.SPEECH,
+                    "speech-stage:" + candidate.conversionId(),
+                    "generation/manifests/" + manifest.manifestId(),
+                    manifest.manifestDigest(),
+                    true));
+        } catch (RuntimeException exception) {
+            workflowService.failStage(new ConversionWorkflowService.StageFailure(
+                    messageId,
+                    candidate.conversionId(),
+                    ConversionWorkflowService.Stage.SPEECH,
+                    "SPEECH_STAGE_FAILED",
+                    true));
+            throw exception;
         }
         return 1;
     }
@@ -59,7 +100,7 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
     public int packagePending() {
         List<ConversionCoordinate> candidates = jdbcTemplate.query(
                 """
-                SELECT m.listener_id, m.conversion_id
+                SELECT m.listener_id, m.conversion_id, conversion.version
                 FROM generation.active_segment_manifest active
                 JOIN generation.segment_manifest m ON m.manifest_id = active.manifest_id
                 JOIN workflow.audiobook_conversion conversion
@@ -84,15 +125,57 @@ public class AudiobookGenerationWorkerServiceImpl implements AudiobookGeneration
                 """,
                 (resultSet, row) -> new ConversionCoordinate(
                         resultSet.getObject("listener_id", UUID.class),
-                        resultSet.getObject("conversion_id", UUID.class)));
+                        resultSet.getObject("conversion_id", UUID.class),
+                        resultSet.getLong("version")));
         if (candidates.isEmpty()) {
             return 0;
         }
         ConversionCoordinate candidate = candidates.getFirst();
-        generationService.packageAudiobook(candidate.listenerId(), candidate.conversionId());
+        workflowService.scheduleStage(
+                candidate.listenerId(), candidate.conversionId(), ConversionWorkflowService.Stage.PACKAGING, 3);
+        UUID messageId = identifierGenerator.generate();
+        ConversionWorkflowService.DeliveryDecision claim = workflowService.claimDelivery(
+                new ConversionWorkflowService.WorkDelivery(
+                        messageId,
+                        candidate.conversionId(),
+                        ConversionWorkflowService.Stage.PACKAGING,
+                        1,
+                        candidate.version(),
+                        packagingWorkerId,
+                        Duration.ofMinutes(30)));
+        if (claim.disposition() != ConversionWorkflowService.DeliveryDisposition.CLAIMED) {
+            return 0;
+        }
+        try {
+            generationService.packageAudiobook(candidate.listenerId(), candidate.conversionId());
+            String resultDigest = jdbcTemplate.queryForObject(
+                    """
+                    SELECT manifest_digest FROM generation.packaged_audiobook_result
+                    WHERE conversion_id = ? AND listener_id = ?
+                    """,
+                    String.class,
+                    candidate.conversionId(),
+                    candidate.listenerId());
+            workflowService.acceptResult(new ConversionWorkflowService.StageResult(
+                    messageId,
+                    candidate.conversionId(),
+                    ConversionWorkflowService.Stage.PACKAGING,
+                    "packaging-stage:" + candidate.conversionId(),
+                    "generation/packaged-results/" + candidate.conversionId(),
+                    resultDigest,
+                    false));
+        } catch (RuntimeException exception) {
+            workflowService.failStage(new ConversionWorkflowService.StageFailure(
+                    messageId,
+                    candidate.conversionId(),
+                    ConversionWorkflowService.Stage.PACKAGING,
+                    "PACKAGING_STAGE_FAILED",
+                    true));
+            throw exception;
+        }
         return 1;
     }
 
-    private record ConversionCoordinate(UUID listenerId, UUID conversionId) {
+    private record ConversionCoordinate(UUID listenerId, UUID conversionId, long version) {
     }
 }
