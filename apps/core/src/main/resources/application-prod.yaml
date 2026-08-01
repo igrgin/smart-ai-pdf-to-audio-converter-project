@@ -24,6 +24,8 @@ spring:
             jwk-set-uri: ${ZITADEL_JWK_SET_URI}
 
 platform:
+  provider:
+    google-cloud-project: ${GOOGLE_CLOUD_PROJECT}
   generation:
     working-bucket: ${WORKING_BUCKET}
     final-bucket: ${FINALIZED_BUCKET}

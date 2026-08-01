@@ -21,6 +21,7 @@ class SpeechProviderImplTest {
     @Test
     void rejectsASecretDestinationOutsideTheApprovedSpeechBoundary() {
         SpeechProvider.SpeechRequest request = new SpeechProvider.SpeechRequest(
+                java.util.UUID.randomUUID().toString(),
                 URI.create("https://attacker.invalid/collect"),
                 "model-v1", "eu", "cedar", 1.0, "Narrate safely.", "Private prose");
 
@@ -33,6 +34,7 @@ class SpeechProviderImplTest {
     @Test
     void requestsSelfDescribingAudioForCanonicalDecoding() {
         SpeechProvider.SpeechRequest request = new SpeechProvider.SpeechRequest(
+                java.util.UUID.randomUUID().toString(),
                 URI.create("https://eu.api.openai.com/v1/audio/speech"),
                 "model-v1", "eu", "cedar", 1.0, "Narrate safely.", "Private prose");
 
@@ -51,6 +53,7 @@ class SpeechProviderImplTest {
         given(client.send(any(), any(HttpResponse.BodyHandler.class))).willReturn(response);
         SpeechProvider tested = new SpeechProviderImpl(properties, client);
         SpeechProvider.SpeechRequest request = new SpeechProvider.SpeechRequest(
+                java.util.UUID.randomUUID().toString(),
                 URI.create("https://eu.api.openai.com/v1/audio/speech"),
                 "model-v1", "eu", "cedar", 1.0, "Narrate safely.", "Private prose");
 

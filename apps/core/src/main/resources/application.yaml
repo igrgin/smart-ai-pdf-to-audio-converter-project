@@ -73,6 +73,8 @@ server:
       tracking-modes: cookie
 
 platform:
+  provider:
+    google-cloud-project: ${GOOGLE_CLOUD_PROJECT:local-audiobook}
   generation:
     working-asset-path: ${AUDIO_WORKING_ASSET_PATH:${java.io.tmpdir}/folio-working/audio-generation}
     final-asset-path: ${AUDIO_FINAL_ASSET_PATH:${java.io.tmpdir}/folio-final/audiobooks}

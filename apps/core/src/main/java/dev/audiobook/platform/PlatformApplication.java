@@ -10,6 +10,7 @@ import dev.audiobook.platform.worker.WorkerProperties;
 import dev.audiobook.platform.identity.IdentitySecurityProperties;
 import dev.audiobook.platform.narration.NarrationProperties;
 import dev.audiobook.platform.narration.PdfNarrationProperties;
+import dev.audiobook.platform.provider.ProviderIntegrationProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -25,6 +26,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         IdentitySecurityProperties.class,
         NarrationProperties.class,
         PdfNarrationProperties.class,
+        ProviderIntegrationProperties.class,
         PlatformBuildProperties.class,
         WorkerProperties.class
 })

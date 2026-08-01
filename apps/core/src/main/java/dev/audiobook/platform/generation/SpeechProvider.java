@@ -7,6 +7,7 @@ public interface SpeechProvider {
     SpeechResult synthesize(SpeechRequest request);
 
     record SpeechRequest(
+            String operationId,
             URI endpoint,
             String model,
             String region,
