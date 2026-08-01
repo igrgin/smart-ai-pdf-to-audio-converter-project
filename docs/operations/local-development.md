@@ -7,6 +7,11 @@ different stores.
 
 ## Start and stop
 
+Managed Offline Copy signing requires an explicit local P-256 key pair. Set the PKCS#8 private key
+in `OFFLINE_AUTHORIZATION_PRIVATE_KEY`, set the matching X.509 public key in both
+`OFFLINE_AUTHORIZATION_PUBLIC_KEY` and `VITE_OFFLINE_AUTHORIZATION_PUBLIC_KEY`, then start the stack.
+Tests generate an ephemeral key pair and do not require these values.
+
 ```bash
 docker compose --profile workers up --build
 docker compose --profile workers down

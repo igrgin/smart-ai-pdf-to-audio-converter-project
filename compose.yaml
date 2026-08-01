@@ -20,6 +20,8 @@ x-worker-environment: &worker-environment
   NOTIFICATION_ENDPOINT: smtp://notification-sink:1025
   ANALYTICS_ENDPOINT: http://analytics-sink:8080
   OTEL_EXPORTER_OTLP_ENDPOINT: http://telemetry:4318
+  OFFLINE_AUTHORIZATION_PRIVATE_KEY: ${OFFLINE_AUTHORIZATION_PRIVATE_KEY:-}
+  OFFLINE_AUTHORIZATION_PUBLIC_KEY: ${OFFLINE_AUTHORIZATION_PUBLIC_KEY:-}
 
 x-worker: &worker
   build: *core-build
@@ -148,6 +150,8 @@ services:
       BUILD_VERSION: local
       BUILD_REVISION: compose
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://telemetry:4318/v1/traces
+      OFFLINE_AUTHORIZATION_PRIVATE_KEY: ${OFFLINE_AUTHORIZATION_PRIVATE_KEY:-}
+      OFFLINE_AUTHORIZATION_PUBLIC_KEY: ${OFFLINE_AUTHORIZATION_PUBLIC_KEY:-}
     ports:
       - "8080:8080"
 
@@ -155,6 +159,8 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        VITE_OFFLINE_AUTHORIZATION_PUBLIC_KEY: ${VITE_OFFLINE_AUTHORIZATION_PUBLIC_KEY:-}
     image: audiobook-platform-web:local
     depends_on:
       core:

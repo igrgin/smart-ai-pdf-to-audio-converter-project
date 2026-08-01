@@ -157,6 +157,18 @@ footer { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 26px 0 
 .private-player-heading .empty-mark { flex: 0 0 auto; margin: 0; }
 .private-player-heading h2 { margin: 6px 0 4px; font-family: Georgia, serif; font-size: clamp(1.65rem, 3vw, 2.5rem); font-weight: 500; letter-spacing: -.03em; }
 .private-player-heading p { margin: 0; color: var(--muted); }
+.offline-copy { display: grid; gap: 10px; margin-top: 24px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.offline-copy-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.offline-copy-heading > span { display: inline-flex; align-items: center; gap: 7px; font-weight: 700; }
+.offline-copy-heading strong { color: #277a5b; font-size: .76rem; }
+.offline-copy p, .offline-copy small { margin: 0; color: var(--muted); line-height: 1.5; }
+.offline-storage { font-size: .76rem; font-variant-numeric: tabular-nums; }
+.offline-progress { display: grid; gap: 5px; color: var(--muted); font-size: .74rem; }
+.offline-progress progress { width: 100%; accent-color: var(--accent); }
+.offline-copy-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.offline-library .private-player { margin-top: 30px; }
+.offline-boundary { display: block; margin-top: 18px; color: var(--muted); line-height: 1.5; }
+.global-alert { width: min(1180px, calc(100% - 40px)); margin: 12px auto 0; padding: 12px 16px; border: 1px solid var(--accent); border-radius: 10px; }
 .audiobook-position { width: 100%; margin: 30px 0 6px; accent-color: var(--accent); }
 .private-player-controls { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 20px 0 28px; }
 .playback-speed { display: grid; gap: 4px; margin-left: auto; color: var(--muted); font-size: .72rem; font-weight: 700; }

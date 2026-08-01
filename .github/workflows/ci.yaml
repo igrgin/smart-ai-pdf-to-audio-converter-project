@@ -76,6 +76,7 @@ jobs:
       - run: npm install --global "npm@${NPM_VERSION}"
       - run: npm ci --ignore-scripts
       - run: npm test
+      - run: npm run test:browser
       - run: npm run typecheck
       - run: npm run build
 

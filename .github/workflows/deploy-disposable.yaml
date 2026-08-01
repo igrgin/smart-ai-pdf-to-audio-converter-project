@@ -117,7 +117,8 @@ jobs:
         run: |
           npm install --global "npm@${NPM_VERSION}" "firebase-tools@${FIREBASE_TOOLS_VERSION}"
           npm ci --ignore-scripts
-          npm run build
+          offline_public_key=$(terraform -chdir=infra/terraform output -raw offline_authorization_public_key)
+          VITE_OFFLINE_AUTHORIZATION_PUBLIC_KEY="$offline_public_key" npm run build
           site_id=$(terraform -chdir=infra/terraform output -raw firebase_site_id)
           firebase use "${{ inputs.project_id }}"
           firebase target:apply hosting app "$site_id"

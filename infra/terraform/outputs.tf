@@ -17,3 +17,14 @@ output "firebase_site_id" {
 output "firebase_url" {
   value = "https://${google_firebase_hosting_site.web.site_id}.web.app"
 }
+
+output "offline_authorization_kms_key_version" {
+  value = "${google_kms_crypto_key.capabilities.id}/cryptoKeyVersions/1"
+}
+
+output "offline_authorization_public_key" {
+  value = replace(replace(replace(
+    data.google_kms_crypto_key_version.offline_authorization.public_key[0].pem,
+    "-----BEGIN PUBLIC KEY-----", ""),
+  "-----END PUBLIC KEY-----", ""), "\n", "")
+}

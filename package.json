@@ -13,6 +13,7 @@
   "scripts": {
     "build": "npm run build --workspace @audiobook/web",
     "test": "npm run test --workspace @audiobook/web",
+    "test:browser": "npm run test:browser --workspace @audiobook/web",
     "typecheck": "npm run typecheck --workspace @audiobook/web"
   }
 }

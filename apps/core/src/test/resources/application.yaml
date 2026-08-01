@@ -47,6 +47,9 @@ server:
         secure: false
 
 platform:
+  offline-access:
+    authorization-validity: 30d
+    chunk-bytes: 1048576
   generation:
     working-asset-path: ${java.io.tmpdir}/folio-working-tests/audio-generation
     final-asset-path: ${java.io.tmpdir}/folio-final-tests/audiobooks

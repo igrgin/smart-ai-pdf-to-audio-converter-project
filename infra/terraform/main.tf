@@ -329,9 +329,8 @@ resource "google_kms_key_ring" "capabilities" {
 }
 
 resource "google_kms_crypto_key" "capabilities" {
-  name            = "signing"
-  key_ring        = google_kms_key_ring.capabilities.id
-  rotation_period = "7776000s"
+  name     = "signing"
+  key_ring = google_kms_key_ring.capabilities.id
 
   purpose = "ASYMMETRIC_SIGN"
   version_template {
@@ -339,6 +338,11 @@ resource "google_kms_crypto_key" "capabilities" {
   }
 
   lifecycle { prevent_destroy = false }
+}
+
+data "google_kms_crypto_key_version" "offline_authorization" {
+  crypto_key = google_kms_crypto_key.capabilities.id
+  version    = "1"
 }
 
 resource "google_service_account" "core" {
@@ -601,6 +605,10 @@ resource "google_cloud_run_v2_service" "core" {
       env {
         name  = "GOOGLE_CLOUD_PROJECT"
         value = var.project_id
+      }
+      env {
+        name  = "OFFLINE_AUTHORIZATION_KMS_KEY_VERSION"
+        value = "${google_kms_crypto_key.capabilities.id}/cryptoKeyVersions/1"
       }
       env {
         name  = "WORKING_BUCKET"

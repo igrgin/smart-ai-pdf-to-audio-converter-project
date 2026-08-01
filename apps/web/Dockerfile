@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1.7
 FROM node:24.18.1-alpine AS build
 WORKDIR /workspace
+ARG VITE_OFFLINE_AUTHORIZATION_PUBLIC_KEY
+ENV VITE_OFFLINE_AUTHORIZATION_PUBLIC_KEY=${VITE_OFFLINE_AUTHORIZATION_PUBLIC_KEY}
 RUN npm install --global npm@11.8.0
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
