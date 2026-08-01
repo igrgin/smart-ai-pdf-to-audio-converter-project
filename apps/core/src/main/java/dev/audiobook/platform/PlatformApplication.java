@@ -1,6 +1,7 @@
 package dev.audiobook.platform;
 
 import dev.audiobook.platform.entitlement.EntitlementPolicyProperties;
+import dev.audiobook.platform.entitlement.DemonstrationSubscriptionProperties;
 import dev.audiobook.platform.admission.AdmissionProperties;
 import dev.audiobook.platform.admission.InspectionProperties;
 import dev.audiobook.platform.status.PlatformBuildProperties;
@@ -16,6 +17,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableConfigurationProperties({
         AdmissionProperties.class,
         InspectionProperties.class,
+        DemonstrationSubscriptionProperties.class,
         EntitlementPolicyProperties.class,
         IdentitySecurityProperties.class,
         NarrationProperties.class,

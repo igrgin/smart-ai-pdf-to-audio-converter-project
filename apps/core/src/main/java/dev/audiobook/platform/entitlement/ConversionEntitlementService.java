@@ -33,7 +33,27 @@ public interface ConversionEntitlementService {
             long availableCharacters,
             long reservedCharacters,
             long committedCharacters,
-            String denialReason) {
+            String denialReason,
+            EntitlementSource source,
+            DemonstrationSubscriptionStatus demonstrationSubscriptionStatus) {
+
+        public Allowance(
+                AllowanceStatus status,
+                long grantedCharacters,
+                long availableCharacters,
+                long reservedCharacters,
+                long committedCharacters,
+                String denialReason) {
+            this(
+                    status,
+                    grantedCharacters,
+                    availableCharacters,
+                    reservedCharacters,
+                    committedCharacters,
+                    denialReason,
+                    EntitlementSource.NONE,
+                    null);
+        }
     }
 
     record AdmissionRequest(
@@ -89,6 +109,20 @@ public interface ConversionEntitlementService {
         AVAILABLE,
         EXHAUSTED,
         EXPIRED
+    }
+
+    enum EntitlementSource {
+        NONE,
+        FREE,
+        DEMONSTRATION_SUBSCRIPTION
+    }
+
+    enum DemonstrationSubscriptionStatus {
+        ACTIVE,
+        CANCEL_AT_PERIOD_END,
+        CANCELED,
+        PAST_DUE,
+        UNPAID
     }
 
     enum AdmissionDenial {

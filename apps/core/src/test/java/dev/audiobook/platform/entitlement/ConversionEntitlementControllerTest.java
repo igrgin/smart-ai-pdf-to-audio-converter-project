@@ -149,6 +149,27 @@ class ConversionEntitlementControllerTest {
     }
 
     @Test
+    void listenerLibraryLabelsTestModeDemonstrationSubscriptionWithoutFinancialClaims() throws Exception {
+        when(entitlementService.allowance(LISTENER_ID))
+                .thenReturn(new ConversionEntitlementService.Allowance(
+                        ConversionEntitlementService.AllowanceStatus.AVAILABLE,
+                        500_000,
+                        500_000,
+                        0,
+                        0,
+                        null,
+                        ConversionEntitlementService.EntitlementSource.DEMONSTRATION_SUBSCRIPTION,
+                        ConversionEntitlementService.DemonstrationSubscriptionStatus.CANCEL_AT_PERIOD_END));
+
+        mockMvc.perform(get("/api/v1/library").with(authentication(listenerAuthentication())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversionEntitlement.source").value("DEMONSTRATION_SUBSCRIPTION"))
+                .andExpect(jsonPath("$.conversionEntitlement.demonstrationOnly").value(true))
+                .andExpect(jsonPath("$.conversionEntitlement.demonstrationSubscriptionStatus")
+                        .value("CANCEL_AT_PERIOD_END"));
+    }
+
+    @Test
     void onlyAnAuthorizedOperatorCanInspectIndependentProviderSpend() throws Exception {
         when(entitlementService.providerSpend("openai"))
                 .thenReturn(new ConversionEntitlementService.ProviderSpend(250_000, 750_000));

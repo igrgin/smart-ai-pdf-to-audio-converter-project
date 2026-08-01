@@ -23,6 +23,8 @@ platform:
   build:
     version: itest
     revision: test-revision
+  demonstration-subscription:
+    projector-enabled: true
   entitlement:
     per-conversion-spend-ceiling-micros: 1000000
     per-listener-spend-ceiling-micros: 2000000

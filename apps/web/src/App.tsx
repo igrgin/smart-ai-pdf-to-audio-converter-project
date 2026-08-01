@@ -658,6 +658,24 @@ function stageLabel(stage: TransferStage | "CONFIRMING" | "FAILED"): string {
 }
 
 function EntitlementCard({ entitlement }: { entitlement: Library["conversionEntitlement"] }) {
+  if (entitlement.demonstrationOnly) {
+    const ending = entitlement.demonstrationSubscriptionStatus === "CANCEL_AT_PERIOD_END"
+      ? " Cancellation is scheduled for the end of the current period."
+      : "";
+    return (
+      <aside className={`entitlement-card entitlement-card--${entitlement.canStartConversion ? "available" : "denied"}`} aria-labelledby="entitlement-title">
+        <span className="card-kicker">Demonstration Subscription</span>
+        <h2 id="entitlement-title">
+          {entitlement.canStartConversion
+            ? `${entitlement.availableCharacters.toLocaleString("en-US")} narratable characters available`
+            : "No Demonstration Subscription grant is available"}
+        </h2>
+        <p>
+          Stripe test mode only. This is not a production payment, tax, payout, or accounting record.{ending}
+        </p>
+      </aside>
+    );
+  }
   return (
     <aside className={`entitlement-card entitlement-card--${entitlement.canStartConversion ? "available" : "denied"}`} aria-labelledby="entitlement-title">
       <span className="card-kicker">Conversion Entitlement</span>

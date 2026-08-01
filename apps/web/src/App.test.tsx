@@ -158,7 +158,10 @@ describe("public sample", () => {
               availableCharacters: 500000,
               reservedCharacters: 0,
               committedCharacters: 0,
-              canStartConversion: true
+              canStartConversion: true,
+              source: "DEMONSTRATION_SUBSCRIPTION",
+              demonstrationSubscriptionStatus: "CANCEL_AT_PERIOD_END",
+              demonstrationOnly: true
             }
           })
         });
@@ -174,6 +177,9 @@ describe("public sample", () => {
     expect(screen.getByText("relay@privaterelay.appleid.com")).toBeVisible();
     expect(screen.getByText(/your first audiobook will live here/i)).toBeVisible();
     expect(screen.getByText(/500,000 narratable characters available/i)).toBeVisible();
+    expect(screen.getByText(/demonstration subscription/i)).toBeVisible();
+    expect(screen.getByText(/not a production payment, tax, payout, or accounting record/i)).toBeVisible();
+    expect(screen.getByText(/cancellation is scheduled for the end of the current period/i)).toBeVisible();
     expect(screen.getByRole("button", { name: /create audiobook/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /add sign-in method/i })).toBeEnabled();
     expect(container.textContent).not.toContain("01985f42");

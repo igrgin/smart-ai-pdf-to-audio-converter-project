@@ -24,6 +24,11 @@ spring:
             jwk-set-uri: ${ZITADEL_JWK_SET_URI}
 
 platform:
+  demonstration-subscription:
+    webhook-secret: ${STRIPE_WEBHOOK_SECRET}
+    monthly-price-id: ${STRIPE_DEMONSTRATION_MONTHLY_PRICE_ID}
+    monthly-grant-characters: ${STRIPE_DEMONSTRATION_MONTHLY_GRANT_CHARACTERS}
+    projector-enabled: ${STRIPE_PROJECTOR_ENABLED:true}
   narration:
     working-bucket: ${WORKING_BUCKET}
   admission:

@@ -90,6 +90,9 @@ export interface ConversionEntitlement {
   committedCharacters: number;
   canStartConversion: boolean;
   denialReason?: string;
+  source?: "NONE" | "FREE" | "DEMONSTRATION_SUBSCRIPTION";
+  demonstrationSubscriptionStatus?: "ACTIVE" | "CANCEL_AT_PERIOD_END" | "CANCELED" | "PAST_DUE" | "UNPAID";
+  demonstrationOnly?: boolean;
 }
 
 export async function fetchIdentitySession(signal: AbortSignal): Promise<IdentitySession> {
