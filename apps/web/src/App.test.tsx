@@ -189,6 +189,230 @@ describe("public sample", () => {
     });
   });
 
+  it("renders the role-scoped Action Queue and Listener-visible access activity without private context", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            authenticated: true,
+            listener: { displayName: "Named staff", signInMethods: ["google"] },
+            staff: { roles: ["SUPPORT"] },
+            csrf: { headerName: "X-CSRF-TOKEN", parameterName: "_csrf", token: "staff-csrf" }
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/library")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            displayName: "Named staff",
+            signInMethods: ["google"],
+            audiobooks: [],
+            conversionEntitlement: {
+              status: "NO_GRANT",
+              grantedCharacters: 0,
+              availableCharacters: 0,
+              reservedCharacters: 0,
+              committedCharacters: 0,
+              canStartConversion: false
+            }
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/operator/action-queue")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            cases: [{
+              caseId: "01985f42-5f8d-7000-8000-000000000836",
+              type: "EXPIRING_ACCESS",
+              opaqueResourceReference: "01985f42-5f8d-7000-8000-000000000936",
+              resourceKind: "PRIVATE_AUDIOBOOK",
+              restrictionCode: "ACCESS_EXPIRING",
+              consequenceCode: "SUPPORT_ACCESS_ENDS_SOON",
+              deadline: "2026-08-01T22:00:00Z",
+              safetyPriority: 90,
+              urgency: 80,
+              allowedActions: ["VIEW_RESOURCE_REFERENCE"]
+            }, {
+              caseId: "01985f42-5f8d-7000-8000-000000000736",
+              type: "SUPPORT",
+              opaqueResourceReference: "01985f42-5f8d-7000-8000-000000000636",
+              resourceKind: "PRIVATE_AUDIOBOOK",
+              restrictionCode: "PLAYBACK_SUPPORT",
+              consequenceCode: "PLAYBACK_REMAINS_UNAVAILABLE",
+              deadline: "2026-08-02T12:00:00Z",
+              safetyPriority: 60,
+              urgency: 70,
+              allowedActions: ["VIEW_RESOURCE_REFERENCE"]
+            }]
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/operator/action-queue/01985f42-5f8d-7000-8000-000000000836")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            caseId: "01985f42-5f8d-7000-8000-000000000836",
+            type: "EXPIRING_ACCESS",
+            opaqueResourceReference: "01985f42-5f8d-7000-8000-000000000936",
+            resourceKind: "PRIVATE_AUDIOBOOK",
+            restrictionCode: "ACCESS_EXPIRING",
+            consequenceCode: "SUPPORT_ACCESS_ENDS_SOON",
+            deadline: "2026-08-01T22:00:00Z",
+            safetyPriority: 90,
+            urgency: 80,
+            allowedActions: ["VIEW_RESOURCE_REFERENCE"],
+            auditEvents: [{
+              eventId: "01985f42-5f8d-7000-8000-000000000a36",
+              authority: "LISTENER_APPROVAL",
+              purposeCode: "RESTORE_PLAYBACK",
+              policyCode: "DELEGATED_SUPPORT_ACCESS_V1",
+              action: "GRANT_DELEGATED_ACCESS",
+              outcome: "GRANTED",
+              occurredAt: "2026-08-01T20:00:00Z"
+            }]
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/operator/action-queue/01985f42-5f8d-7000-8000-000000000836/actions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            authorizedResource: {
+              kind: "PRIVATE_AUDIOBOOK",
+              id: "01985f42-5f8d-7000-8000-000000000b36"
+            },
+            auditEvent: { action: "VIEW_RESOURCE_REFERENCE", outcome: "DISCLOSED" }
+          })
+        });
+      }
+      if (url.endsWith("/delegated-access-requests") && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ requestId: "request-36" }) });
+      }
+      if (url.endsWith("/api/v1/support-access-grants") && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            grantId: "01985f42-5f8d-7000-8000-000000000d36",
+            caseId: "01985f42-5f8d-7000-8000-000000000736",
+            staffId: "01985f42-5f8d-7000-8000-000000000436",
+            purposeCode: "INVESTIGATE_CHAPTER_AUDIO",
+            allowedActions: ["VIEW_RESOURCE_REFERENCE"],
+            validFrom: "2026-08-01T20:00:00Z",
+            expiresAt: "2026-08-01T23:00:00Z",
+            revoked: false,
+            version: 0
+          })
+        });
+      }
+      if (url.includes("/revocation") && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            grantId: url.split("/").at(-2),
+            caseId: "01985f42-5f8d-7000-8000-000000000736",
+            staffId: "01985f42-5f8d-7000-8000-000000000436",
+            purposeCode: "INVESTIGATE_CHAPTER_AUDIO",
+            allowedActions: ["VIEW_RESOURCE_REFERENCE"],
+            validFrom: "2026-08-01T20:00:00Z",
+            expiresAt: "2026-08-01T23:00:00Z",
+            revoked: true,
+            version: 1
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/support-access-grants")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            grants: [{
+              grantId: "01985f42-5f8d-7000-8000-000000000536",
+              caseId: "01985f42-5f8d-7000-8000-000000000736",
+              staffId: "01985f42-5f8d-7000-8000-000000000436",
+              purposeCode: "RESTORE_PLAYBACK",
+              allowedActions: ["VIEW_RESOURCE_REFERENCE"],
+              validFrom: "2026-08-01T20:00:00Z",
+              expiresAt: "2026-08-01T23:00:00Z",
+              revoked: false,
+              version: 0
+            }],
+            notifications: [{
+              notificationId: "01985f42-5f8d-7000-8000-000000000336",
+              caseId: "01985f42-5f8d-7000-8000-000000000736",
+              grantId: "01985f42-5f8d-7000-8000-000000000536",
+              eventType: "DELEGATED_ACCESS_APPROVED",
+              createdAt: "2026-08-01T20:00:00Z"
+            }],
+            pendingRequests: [{
+              requestId: "01985f42-5f8d-7000-8000-000000000c36",
+              caseId: "01985f42-5f8d-7000-8000-000000000736",
+              staffId: "01985f42-5f8d-7000-8000-000000000436",
+              staffDisplayName: "Mara Support",
+              opaqueResourceReference: "01985f42-5f8d-7000-8000-000000000636",
+              resourceKind: "PRIVATE_AUDIOBOOK",
+              restrictionCode: "PLAYBACK_SUPPORT",
+              consequenceCode: "PLAYBACK_REMAINS_UNAVAILABLE",
+              deadline: "2026-08-02T12:00:00Z",
+              purposeCode: "INVESTIGATE_CHAPTER_AUDIO",
+              allowedActions: ["VIEW_RESOURCE_REFERENCE"],
+              expiresAt: "2026-08-01T23:00:00Z",
+              requestedAt: "2026-08-01T20:00:00Z"
+            }]
+          })
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<App />);
+
+    expect(await screen.findByRole("heading", { name: /action queue/i })).toBeVisible();
+    const queue = screen.getByLabelText(/role-scoped action queue/i);
+    expect(within(queue).getAllByRole("article")[0]).toHaveTextContent("ACCESS EXPIRING");
+    expect(within(queue).getAllByRole("article")[1]).toHaveTextContent("PLAYBACK SUPPORT");
+    expect(within(queue).getByText(/support access ends soon/i)).toBeVisible();
+    expect(screen.getByRole("heading", { name: /support access activity/i })).toBeVisible();
+    expect(screen.getByText(/restore playback/i)).toBeVisible();
+    expect(screen.getByText(/delegated access approved/i)).toBeVisible();
+    expect(container.textContent).not.toContain("PLAYBACK_REMAINS_UNAVAILABLE private");
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/operator/action-queue", {
+      headers: { Accept: "application/json" },
+      signal: expect.any(AbortSignal)
+    });
+
+    fireEvent.click(within(queue).getAllByRole("button", { name: /review bounded case/i })[0]);
+    expect(await screen.findByRole("heading", { name: /content-free audit/i })).toBeVisible();
+    expect(screen.getByText(/grant delegated access/i)).toBeVisible();
+    fireEvent.change(screen.getByLabelText(/^purpose$/i), { target: { value: "RESTORE_PLAYBACK" } });
+    fireEvent.change(screen.getByLabelText(/hard expiry/i), { target: { value: "2026-08-01T22:30" } });
+    fireEvent.click(screen.getByRole("button", { name: /request minimum access/i }));
+    expect(await screen.findByText(/listener can now review/i)).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/operator/action-queue/01985f42-5f8d-7000-8000-000000000836/delegated-access-requests",
+      expect.objectContaining({ method: "POST" })
+    );
+    fireEvent.click(screen.getByRole("button", { name: /use approved access/i }));
+    expect(await screen.findByText("01985f42-5f8d-7000-8000-000000000b36")).toBeVisible();
+
+    expect(screen.getByText("Mara Support")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /approve this request/i }));
+    expect(await screen.findByText(/named staff member was notified/i)).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/support-access-grants", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ requestId: "01985f42-5f8d-7000-8000-000000000c36" })
+    }));
+    fireEvent.click(screen.getAllByRole("button", { name: /revoke access/i })[0]);
+    expect(await screen.findByText(/revoked immediately/i)).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/support-access-grants/01985f42-5f8d-7000-8000-000000000d36/revocation",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
   it("plays a finalized audiobook through one persistent chaptered audio element", async () => {
     let paused = true;
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => {

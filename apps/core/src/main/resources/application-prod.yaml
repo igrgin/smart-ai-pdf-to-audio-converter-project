@@ -66,6 +66,17 @@ platform:
       apple: ${ZITADEL_APPLE_IDP_ID}
       facebook: ${ZITADEL_FACEBOOK_IDP_ID}
     operator-listener-ids: ${OPERATOR_LISTENER_IDS}
+    support-staff-listener-ids: ${SUPPORT_STAFF_LISTENER_IDS:}
+    reliability-staff-listener-ids: ${RELIABILITY_STAFF_LISTENER_IDS:}
+    entitlement-staff-listener-ids: ${ENTITLEMENT_STAFF_LISTENER_IDS:}
+    voice-staff-listener-ids: ${VOICE_STAFF_LISTENER_IDS:}
+    incident-responder-listener-ids: ${INCIDENT_RESPONDER_LISTENER_IDS:}
+    security-reviewer-listener-ids: ${SECURITY_REVIEWER_LISTENER_IDS:}
+  trust-operations:
+    delegated-access-maximum-duration: ${DELEGATED_ACCESS_MAXIMUM_DURATION:24h}
+    emergency-access-maximum-duration: ${EMERGENCY_ACCESS_MAXIMUM_DURATION:30m}
+    emergency-review-deadline: ${EMERGENCY_REVIEW_DEADLINE:24h}
+    fresh-mfa-maximum-age: ${EMERGENCY_FRESH_MFA_MAXIMUM_AGE:5m}
 
 management:
   tracing:

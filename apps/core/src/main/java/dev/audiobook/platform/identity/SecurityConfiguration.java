@@ -152,6 +152,9 @@ public class SecurityConfiguration {
                         .requestMatchers(uploadCapability).permitAll()
                         .requestMatchers(inspectionDelivery).permitAll()
                         .requestMatchers(stripeEvents).permitAll()
+                        .requestMatchers("/api/v1/operator/action-queue/**").hasAnyRole(
+                                "SUPPORT", "RELIABILITY", "ENTITLEMENT", "VOICE",
+                                "INCIDENT_RESPONDER", "SECURITY_REVIEWER")
                         .requestMatchers("/api/v1/operator/**").hasRole("OPERATOR")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))

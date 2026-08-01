@@ -13,8 +13,17 @@ export interface ListenerSummary {
 export interface IdentitySession {
   authenticated: boolean;
   listener?: ListenerSummary;
+  staff?: { roles: StaffRole[] };
   csrf: CsrfProof;
 }
+
+export type StaffRole =
+  | "SUPPORT"
+  | "RELIABILITY"
+  | "ENTITLEMENT"
+  | "VOICE"
+  | "INCIDENT_RESPONDER"
+  | "SECURITY_REVIEWER";
 
 export interface Library {
   displayName: string;

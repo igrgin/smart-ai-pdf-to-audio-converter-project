@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
@@ -32,9 +33,10 @@ public class IdentitySessionController {
     @GetMapping("/session")
     public ResponseEntity<SessionView> session(Authentication authentication, CsrfToken csrfToken) {
         ListenerView listener = principal(authentication) == null ? null : ListenerView.from(principal(authentication));
+        StaffView staff = StaffView.from(authentication);
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
-                .body(new SessionView(listener != null, listener, new CsrfView(
+                .body(new SessionView(listener != null, listener, staff, new CsrfView(
                         csrfToken.getHeaderName(), csrfToken.getParameterName(), csrfToken.getToken())));
     }
 
@@ -106,7 +108,7 @@ public class IdentitySessionController {
                 : null;
     }
 
-    public record SessionView(boolean authenticated, ListenerView listener, CsrfView csrf) {
+    public record SessionView(boolean authenticated, ListenerView listener, StaffView staff, CsrfView csrf) {
     }
 
     public record ListenerView(String displayName, String contactEmail, List<String> signInMethods) {
@@ -115,6 +117,29 @@ public class IdentitySessionController {
                     principal.displayName(),
                     principal.contactEmail(),
                     principal.providers().stream().map(provider -> provider.name().toLowerCase(Locale.ROOT)).sorted().toList());
+        }
+    }
+
+    public record StaffView(List<String> roles) {
+        private static final Set<String> STAFF_AUTHORITIES = Set.of(
+                "ROLE_SUPPORT",
+                "ROLE_RELIABILITY",
+                "ROLE_ENTITLEMENT",
+                "ROLE_VOICE",
+                "ROLE_INCIDENT_RESPONDER",
+                "ROLE_SECURITY_REVIEWER");
+
+        static StaffView from(Authentication authentication) {
+            if (authentication == null) {
+                return null;
+            }
+            List<String> roles = authentication.getAuthorities().stream()
+                    .map(authority -> authority.getAuthority())
+                    .filter(STAFF_AUTHORITIES::contains)
+                    .map(authority -> authority.substring("ROLE_".length()))
+                    .sorted()
+                    .toList();
+            return roles.isEmpty() ? null : new StaffView(roles);
         }
     }
 

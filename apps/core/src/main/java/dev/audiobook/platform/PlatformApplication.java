@@ -6,6 +6,7 @@ import dev.audiobook.platform.entitlement.DemonstrationSubscriptionProperties;
 import dev.audiobook.platform.admission.AdmissionProperties;
 import dev.audiobook.platform.admission.InspectionProperties;
 import dev.audiobook.platform.status.PlatformBuildProperties;
+import dev.audiobook.platform.trustoperations.TrustOperationsProperties;
 import dev.audiobook.platform.worker.WorkerProperties;
 import dev.audiobook.platform.identity.IdentitySecurityProperties;
 import dev.audiobook.platform.narration.NarrationProperties;
@@ -28,6 +29,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         PdfNarrationProperties.class,
         ProviderIntegrationProperties.class,
         PlatformBuildProperties.class,
+        TrustOperationsProperties.class,
         WorkerProperties.class
 })
 @EnableScheduling
