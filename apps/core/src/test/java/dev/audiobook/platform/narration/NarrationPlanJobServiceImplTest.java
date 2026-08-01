@@ -35,7 +35,7 @@ class NarrationPlanJobServiceImplTest {
     private final NarrationPlanService narrationPlanService = mock(NarrationPlanService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-08-01T10:00:00Z"), ZoneOffset.UTC);
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
-    private NarrationPlanJobServiceImpl service;
+    private NarrationPlanJobService service;
 
     @BeforeEach
     void setUp() {

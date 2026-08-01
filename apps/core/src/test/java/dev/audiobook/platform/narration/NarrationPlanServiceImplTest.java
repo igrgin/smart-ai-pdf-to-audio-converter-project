@@ -33,7 +33,7 @@ class NarrationPlanServiceImplTest {
     private final PlatformIdentifierGenerator identifierGenerator = mock(PlatformIdentifierGenerator.class);
     private final AudiobookConversionService conversionService = mock(AudiobookConversionService.class);
     private final Clock clock = mock(Clock.class);
-    private NarrationPlanServiceImpl service;
+    private NarrationPlanService service;
 
     @BeforeEach
     void setUp() {

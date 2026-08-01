@@ -32,7 +32,7 @@ class AdmissionOutboxRelayServiceImplTest {
     private final NarrationPlanWorkPublisher narrationPublisher = mock(NarrationPlanWorkPublisher.class);
     private final AudiobookConversionService audiobookConversionService = mock(AudiobookConversionService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-08-01T10:00:00Z"), ZoneOffset.UTC);
-    private AdmissionOutboxRelayServiceImpl service;
+    private AdmissionOutboxRelayService service;
 
     @BeforeEach
     void setUp() {
