@@ -45,7 +45,6 @@ public class NarrationPlanServiceImpl implements NarrationPlanService {
             return;
         }
         if (hasPlan(listenerId, conversionId)) {
-            conversionService.markNarrationPlanReady(listenerId, conversionId);
             return;
         }
 
@@ -74,7 +73,6 @@ public class NarrationPlanServiceImpl implements NarrationPlanService {
                 plan.chapters().size(),
                 plan.reviewItems().size(),
                 Timestamp.from(identityClock.instant()));
-        conversionService.markNarrationPlanReady(listenerId, conversionId);
     }
 
     @Override

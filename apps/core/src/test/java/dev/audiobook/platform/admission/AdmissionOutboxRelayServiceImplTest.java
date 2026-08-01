@@ -12,6 +12,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import dev.audiobook.platform.narration.NarrationPlanWorkPublisher;
+import dev.audiobook.platform.workflow.AudiobookConversionService;
 import java.sql.ResultSet;
 import java.sql.Timestamp;
 import java.time.Clock;
@@ -29,13 +30,18 @@ class AdmissionOutboxRelayServiceImplTest {
     private final JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
     private final InspectionWorkPublisher inspectionPublisher = mock(InspectionWorkPublisher.class);
     private final NarrationPlanWorkPublisher narrationPublisher = mock(NarrationPlanWorkPublisher.class);
+    private final AudiobookConversionService audiobookConversionService = mock(AudiobookConversionService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-08-01T10:00:00Z"), ZoneOffset.UTC);
     private AdmissionOutboxRelayServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new AdmissionOutboxRelayServiceImpl(
-                jdbcTemplate, inspectionPublisher, List.of(narrationPublisher), clock);
+                jdbcTemplate,
+                inspectionPublisher,
+                List.of(narrationPublisher),
+                audiobookConversionService,
+                clock);
     }
 
     @Test
@@ -46,15 +52,13 @@ class AdmissionOutboxRelayServiceImplTest {
         UUID narrationWork = UUID.randomUUID();
         stubSelections(inspectionMessage, inspectionWork, narrationMessage, narrationWork);
         given(jdbcTemplate.update(anyString(), any(Timestamp.class), any(UUID.class))).willReturn(1);
+        relayNarration(narrationMessage, narrationWork);
 
         assertThat(service.relayPending()).isEqualTo(2);
 
         verify(inspectionPublisher).publish(inspectionMessage, inspectionWork);
         verify(narrationPublisher).publish(narrationMessage, narrationWork);
-        verify(jdbcTemplate).update(
-                contains("narration_plan_outbox"),
-                eq(Timestamp.from(clock.instant())),
-                eq(narrationMessage));
+        verify(audiobookConversionService).relayNarrationPlanWork(any());
     }
 
     @Test
@@ -62,16 +66,20 @@ class AdmissionOutboxRelayServiceImplTest {
         UUID messageId = UUID.randomUUID();
         UUID workId = UUID.randomUUID();
         stubSelections(null, null, messageId, workId);
+        given(audiobookConversionService.relayNarrationPlanWork(any())).willAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            java.util.function.BiConsumer<UUID, UUID> publisher = invocation.getArgument(0);
+            publisher.accept(messageId, workId);
+            return 1;
+        });
         org.mockito.Mockito.doThrow(new IllegalStateException("queue unavailable"))
-                .when(narrationPublisher)
-                .publish(messageId, workId);
+                .when(narrationPublisher).publish(messageId, workId);
 
         assertThatThrownBy(service::relayPending)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("queue unavailable");
 
-        verify(jdbcTemplate, never()).update(
-                contains("narration_plan_outbox"), any(Timestamp.class), any(UUID.class));
+        verify(audiobookConversionService).relayNarrationPlanWork(any());
     }
 
     @Test
@@ -79,13 +87,12 @@ class AdmissionOutboxRelayServiceImplTest {
         UUID narrationMessage = UUID.randomUUID();
         UUID narrationWork = UUID.randomUUID();
         service = new AdmissionOutboxRelayServiceImpl(
-                jdbcTemplate, inspectionPublisher, List.of(), clock);
+                jdbcTemplate, inspectionPublisher, List.of(), audiobookConversionService, clock);
         stubSelections(null, null, narrationMessage, narrationWork);
 
         assertThat(service.relayPending()).isZero();
 
-        verify(jdbcTemplate, never()).update(
-                contains("narration_plan_outbox"), any(Timestamp.class), any(UUID.class));
+        verify(audiobookConversionService, never()).relayNarrationPlanWork(any());
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -110,5 +117,14 @@ class AdmissionOutboxRelayServiceImplTest {
                     given(resultSet.getObject("work_id", UUID.class)).willReturn(workId);
                     return List.of(mapper.mapRow(resultSet, 0));
                 });
+    }
+
+    private void relayNarration(UUID messageId, UUID workId) {
+        given(audiobookConversionService.relayNarrationPlanWork(any())).willAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            java.util.function.BiConsumer<UUID, UUID> publisher = invocation.getArgument(0);
+            publisher.accept(messageId, workId);
+            return 1;
+        });
     }
 }

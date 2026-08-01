@@ -377,29 +377,18 @@ public class PublicationSubmissionServiceImpl implements PublicationSubmissionSe
                     stored.declaredByteLength(),
                     databaseTime(now));
             UUID conversionId = stored.plannedConversionId();
-            audiobookConversionService.createPreparing(conversionId, stored.listenerId(), sourceId);
-            UUID narrationWorkId = identifierGenerator.generate();
-            jdbcTemplate.update(
-                    """
-                    INSERT INTO workflow.narration_plan_work (
-                        work_id, listener_id, conversion_id, submission_id, operation_key, state, created_at
-                    ) VALUES (?, ?, ?, ?, ?, 'READY', ?)
-                    """,
-                    narrationWorkId,
-                    stored.listenerId(),
+            boolean epub = "application/epub+zip".equals(result.mediaType());
+            audiobookConversionService.createPreparing(
                     conversionId,
-                    stored.submissionId(),
-                    "narration-plan:" + conversionId,
-                    databaseTime(now));
-            jdbcTemplate.update(
-                    """
-                    INSERT INTO workflow.narration_plan_outbox (
-                        message_id, work_id, message_type, schema_version, created_at
-                    ) VALUES (?, ?, 'PREPARE_NARRATION_PLAN', 1, ?)
-                    """,
-                    identifierGenerator.generate(),
-                    narrationWorkId,
-                    databaseTime(now));
+                    stored.listenerId(),
+                    sourceId,
+                    epub
+                            ? AudiobookConversionService.PreparationReason.NARRATION_PLAN_PENDING
+                            : AudiobookConversionService.PreparationReason.EXTRACTION_PENDING);
+            if (epub) {
+                audiobookConversionService.scheduleNarrationPlan(
+                        stored.listenerId(), conversionId, stored.submissionId());
+            }
             jdbcTemplate.update(
                     """
                     UPDATE publication_submission

@@ -101,8 +101,6 @@ class NarrationPlanJobServiceImplTest {
                 eq(4),
                 eq(workId),
                 eq(messageId));
-        verify(jdbcTemplate).update(
-                contains("NARRATION_PLAN_REQUIRES_INTERVENTION"), eq(workId));
     }
 
     @Test

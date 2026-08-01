@@ -343,6 +343,7 @@ function ConversionCard({
 
   if (progress.state === "PREPARING") {
     const requiresIntervention = progress.reasonCode === "NARRATION_PLAN_REQUIRES_INTERVENTION";
+    const awaitingExtraction = progress.reasonCode === "EXTRACTION_PENDING";
     return (
       <article className="preparing-audiobook" aria-live="polite">
         <span className="empty-mark" aria-hidden="true"><Sparkles size={28} /></span>
@@ -350,6 +351,8 @@ function ConversionCard({
         <h2>{requiresIntervention ? "Narration Plan needs attention" : "Preparing your private audiobook"}</h2>
         <p>{requiresIntervention
           ? "Preparation could not finish. No further automatic attempts are scheduled."
+          : awaitingExtraction
+            ? "The PDF passed quarantine inspection and is waiting for bounded extraction or OCR."
           : conversion.explicitNarrationChoiceRequired
             ? "The current Generation Recipe is no longer eligible. Choose explicitly before speech can begin."
             : `The publication passed quarantine inspection. Folio is preparing its Narration Plan with ${conversion.voiceDisplayName ?? "the selected Narrator Voice"} at ${conversion.pace ? paceLabel(conversion.pace) : "Natural"} pace.`}</p>

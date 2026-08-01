@@ -1,6 +1,7 @@
 package dev.audiobook.platform.admission;
 
 import dev.audiobook.platform.narration.NarrationPlanWorkPublisher;
+import dev.audiobook.platform.workflow.AudiobookConversionService;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.util.List;
@@ -21,6 +22,7 @@ public class AdmissionOutboxRelayServiceImpl implements AdmissionOutboxRelayServ
     private final JdbcTemplate jdbcTemplate;
     private final InspectionWorkPublisher inspectionWorkPublisher;
     private final List<NarrationPlanWorkPublisher> narrationPlanWorkPublishers;
+    private final AudiobookConversionService audiobookConversionService;
     private final Clock clock;
 
     @Override
@@ -35,19 +37,10 @@ public class AdmissionOutboxRelayServiceImpl implements AdmissionOutboxRelayServ
                 """,
                 "UPDATE admission_outbox SET published_at = ? WHERE message_id = ? AND published_at IS NULL",
                 inspectionWorkPublisher::publish)
-                + narrationPlanWorkPublishers.stream().findFirst().map(publisher -> relay(
-                        """
-                        SELECT message_id, work_id
-                        FROM workflow.narration_plan_outbox
-                        WHERE published_at IS NULL
-                        ORDER BY created_at, message_id
-                        LIMIT ?
-                        """,
-                        """
-                        UPDATE workflow.narration_plan_outbox SET published_at = ?
-                        WHERE message_id = ? AND published_at IS NULL
-                        """,
-                        publisher::publish)).orElse(0);
+                + narrationPlanWorkPublishers.stream()
+                        .findFirst()
+                        .map(publisher -> audiobookConversionService.relayNarrationPlanWork(publisher::publish))
+                        .orElse(0);
     }
 
     private int relay(String selectionSql, String updateSql, BiConsumer<UUID, UUID> publisher) {

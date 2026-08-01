@@ -154,6 +154,9 @@ class NarrationPlanITest {
                 .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
         assertThat(outboxRelayService.relayPending()).isZero();
         assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
+        assertThat(conversionService.conversion(listenerId, conversionId).state())
+                .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
+        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
                         """
                         SELECT count(*) FROM workflow.narration_plan_work w
@@ -219,6 +222,7 @@ class NarrationPlanITest {
                 .isEqualTo(AudiobookConversionService.ConversionState.PREPARING);
 
         assertThat(narrationPlanJobService.processPending()).isEqualTo(1);
+        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
         assertThat(conversionService.conversion(listenerId, conversionId).state())
                 .isEqualTo(AudiobookConversionService.ConversionState.AWAITING_REVIEW);
     }
@@ -280,6 +284,7 @@ class NarrationPlanITest {
         }
 
         assertThat(narrationPlanJobService.processPending()).isZero();
+        assertThat(conversionService.applyNarrationPlanResults()).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
                         """
                         SELECT state || ':' || attempt_count

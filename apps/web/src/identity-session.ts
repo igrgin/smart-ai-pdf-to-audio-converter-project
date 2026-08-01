@@ -27,7 +27,7 @@ export interface Library {
 export interface AudiobookConversion {
   conversionId: string;
   state: "PREPARING" | "AWAITING_REVIEW" | "GENERATING";
-  reasonCode: "NARRATION_PLAN_PENDING" | "NARRATION_PLAN_REQUIRES_INTERVENTION" | "NARRATION_REVIEW_AVAILABLE" | "GENERATION_IN_PROGRESS";
+  reasonCode: "EXTRACTION_PENDING" | "NARRATION_PLAN_PENDING" | "NARRATION_PLAN_REQUIRES_INTERVENTION" | "NARRATION_REVIEW_AVAILABLE" | "GENERATION_IN_PROGRESS";
   allowedActions: AllowedAction[];
   version: number;
   recipeId?: string;

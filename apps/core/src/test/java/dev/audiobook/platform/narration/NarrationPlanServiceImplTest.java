@@ -54,7 +54,7 @@ class NarrationPlanServiceImplTest {
     }
 
     @Test
-    void relationalPlanReplayOnlyRepairsTheWorkflowTransition() {
+    void relationalPlanReplayDoesNotReadOrRewritePrivateAssets() {
         UUID listenerId = UUID.randomUUID();
         UUID conversionId = UUID.randomUUID();
         given(conversionService.conversion(listenerId, conversionId))
@@ -64,7 +64,6 @@ class NarrationPlanServiceImplTest {
 
         service.prepare(listenerId, conversionId, new ByteArrayInputStream(new byte[] {1}));
 
-        verify(conversionService).markNarrationPlanReady(listenerId, conversionId);
         verifyNoInteractions(interpreter, assetStore, identifierGenerator, clock);
     }
 

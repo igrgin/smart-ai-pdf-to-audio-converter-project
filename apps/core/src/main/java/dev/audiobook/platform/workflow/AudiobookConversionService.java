@@ -3,16 +3,25 @@ package dev.audiobook.platform.workflow;
 import dev.audiobook.platform.narration.NarrationSelectionService;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.BiConsumer;
 
 public interface AudiobookConversionService {
 
-    void createPreparing(UUID conversionId, UUID listenerId, UUID sourcePublicationId);
+    void createPreparing(
+            UUID conversionId,
+            UUID listenerId,
+            UUID sourcePublicationId,
+            PreparationReason preparationReason);
+
+    void scheduleNarrationPlan(UUID listenerId, UUID conversionId, UUID submissionId);
+
+    int relayNarrationPlanWork(BiConsumer<UUID, UUID> publisher);
+
+    int applyNarrationPlanResults();
 
     List<AudiobookConversion> conversions(UUID listenerId);
 
     AudiobookConversion conversion(UUID listenerId, UUID conversionId);
-
-    void markNarrationPlanReady(UUID listenerId, UUID conversionId);
 
     NarrationSelectionService.GenerationAuthorization beginSpeechGeneration(UUID listenerId, UUID conversionId);
 
@@ -46,6 +55,11 @@ public interface AudiobookConversionService {
         PREPARING,
         AWAITING_REVIEW,
         GENERATING
+    }
+
+    enum PreparationReason {
+        NARRATION_PLAN_PENDING,
+        EXTRACTION_PENDING
     }
 
     enum AllowedAction {

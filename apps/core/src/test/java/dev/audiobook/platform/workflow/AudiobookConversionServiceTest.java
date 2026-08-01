@@ -11,6 +11,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import dev.audiobook.platform.narration.NarrationSelectionService;
+import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
 import java.time.Clock;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,8 +23,10 @@ class AudiobookConversionServiceTest {
 
     private final JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
     private final NarrationSelectionService narrationSelectionService = mock(NarrationSelectionService.class);
+    private final PlatformIdentifierGenerator identifierGenerator = mock(PlatformIdentifierGenerator.class);
     private final AudiobookConversionService service =
-            new AudiobookConversionServiceImpl(jdbcTemplate, Clock.systemUTC(), narrationSelectionService);
+            new AudiobookConversionServiceImpl(
+                    jdbcTemplate, Clock.systemUTC(), narrationSelectionService, identifierGenerator);
     private final UUID listenerId = UUID.randomUUID();
     private final UUID conversionId = UUID.randomUUID();
     private final NarrationSelectionService.GenerationAuthorization authorization =
@@ -65,5 +68,12 @@ class AudiobookConversionServiceTest {
         assertThatThrownBy(() -> service.beginSpeechGeneration(listenerId, conversionId))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Audiobook Conversion cannot begin speech generation");
+    }
+
+    @Test
+    void appliesCompletedAndExhaustedNarrationPlanResultsInTheCore() {
+        given(jdbcTemplate.update(anyString())).willReturn(2, 1);
+
+        assertThat(service.applyNarrationPlanResults()).isEqualTo(3);
     }
 }

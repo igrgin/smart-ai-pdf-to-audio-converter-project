@@ -375,6 +375,14 @@ class PublicationSubmissionITest {
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT toolchain_version FROM inspection_result WHERE work_id = ?", String.class, workId))
                 .isEqualTo("qpdf-pdfbox-v1");
+        UUID conversionId = submissionService.submission(listenerId, creation.submissionId()).conversionId();
+        assertThat(audiobookConversionService.conversion(listenerId, conversionId).reasonCode())
+                .isEqualTo("EXTRACTION_PENDING");
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM workflow.narration_plan_work WHERE conversion_id = ?",
+                        Long.class,
+                        conversionId))
+                .isZero();
     }
 
     @Test

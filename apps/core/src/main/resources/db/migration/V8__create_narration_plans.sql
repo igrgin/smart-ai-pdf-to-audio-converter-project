@@ -7,6 +7,11 @@ ALTER TABLE workflow.audiobook_conversion
     CHECK (state IN ('PREPARING', 'AWAITING_REVIEW', 'GENERATING'));
 ALTER TABLE workflow.audiobook_conversion
     ADD COLUMN reason_code VARCHAR(64) NOT NULL DEFAULT 'NARRATION_PLAN_PENDING';
+UPDATE workflow.audiobook_conversion conversion
+SET reason_code = 'EXTRACTION_PENDING'
+FROM admission.source_publication publication
+WHERE publication.source_publication_id = conversion.source_publication_id
+  AND publication.media_type = 'application/pdf';
 ALTER TABLE workflow.audiobook_conversion
     ALTER COLUMN reason_code DROP DEFAULT;
 ALTER TABLE workflow.audiobook_conversion
@@ -55,6 +60,28 @@ CREATE TABLE workflow.narration_plan_outbox (
     published_at TIMESTAMPTZ
 );
 
+INSERT INTO workflow.narration_plan_work (
+    work_id, listener_id, conversion_id, submission_id, operation_key, state, created_at
+)
+SELECT
+    gen_random_uuid(), conversion.listener_id, conversion.conversion_id,
+    publication.submission_id, 'narration-plan:' || conversion.conversion_id,
+    'READY', conversion.created_at
+FROM workflow.audiobook_conversion conversion
+JOIN admission.source_publication publication
+  ON publication.source_publication_id = conversion.source_publication_id
+WHERE conversion.state = 'PREPARING'
+  AND publication.media_type = 'application/epub+zip'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO workflow.narration_plan_outbox (
+    message_id, work_id, message_type, schema_version, created_at
+)
+SELECT gen_random_uuid(), work.work_id, 'PREPARE_NARRATION_PLAN', 1, work.created_at
+FROM workflow.narration_plan_work work
+LEFT JOIN workflow.narration_plan_outbox outbox ON outbox.work_id = work.work_id
+WHERE outbox.work_id IS NULL;
+
 CREATE TABLE workflow.narration_plan_inbox (
     message_id UUID PRIMARY KEY,
     work_id UUID NOT NULL REFERENCES workflow.narration_plan_work(work_id),
@@ -77,7 +104,7 @@ BEGIN
         GRANT SELECT, UPDATE ON workflow.narration_plan_work TO folio_narration_worker;
         GRANT SELECT ON workflow.narration_plan_outbox TO folio_narration_worker;
         GRANT INSERT, SELECT ON workflow.narration_plan_inbox TO folio_narration_worker;
-        GRANT SELECT, UPDATE ON workflow.audiobook_conversion TO folio_narration_worker;
+        GRANT SELECT ON workflow.audiobook_conversion TO folio_narration_worker;
         GRANT INSERT, SELECT ON narration.narration_plan TO folio_narration_worker;
         EXECUTE $policy$
             CREATE POLICY narration_plan_work_worker_policy ON workflow.narration_plan_work

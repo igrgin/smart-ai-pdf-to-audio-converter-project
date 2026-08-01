@@ -130,29 +130,16 @@ public class NarrationPlanJobServiceImpl implements NarrationPlanJobService {
     }
 
     private void releaseAfterFailure(UUID workId, UUID messageId) {
-        transactions().executeWithoutResult(status -> {
-            jdbcTemplate.update(
-                    """
-                    UPDATE workflow.narration_plan_work
-                    SET state = CASE WHEN attempt_count >= ? THEN 'EXHAUSTED' ELSE 'READY' END,
-                        lease_owner = NULL, lease_expires_at = NULL
-                    WHERE work_id = ? AND state = 'CLAIMED' AND lease_owner = ?
-                    """,
-                    MAX_ATTEMPTS,
-                    workId,
-                    messageId);
-            jdbcTemplate.update(
-                    """
-                    UPDATE workflow.audiobook_conversion c
-                    SET reason_code = 'NARRATION_PLAN_REQUIRES_INTERVENTION', version = version + 1
-                    WHERE c.state = 'PREPARING' AND c.reason_code <> 'NARRATION_PLAN_REQUIRES_INTERVENTION'
-                      AND EXISTS (
-                        SELECT 1 FROM workflow.narration_plan_work w
-                        WHERE w.work_id = ? AND w.conversion_id = c.conversion_id AND w.state = 'EXHAUSTED'
-                      )
-                    """,
-                    workId);
-        });
+        transactions().executeWithoutResult(status -> jdbcTemplate.update(
+                """
+                UPDATE workflow.narration_plan_work
+                SET state = CASE WHEN attempt_count >= ? THEN 'EXHAUSTED' ELSE 'READY' END,
+                    lease_owner = NULL, lease_expires_at = NULL
+                WHERE work_id = ? AND state = 'CLAIMED' AND lease_owner = ?
+                """,
+                MAX_ATTEMPTS,
+                workId,
+                messageId));
     }
 
     private TransactionTemplate transactions() {
