@@ -394,8 +394,9 @@ describe("public sample", () => {
     );
   });
 
-  it("keeps EPUB bytes local until Create audiobook then shows the preparing conversion", async () => {
+  it("keeps PDF bytes local until Create audiobook then submits its detected media type", async () => {
     const calls: string[] = [];
+    let createBody: unknown;
     const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       calls.push(`${init?.method ?? "GET"} ${url}`);
@@ -443,6 +444,7 @@ describe("public sample", () => {
         });
       }
       if (url === "/api/v1/publication-submissions" && init?.method === "POST") {
+        createBody = JSON.parse(String(init.body));
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -497,10 +499,10 @@ describe("public sample", () => {
     fireEvent.click(await screen.findByRole("button", { name: /start a private audiobook/i }));
 
     expect(await screen.findByRole("button", { name: /select rowan/i })).toHaveAttribute("aria-pressed", "true");
-    const epub = new File(["epubdata"], "authorized.epub", { type: "application/epub+zip" });
-    fireEvent.change(screen.getByLabelText(/choose drm-free epub/i), { target: { files: [epub] } });
+    const pdf = new File(["pdfdata!"], "authorized.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/choose pdf or drm-free epub/i), { target: { files: [pdf] } });
 
-    expect(screen.getByText(/authorized\.epub stays on this device/i)).toBeVisible();
+    expect(screen.getByText(/authorized\.pdf stays on this device/i)).toBeVisible();
     expect(calls.filter((call) => call.includes("publication-submissions"))).toHaveLength(0);
 
     const dialog = screen.getByRole("dialog", { name: /create a private audiobook/i });
@@ -509,6 +511,7 @@ describe("public sample", () => {
 
     expect(await screen.findByText(/preparing your private audiobook/i)).toBeVisible();
     expect(calls).toContain("POST /api/v1/publication-submissions");
+    expect(createBody).toMatchObject({ mediaType: "application/pdf", byteLength: 8 });
     expect(calls).toContain(
       "PUT /api/v1/publication-submissions/01985f42-5f8d-7000-8000-000000000123/upload"
     );

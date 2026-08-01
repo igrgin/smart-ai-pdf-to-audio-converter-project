@@ -2,6 +2,7 @@ package dev.audiobook.platform;
 
 import dev.audiobook.platform.entitlement.EntitlementPolicyProperties;
 import dev.audiobook.platform.admission.AdmissionProperties;
+import dev.audiobook.platform.admission.InspectionProperties;
 import dev.audiobook.platform.status.PlatformBuildProperties;
 import dev.audiobook.platform.worker.WorkerProperties;
 import dev.audiobook.platform.identity.IdentitySecurityProperties;
@@ -13,6 +14,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication
 @EnableConfigurationProperties({
         AdmissionProperties.class,
+        InspectionProperties.class,
         EntitlementPolicyProperties.class,
         IdentitySecurityProperties.class,
         PlatformBuildProperties.class,

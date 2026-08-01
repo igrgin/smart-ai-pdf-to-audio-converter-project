@@ -10,6 +10,8 @@ RUN ./mvnw --batch-mode --no-transfer-progress -pl apps/core -am package -DskipT
 
 FROM eclipse-temurin:25-jre-alpine
 RUN apk upgrade --no-cache \
+    && apk add --no-cache clamav qpdf \
+    && freshclam --no-warnings \
     && addgroup -S platform \
     && adduser -S -G platform -u 10001 platform
 WORKDIR /app

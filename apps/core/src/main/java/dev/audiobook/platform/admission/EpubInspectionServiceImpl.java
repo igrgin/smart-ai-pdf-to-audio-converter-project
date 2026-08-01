@@ -4,7 +4,6 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Enumeration;
@@ -18,29 +17,29 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilderFactory;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
+import org.xml.sax.ErrorHandler;
+import org.xml.sax.SAXParseException;
 
 @Service
+@RequiredArgsConstructor
 public class EpubInspectionServiceImpl implements EpubInspectionService {
 
-    private static final long MAX_EXPANDED_BYTES = 1_073_741_824L;
-    private static final long MAX_XML_BYTES = 26_214_400L;
-    private static final int MAX_ENTRIES = 10_000;
     private static final Set<String> FONT_OBFUSCATION_ALGORITHMS = Set.of(
             "http://www.idpf.org/2008/embedding",
             "http://ns.adobe.com/pdf/enc#RC");
 
+    private final InspectionProperties properties;
+
     @Override
-    public Result inspect(InputStream publication) {
-        Path temporary = null;
+    public Result inspect(Path publication) {
         try {
-            temporary = Files.createTempFile("folio-inspection-", ".epub");
-            Files.copy(publication, temporary, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            return inspect(temporary);
+            return inspectArchive(publication);
         } catch (UnsafeArchiveException exception) {
             return Result.rejected("UNSAFE_ARCHIVE");
         } catch (ProtectedPublicationException exception) {
@@ -49,21 +48,13 @@ public class EpubInspectionServiceImpl implements EpubInspectionService {
             return Result.rejected("LIMIT_EXCEEDED");
         } catch (Exception exception) {
             return Result.rejected("INVALID_EPUB");
-        } finally {
-            if (temporary != null) {
-                try {
-                    Files.deleteIfExists(temporary);
-                } catch (IOException ignored) {
-                    // The reconciliation worker removes abandoned opaque inspection scratch files.
-                }
-            }
         }
     }
 
-    private Result inspect(Path publication) throws Exception {
+    private Result inspectArchive(Path publication) throws Exception {
         try (ZipFile epub = new ZipFile(publication.toFile(), StandardCharsets.UTF_8)) {
             List<? extends ZipEntry> entries = java.util.Collections.list(epub.entries());
-            validateArchive(entries);
+            validateArchive(epub, entries);
             ZipEntry first = entries.getFirst();
             if (!"mimetype".equals(first.getName()) || first.getMethod() != ZipEntry.STORED) {
                 return Result.rejected("INVALID_EPUB");
@@ -94,11 +85,11 @@ public class EpubInspectionServiceImpl implements EpubInspectionService {
         }
     }
 
-    private static void validateArchive(List<? extends ZipEntry> entries) {
+    private void validateArchive(ZipFile epub, List<? extends ZipEntry> entries) throws IOException {
         if (entries.isEmpty()) {
             throw new UnsafeArchiveException();
         }
-        if (entries.size() > MAX_ENTRIES) {
+        if (entries.size() > properties.maximumEpubEntries()) {
             throw new LimitExceededException();
         }
         long expanded = 0;
@@ -112,18 +103,46 @@ public class EpubInspectionServiceImpl implements EpubInspectionService {
             if (!names.add(normalized) || !folded.add(normalized.toLowerCase(Locale.ROOT))) {
                 throw new UnsafeArchiveException();
             }
-            if (entry.getSize() < 0) {
+            if (entry.getSize() < 0 || entry.getCompressedSize() < 0) {
                 throw new UnsafeArchiveException();
             }
-            expanded = Math.addExact(expanded, entry.getSize());
-            if (expanded > MAX_EXPANDED_BYTES) {
+            if (entry.getSize() > 0 && compressionRatioExceeded(entry)) {
                 throw new LimitExceededException();
+            }
+            try (InputStream input = epub.getInputStream(entry)) {
+                byte[] buffer = new byte[64 * 1024];
+                long entryBytes = 0;
+                int read;
+                while ((read = input.read(buffer)) >= 0) {
+                    if (read == 0) {
+                        continue;
+                    }
+                    entryBytes = Math.addExact(entryBytes, read);
+                    expanded = Math.addExact(expanded, read);
+                    if (entryBytes > properties.maximumEpubExpandedBytes()
+                            || expanded > properties.maximumEpubExpandedBytes()) {
+                        throw new LimitExceededException();
+                    }
+                }
+                if (entryBytes != entry.getSize()) {
+                    throw new UnsafeArchiveException();
+                }
             }
         }
     }
 
+    private boolean compressionRatioExceeded(ZipEntry entry) {
+        long compressed = Math.max(1, entry.getCompressedSize());
+        try {
+            return entry.getSize() > Math.multiplyExact(compressed, properties.maximumCompressionRatio());
+        } catch (ArithmeticException exception) {
+            return false;
+        }
+    }
+
     private static String normalizedPath(String path) {
-        if (path == null || path.isBlank() || path.startsWith("/") || path.contains("\\") || path.indexOf('\0') >= 0) {
+        if (path == null || path.isBlank() || path.startsWith("/") || path.contains("\\")
+                || path.codePoints().anyMatch(Character::isISOControl)) {
             throw new UnsafeArchiveException();
         }
         Path normalized = Path.of(path).normalize();
@@ -133,8 +152,8 @@ public class EpubInspectionServiceImpl implements EpubInspectionService {
         return normalized.toString().replace('\\', '/');
     }
 
-    private static Document parse(ZipFile epub, ZipEntry entry) throws Exception {
-        if (entry.getSize() > MAX_XML_BYTES) {
+    private Document parse(ZipFile epub, ZipEntry entry) throws Exception {
+        if (entry.getSize() > properties.maximumXmlBytes()) {
             throw new LimitExceededException();
         }
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
@@ -148,11 +167,28 @@ public class EpubInspectionServiceImpl implements EpubInspectionService {
         factory.setXIncludeAware(false);
         factory.setExpandEntityReferences(false);
         try (InputStream input = epub.getInputStream(entry)) {
-            byte[] xml = input.readNBytes(Math.toIntExact(MAX_XML_BYTES + 1));
-            if (xml.length > MAX_XML_BYTES) {
+            byte[] xml = input.readNBytes(Math.toIntExact(properties.maximumXmlBytes() + 1));
+            if (xml.length > properties.maximumXmlBytes()) {
                 throw new LimitExceededException();
             }
-            return factory.newDocumentBuilder().parse(new ByteArrayInputStream(xml));
+            var builder = factory.newDocumentBuilder();
+            builder.setErrorHandler(new ErrorHandler() {
+                @Override
+                public void warning(SAXParseException exception) throws SAXParseException {
+                    throw exception;
+                }
+
+                @Override
+                public void error(SAXParseException exception) throws SAXParseException {
+                    throw exception;
+                }
+
+                @Override
+                public void fatalError(SAXParseException exception) throws SAXParseException {
+                    throw exception;
+                }
+            });
+            return builder.parse(new ByteArrayInputStream(xml));
         }
     }
 
@@ -173,7 +209,7 @@ public class EpubInspectionServiceImpl implements EpubInspectionService {
                 .anyMatch(value -> value.equals("en") || value.startsWith("en-"));
     }
 
-    private static boolean hasReadableSpine(ZipFile epub, String packagePath, Document packageDocument) {
+    private boolean hasReadableSpine(ZipFile epub, String packagePath, Document packageDocument) throws Exception {
         Map<String, String> manifest = new HashMap<>();
         for (Element item : elements(packageDocument, "item")) {
             String id = item.getAttribute("id");
@@ -192,15 +228,17 @@ public class EpubInspectionServiceImpl implements EpubInspectionService {
                 return false;
             }
             String resource = normalizedPath(base + href.split("#", 2)[0]);
-            if (epub.getEntry(resource) == null) {
+            ZipEntry resourceEntry = epub.getEntry(resource);
+            if (resourceEntry == null) {
                 return false;
             }
+            parse(epub, resourceEntry);
             found = true;
         }
         return found;
     }
 
-    private static void validateEncryption(ZipFile epub) throws Exception {
+    private void validateEncryption(ZipFile epub) throws Exception {
         ZipEntry encryptionEntry = epub.getEntry("META-INF/encryption.xml");
         if (encryptionEntry == null) {
             return;
@@ -217,9 +255,11 @@ public class EpubInspectionServiceImpl implements EpubInspectionService {
             }
         }
         for (Element reference : references) {
-            String resource = reference.getAttribute("URI").toLowerCase(Locale.ROOT);
-            if (!(resource.endsWith(".otf") || resource.endsWith(".ttf") || resource.endsWith(".woff")
-                    || resource.endsWith(".woff2"))) {
+            String resource = normalizedPath(reference.getAttribute("URI").split("#", 2)[0]);
+            String folded = resource.toLowerCase(Locale.ROOT);
+            if (epub.getEntry(resource) == null
+                    || !(folded.endsWith(".otf") || folded.endsWith(".ttf") || folded.endsWith(".woff")
+                    || folded.endsWith(".woff2"))) {
                 throw new ProtectedPublicationException();
             }
         }

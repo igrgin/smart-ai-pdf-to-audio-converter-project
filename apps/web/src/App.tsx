@@ -24,7 +24,12 @@ import {
   type Library
 } from "./identity-session";
 import { fetchPlatformStatus, type PlatformStatus } from "./platform-status";
-import { submitAuthorizedEpub, type Submission, type TransferStage } from "./publication-submission";
+import {
+  publicationMediaType,
+  submitAuthorizedPublication,
+  type Submission,
+  type TransferStage
+} from "./publication-submission";
 import {
   confirmGenerationRecipe,
   fetchVoiceCatalog,
@@ -347,12 +352,9 @@ function CreateAudiobookDialog({
 
   const choose = (candidate?: File) => {
     if (!candidate) return;
-    const epub = candidate.name.toLowerCase().endsWith(".epub")
-      && (candidate.type === "" || candidate.type === "application/epub+zip")
-      && candidate.size > 0
-      && candidate.size <= 262_144_000;
-    setFile(epub ? candidate : null);
-    if (!epub) setStage("FAILED");
+    const supported = publicationMediaType(candidate) !== null;
+    setFile(supported ? candidate : null);
+    if (!supported) setStage("FAILED");
   };
 
   const create = async () => {
@@ -362,7 +364,7 @@ function CreateAudiobookDialog({
     try {
       const result = existingConversion
         ? { submissionId: "", state: "ADMITTED" as const, conversionId: existingConversion.conversionId }
-        : await submitAuthorizedEpub(file!, csrf, setStage);
+        : await submitAuthorizedPublication(file!, csrf, setStage);
       if (!existingConversion) setSubmission(result);
       if (result.state !== "ADMITTED" || !result.conversionId) throw new Error("Conversion is not ready for narration");
       setStage("CONFIRMING");
@@ -408,7 +410,7 @@ function CreateAudiobookDialog({
             <Sparkles size={24} />
             <h3>Preparing your private audiobook</h3>
             <p>
-              The EPUB passed quarantine inspection. {recipe?.voiceDisplayName} at {paceLabel(recipe?.pace ?? pace)} pace
+              The publication passed quarantine inspection. {recipe?.voiceDisplayName} at {paceLabel(recipe?.pace ?? pace)} pace
               is frozen for generation while Folio prepares its narration plan.
             </p>
             <span>Conversion {(recipe?.conversionId ?? submission?.conversionId)?.slice(0, 8)}</span>
@@ -416,7 +418,7 @@ function CreateAudiobookDialog({
         ) : (
           <>
             {!existingConversion && <label
-              className="epub-dropzone"
+              className="publication-dropzone"
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
@@ -424,11 +426,11 @@ function CreateAudiobookDialog({
               }}
             >
               <Upload size={24} />
-              <strong>Choose DRM-free EPUB</strong>
+              <strong>Choose PDF or DRM-free EPUB</strong>
               <span>or drop one file here · up to 250 MiB</span>
               <input
                 type="file"
-                accept=".epub,application/epub+zip"
+                accept=".pdf,.epub,application/pdf,application/epub+zip"
                 onChange={(event) => choose(event.target.files?.[0])}
                 disabled={busy}
               />
@@ -500,7 +502,7 @@ function CreateAudiobookDialog({
             </fieldset>
             {!existingConversion && <label className="attestation-check">
               <input type="checkbox" checked={attested} onChange={(event) => setAttested(event.target.checked)} disabled={busy} />
-              <span>I attest that I’m permitted to reproduce this DRM-free publication as a private audiobook.</span>
+              <span>I attest that I’m permitted to reproduce this publication as a private audiobook.</span>
             </label>}
             {!existingConversion && <p className="rights-note">Rights Attestation · terms rights-v1 · notice notice-v1</p>}
             {stage && <p className={`creation-status creation-status--${stage.toLowerCase()}`} aria-live="polite">{stageLabel(stage)}</p>}
@@ -529,11 +531,11 @@ function availabilityLabel(availability: NarratorVoice["availability"]): string 
 }
 
 function stageLabel(stage: TransferStage | "CONFIRMING" | "FAILED"): string {
-  if (stage === "HASHING") return "Checking the EPUB locally…";
+  if (stage === "HASHING") return "Checking the publication locally…";
   if (stage === "UPLOADING") return "Transferring to private quarantine…";
-  if (stage === "INSPECTING") return "Inspecting the DRM-free EPUB…";
+  if (stage === "INSPECTING") return "Inspecting the publication…";
   if (stage === "CONFIRMING") return "Freezing your exact Narrator Voice and Narration Pace…";
-  return "This EPUB could not be submitted. Check the file and try again.";
+  return "This publication could not be submitted. Check the file and try again.";
 }
 
 function EntitlementCard({ entitlement }: { entitlement: Library["conversionEntitlement"] }) {

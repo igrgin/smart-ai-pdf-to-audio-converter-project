@@ -1,6 +1,5 @@
 package dev.audiobook.platform.worker;
 
-import java.util.concurrent.CountDownLatch;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -15,6 +14,7 @@ import org.springframework.stereotype.Component;
 public class WorkerEntrypoint implements ApplicationRunner {
 
     private final WorkerProperties workerProperties;
+    private final InspectionWorkerService inspectionWorkerService;
 
     @Override
     public void run(ApplicationArguments arguments) throws InterruptedException {
@@ -23,8 +23,16 @@ public class WorkerEntrypoint implements ApplicationRunner {
         }
 
         log.info("worker_ready stage={}", workerProperties.stage());
-        if (workerProperties.idle()) {
-            new CountDownLatch(1).await();
-        }
+        do {
+            if (workerProperties.stage() == WorkerProperties.Stage.INSPECTION) {
+                int processed = inspectionWorkerService.runPending();
+                if (processed > 0) {
+                    log.info("inspection_batch_complete result_count={}", processed);
+                }
+            }
+            if (workerProperties.idle()) {
+                Thread.sleep(1_000);
+            }
+        } while (workerProperties.idle());
     }
 }

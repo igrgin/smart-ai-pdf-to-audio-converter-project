@@ -10,6 +10,7 @@ import dev.audiobook.platform.identity.ListenerIdentityService;
 import dev.audiobook.platform.identity.SignInProvider;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
 import dev.audiobook.platform.workflow.InspectionWorkflowService;
+import dev.audiobook.platform.worker.InspectionWorkerService;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -20,6 +21,9 @@ import java.util.UUID;
 import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -40,9 +44,17 @@ class PublicationSubmissionITest {
     private final AdmissionOutboxRelayService outboxRelayService;
     private final AudiobookConversionService audiobookConversionService;
     private final InspectionWorkflowService inspectionWorkflowService;
+    private final InspectionWorkerService inspectionWorkerService;
+    private final InspectionOutcomeRecordingService inspectionOutcomeRecordingService;
 
     @MockitoBean
     private InspectionWorkPublisher inspectionWorkPublisher;
+
+    @MockitoBean
+    private MalwareScanner malwareScanner;
+
+    @MockitoBean
+    private QpdfValidationService qpdfValidationService;
 
     @Autowired
     PublicationSubmissionITest(
@@ -52,7 +64,9 @@ class PublicationSubmissionITest {
             JdbcTemplate jdbcTemplate,
             AdmissionOutboxRelayService outboxRelayService,
             AudiobookConversionService audiobookConversionService,
-            InspectionWorkflowService inspectionWorkflowService) {
+            InspectionWorkflowService inspectionWorkflowService,
+            InspectionWorkerService inspectionWorkerService,
+            InspectionOutcomeRecordingService inspectionOutcomeRecordingService) {
         this.submissionService = submissionService;
         this.entitlementService = entitlementService;
         this.listenerIdentityService = listenerIdentityService;
@@ -60,6 +74,16 @@ class PublicationSubmissionITest {
         this.outboxRelayService = outboxRelayService;
         this.audiobookConversionService = audiobookConversionService;
         this.inspectionWorkflowService = inspectionWorkflowService;
+        this.inspectionWorkerService = inspectionWorkerService;
+        this.inspectionOutcomeRecordingService = inspectionOutcomeRecordingService;
+    }
+
+    @BeforeEach
+    void cleanSystemBoundaries() {
+        org.mockito.Mockito.when(malwareScanner.scan(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(MalwareScanner.Result.CLEAN);
+        org.mockito.Mockito.when(qpdfValidationService.validate(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(QpdfValidationService.Result.VALID);
     }
 
     @Test
@@ -115,28 +139,31 @@ class PublicationSubmissionITest {
         assertThat(inspectionWorkflowService.acceptDelivery(messageId, workId).duplicate()).isFalse();
         assertThat(inspectionWorkflowService.acceptDelivery(messageId, workId).duplicate()).isTrue();
 
-        PublicationSubmissionService.Inspection inspected = submissionService.inspect(
-                new PublicationSubmissionService.InspectionCommand(
+        InspectionOutcomeRecordingService.Inspection inspected = inspectionOutcomeRecordingService.inspect(
+                new InspectionOutcomeRecordingService.InspectionCommand(
                         workId,
                         "inspection-worker-1",
                         Instant.now().plusSeconds(60),
                         "inspect-" + workId));
-        PublicationSubmissionService.Inspection inspectedReplay = submissionService.inspect(
-                new PublicationSubmissionService.InspectionCommand(
+        InspectionOutcomeRecordingService.Inspection inspectedReplay = inspectionOutcomeRecordingService.inspect(
+                new InspectionOutcomeRecordingService.InspectionCommand(
                         workId,
                         "inspection-worker-1",
                         Instant.now().plusSeconds(60),
                         "inspect-" + workId));
 
-        assertThat(inspected.outcome()).isEqualTo(PublicationSubmissionService.InspectionOutcome.ADMITTED);
-        assertThat(inspected.sourcePublicationId()).isNotNull();
-        assertThat(inspected.conversionId()).isNotNull();
+        assertThat(inspected.outcome()).isEqualTo(InspectionOutcomeRecordingService.InspectionOutcome.ADMITTED);
         assertThat(inspectedReplay.replayed()).isTrue();
+        assertThat(submissionService.applyInspectionResults()).isEqualTo(1);
         assertThat(submissionService.submission(listenerId, creation.submissionId()).state())
                 .isEqualTo(PublicationSubmissionService.SubmissionState.ADMITTED);
+        UUID conversionId = jdbcTemplate.queryForObject(
+                "SELECT planned_conversion_id FROM publication_submission WHERE submission_id = ?",
+                UUID.class,
+                creation.submissionId());
         assertThat(audiobookConversionService.conversions(listenerId))
                 .containsExactly(new AudiobookConversionService.AudiobookConversion(
-                        inspected.conversionId(),
+                        conversionId,
                         AudiobookConversionService.ConversionState.PREPARING));
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM source_publication WHERE submission_id = ?",
@@ -233,15 +260,16 @@ class PublicationSubmissionITest {
                 "SELECT message_id FROM admission_outbox WHERE work_id = ?", UUID.class, workId);
         inspectionWorkflowService.acceptDelivery(messageId, workId);
 
-        PublicationSubmissionService.Inspection inspection = submissionService.inspect(
-                new PublicationSubmissionService.InspectionCommand(
+        InspectionOutcomeRecordingService.Inspection inspection = inspectionOutcomeRecordingService.inspect(
+                new InspectionOutcomeRecordingService.InspectionCommand(
                         workId,
                         "inspection-worker-rejection",
                         Instant.now().plusSeconds(60),
                         "inspect-" + workId));
 
-        assertThat(inspection.outcome()).isEqualTo(PublicationSubmissionService.InspectionOutcome.REJECTED);
+        assertThat(inspection.outcome()).isEqualTo(InspectionOutcomeRecordingService.InspectionOutcome.REJECTED);
         assertThat(inspection.reasonCode()).isEqualTo("UNSUPPORTED_LANGUAGE");
+        assertThat(submissionService.applyInspectionResults()).isEqualTo(1);
         assertThat(entitlementService.allowance(rejectedListener).reservedCharacters()).isZero();
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM source_publication WHERE submission_id = ?",
@@ -303,12 +331,92 @@ class PublicationSubmissionITest {
                 java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(1),
                 workId);
 
-        assertThat(submissionService.inspect(new PublicationSubmissionService.InspectionCommand(
+        assertThat(inspectionOutcomeRecordingService.inspect(new InspectionOutcomeRecordingService.InspectionCommand(
                         workId,
                         "contending-worker",
                         Instant.now().plusSeconds(60),
                         "inspect-" + workId)).outcome())
-                .isEqualTo(PublicationSubmissionService.InspectionOutcome.LEASED_BY_ANOTHER_WORKER);
+                .isEqualTo(InspectionOutcomeRecordingService.InspectionOutcome.LEASED_BY_ANOTHER_WORKER);
+    }
+
+    @Test
+    void admittedPdfPersistsItsDetectedFormatAndBoundedToolchain() throws Exception {
+        UUID listenerId = entitledListener("pdf");
+        byte[] pdf = validPdf();
+        PublicationSubmissionService.Creation creation = submissionService.create(
+                createCommand(listenerId, "application/pdf", pdf.length, sha256(pdf), "pdf-create"));
+        PublicationSubmissionService.UploadProgress uploaded = submissionService.upload(
+                upload(creation, 0, pdf.length, pdf));
+        submissionService.confirm(new PublicationSubmissionService.ConfirmCommand(
+                listenerId,
+                creation.submissionId(),
+                uploaded.storageGeneration(),
+                pdf.length,
+                sha256(pdf),
+                "pdf-confirm"));
+        UUID workId = jdbcTemplate.queryForObject(
+                "SELECT work_id FROM inspection_work WHERE submission_id = ?", UUID.class, creation.submissionId());
+        UUID messageId = jdbcTemplate.queryForObject(
+                "SELECT message_id FROM admission_outbox WHERE work_id = ?", UUID.class, workId);
+        inspectionWorkflowService.acceptDelivery(messageId, workId);
+
+        assertThat(inspectionWorkerService.runPending()).isEqualTo(1);
+        assertThat(submissionService.applyInspectionResults()).isEqualTo(1);
+
+        assertThat(submissionService.submission(listenerId, creation.submissionId()).state())
+                .isEqualTo(PublicationSubmissionService.SubmissionState.ADMITTED);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT media_type FROM source_publication WHERE submission_id = ?",
+                String.class,
+                creation.submissionId())).isEqualTo("application/pdf");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT toolchain_version FROM inspection_result WHERE work_id = ?", String.class, workId))
+                .isEqualTo("qpdf-pdfbox-v1");
+    }
+
+    @Test
+    void orphanedInspectionAttemptsFailClosedAfterTheConfiguredRetryLimit() throws Exception {
+        UUID listenerId = entitledListener("orphan");
+        byte[] epub = validEnglishEpub();
+        PublicationSubmissionService.Creation creation = submissionService.create(
+                createCommand(listenerId, epub.length, sha256(epub), "orphan-create"));
+        PublicationSubmissionService.UploadProgress uploaded = submissionService.upload(
+                upload(creation, 0, epub.length, epub));
+        submissionService.confirm(new PublicationSubmissionService.ConfirmCommand(
+                listenerId,
+                creation.submissionId(),
+                uploaded.storageGeneration(),
+                epub.length,
+                sha256(epub),
+                "orphan-confirm"));
+        UUID workId = jdbcTemplate.queryForObject(
+                "SELECT work_id FROM inspection_work WHERE submission_id = ?", UUID.class, creation.submissionId());
+        UUID messageId = jdbcTemplate.queryForObject(
+                "SELECT message_id FROM admission_outbox WHERE work_id = ?", UUID.class, workId);
+        inspectionWorkflowService.acceptDelivery(messageId, workId);
+
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            assertThat(inspectionWorkflowService.claim(
+                            workId,
+                            "crashed-worker-" + attempt,
+                            Instant.now().plusSeconds(30),
+                            "inspect-" + workId)
+                    .status()).isEqualTo(InspectionWorkflowService.ClaimStatus.CLAIMED);
+            jdbcTemplate.update(
+                    "UPDATE inspection_work SET lease_expires_at = ? WHERE work_id = ?",
+                    java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1),
+                    workId);
+        }
+
+        InspectionOutcomeRecordingService.Inspection inspection = inspectionOutcomeRecordingService.inspect(
+                new InspectionOutcomeRecordingService.InspectionCommand(
+                        workId, "recovery-worker", Instant.now().plusSeconds(30), "inspect-" + workId));
+
+        assertThat(inspection.outcome()).isEqualTo(InspectionOutcomeRecordingService.InspectionOutcome.REJECTED);
+        assertThat(inspection.reasonCode()).isEqualTo("INSPECTION_RETRIES_EXHAUSTED");
+        assertThat(submissionService.applyInspectionResults()).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT attempt_count FROM inspection_work WHERE work_id = ?", Integer.class, workId)).isEqualTo(3);
     }
 
     private UUID entitledListener(String suffix) {
@@ -328,9 +436,14 @@ class PublicationSubmissionITest {
 
     private static PublicationSubmissionService.CreateCommand createCommand(
             UUID listenerId, long byteLength, String digest, String operation) {
+        return createCommand(listenerId, "application/epub+zip", byteLength, digest, operation);
+    }
+
+    private static PublicationSubmissionService.CreateCommand createCommand(
+            UUID listenerId, String mediaType, long byteLength, String digest, String operation) {
         return new PublicationSubmissionService.CreateCommand(
                 listenerId,
-                "application/epub+zip",
+                mediaType,
                 byteLength,
                 digest,
                 "rights-v1",
@@ -354,6 +467,15 @@ class PublicationSubmissionITest {
 
     private static byte[] validEnglishEpub() throws Exception {
         return epub("en");
+    }
+
+    private static byte[] validPdf() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (PDDocument document = new PDDocument()) {
+            document.addPage(new PDPage());
+            document.save(bytes);
+        }
+        return bytes.toByteArray();
     }
 
     private static byte[] epub(String language) throws Exception {

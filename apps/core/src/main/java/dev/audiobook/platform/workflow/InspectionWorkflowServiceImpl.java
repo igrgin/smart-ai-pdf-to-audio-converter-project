@@ -1,10 +1,11 @@
 package dev.audiobook.platform.workflow;
 
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
+import dev.audiobook.platform.admission.InspectionProperties;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
-import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -18,6 +19,7 @@ public class InspectionWorkflowServiceImpl implements InspectionWorkflowService 
     private final JdbcTemplate jdbcTemplate;
     private final Clock identityClock;
     private final PlatformIdentifierGenerator identifierGenerator;
+    private final InspectionProperties inspectionProperties;
 
     @Override
     @Transactional
@@ -73,80 +75,30 @@ public class InspectionWorkflowServiceImpl implements InspectionWorkflowService 
     @Override
     @Transactional
     public Claim claim(UUID workId, String workerId, Instant leaseUntil, String operationKey) {
-        StoredWork work = lock(workId);
-        if (!work.operationKey().equals(operationKey)) {
-            throw new IllegalArgumentException("Inspection operation does not match its durable work");
-        }
-        if (work.completed()) {
-            return new Claim(work.submissionId(), ClaimStatus.COMPLETED);
-        }
-        Integer accepted = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM inspection_inbox WHERE work_id = ?",
-                Integer.class,
-                workId);
-        if (accepted == null || accepted == 0) {
-            throw new IllegalStateException("Inspection delivery has not been accepted");
-        }
-        Instant now = identityClock.instant();
-        if (work.leaseExpiresAt() != null
-                && work.leaseExpiresAt().isAfter(now)
-                && !workerId.equals(work.leaseOwner())) {
-            return new Claim(work.submissionId(), ClaimStatus.LEASED_BY_ANOTHER_WORKER);
-        }
-        jdbcTemplate.update(
-                """
-                UPDATE inspection_work SET state = 'LEASED', lease_owner = ?, lease_expires_at = ?
-                WHERE work_id = ?
-                """,
+        return jdbcTemplate.queryForObject(
+                "SELECT submission_id, claim_status FROM workflow.claim_inspection(?, ?, ?, ?, ?)",
+                (resultSet, row) -> new Claim(
+                        resultSet.getObject("submission_id", UUID.class),
+                        ClaimStatus.valueOf(resultSet.getString("claim_status"))),
+                workId,
                 workerId,
                 Timestamp.from(leaseUntil),
-                workId);
-        return new Claim(work.submissionId(), ClaimStatus.CLAIMED);
+                operationKey,
+                inspectionProperties.maximumAttempts());
     }
 
     @Override
-    @Transactional
-    public boolean complete(UUID workId, String workerId) {
-        StoredWork work = lock(workId);
-        if (work.completed()) {
-            return false;
+    public List<PendingInspection> pending(Instant availableAt, int limit) {
+        if (availableAt == null || limit <= 0 || limit > 100) {
+            throw new IllegalArgumentException("Pending inspection query is outside the allowed range");
         }
-        if (!workerId.equals(work.leaseOwner())) {
-            throw new IllegalStateException("Inspection lease was lost");
-        }
-        jdbcTemplate.update(
-                """
-                UPDATE inspection_work
-                SET state = 'COMPLETED', lease_owner = NULL, lease_expires_at = NULL, completed_at = ?
-                WHERE work_id = ?
-                """,
-                Timestamp.from(identityClock.instant()),
-                workId);
-        return true;
+        return jdbcTemplate.query(
+                "SELECT work_id, operation_key FROM workflow.pending_inspections(?, ?)",
+                (resultSet, row) -> new PendingInspection(
+                        resultSet.getObject("work_id", UUID.class),
+                        resultSet.getString("operation_key")),
+                Timestamp.from(availableAt),
+                limit);
     }
 
-    private StoredWork lock(UUID workId) {
-        return jdbcTemplate.queryForObject(
-                """
-                SELECT submission_id, operation_key, state, lease_owner, lease_expires_at
-                FROM inspection_work WHERE work_id = ? FOR UPDATE
-                """,
-                (resultSet, row) -> new StoredWork(
-                        resultSet.getObject("submission_id", UUID.class),
-                        resultSet.getString("operation_key"),
-                        "COMPLETED".equals(resultSet.getString("state")),
-                        resultSet.getString("lease_owner"),
-                        resultSet.getObject("lease_expires_at", OffsetDateTime.class) == null
-                                ? null
-                                : resultSet.getObject("lease_expires_at", OffsetDateTime.class).toInstant()),
-                workId);
-    }
-
-    private record StoredWork(
-            UUID submissionId,
-            String operationKey,
-            boolean completed,
-            String leaseOwner,
-            Instant leaseExpiresAt) {
-    }
 }

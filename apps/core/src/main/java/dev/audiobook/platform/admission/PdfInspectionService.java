@@ -2,7 +2,7 @@ package dev.audiobook.platform.admission;
 
 import java.nio.file.Path;
 
-public interface EpubInspectionService {
+public interface PdfInspectionService {
 
     Result inspect(Path publication);
 

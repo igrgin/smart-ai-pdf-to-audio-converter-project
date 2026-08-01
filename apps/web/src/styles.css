@@ -143,10 +143,10 @@ footer { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 26px 0 
 .recovery-link { margin: 20px 0 0; padding: 0; border: 0; color: var(--accent); background: transparent; font: inherit; font-size: .76rem; font-weight: 650; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
 .create-dialog { width: min(760px, 100%); max-height: min(92vh, 900px); overflow-y: auto; }
 .create-dialog h2 { margin: 13px 0 24px; font-family: Georgia, serif; font-size: 2rem; font-weight: 500; letter-spacing: -.035em; }
-.epub-dropzone { min-height: 170px; padding: 30px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; border: 1px dashed color-mix(in srgb, var(--accent) 65%, var(--line)); border-radius: 14px; color: var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent); cursor: pointer; text-align: center; }
-.epub-dropzone strong { color: var(--ink); }
-.epub-dropzone span { color: var(--muted); font-size: .75rem; }
-.epub-dropzone input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.publication-dropzone { min-height: 170px; padding: 30px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; border: 1px dashed color-mix(in srgb, var(--accent) 65%, var(--line)); border-radius: 14px; color: var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent); cursor: pointer; text-align: center; }
+.publication-dropzone strong { color: var(--ink); }
+.publication-dropzone span { color: var(--muted); font-size: .75rem; }
+.publication-dropzone input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .local-file { margin: 14px 0; color: var(--muted); font-size: .76rem; line-height: 1.5; overflow-wrap: anywhere; }
 .narrator-choice { margin-top: 24px; }
 .choice-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
