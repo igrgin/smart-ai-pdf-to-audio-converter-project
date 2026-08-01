@@ -66,6 +66,9 @@ values listed in `.env.example`; see
 [docs/operations/zitadel-identity.md](docs/operations/zitadel-identity.md) for the broker policy and
 callback contract.
 
+Stripe sandbox webhook and Test Clock verification is documented in
+[docs/operations/stripe-demonstration-subscription.md](docs/operations/stripe-demonstration-subscription.md).
+
 All credentials in `compose.yaml` are explicit local-only values. Production configuration uses
 runtime environment variables and Secret Manager; `.env` files are ignored.
 

@@ -47,6 +47,12 @@ server:
         secure: false
 
 platform:
+  demonstration-subscription:
+    webhook-secret: whsec_test_webhook
+    monthly-price-id: price_folio_demo_monthly
+    monthly-grant-characters: 500000
+    signature-tolerance: 5m
+    projector-enabled: true
   narration:
     working-asset-path: ${java.io.tmpdir}/folio-working-tests/narration-plans
     working-bucket: local-working-test

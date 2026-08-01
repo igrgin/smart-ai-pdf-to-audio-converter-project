@@ -12,6 +12,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 final class SameOriginFilter extends OncePerRequestFilter {
 
+    private static final String STRIPE_EVENT_PATH = "/api/v1/integrations/stripe/events";
+
     private static final Set<String> SAFE_METHODS = Set.of(
             HttpMethod.GET.name(), HttpMethod.HEAD.name(), HttpMethod.OPTIONS.name(), HttpMethod.TRACE.name());
 
@@ -26,7 +28,9 @@ final class SameOriginFilter extends OncePerRequestFilter {
             HttpServletRequest request,
             HttpServletResponse response,
             FilterChain filterChain) throws ServletException, IOException {
-        if (request.getRequestURI().startsWith("/api/") && !SAFE_METHODS.contains(request.getMethod())) {
+        if (request.getRequestURI().startsWith("/api/")
+                && !STRIPE_EVENT_PATH.equals(request.getRequestURI())
+                && !SAFE_METHODS.contains(request.getMethod())) {
             String origin = request.getHeader("Origin");
             if (!allowedOrigin.equals(origin)) {
                 response.sendError(HttpServletResponse.SC_FORBIDDEN);

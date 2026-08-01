@@ -47,6 +47,20 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
         Instant validUntil = validFrom.plus(properties.freeGrantValidity());
         jdbcTemplate.update(
                 """
+                INSERT INTO conversion_entitlement_grant (
+                    grant_id, listener_id, grant_kind, evidence_reference,
+                    granted_characters, valid_from, valid_until, created_at
+                ) VALUES (?, ?, 'FREE', ?, ?, ?, ?, ?)
+                """,
+                grantId,
+                listenerId,
+                approval,
+                properties.freeGrantCharacters(),
+                databaseTime(validFrom),
+                databaseTime(validUntil),
+                databaseTime(validFrom));
+        jdbcTemplate.update(
+                """
                 INSERT INTO free_conversion_grant (
                     grant_id, listener_id, approval_reference, operation_key,
                     granted_characters, valid_from, valid_until, created_at
@@ -82,37 +96,92 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
     @Transactional(readOnly = true)
     public Allowance allowance(UUID listenerId) {
         Objects.requireNonNull(listenerId, "listenerId");
+        EntitlementGrant activeGrant = findActiveGrant(listenerId, clock.instant());
+        if (activeGrant != null) {
+            return allowance(activeGrant, false);
+        }
+        EntitlementGrant latestGrant = findLatestGrant(listenerId);
+        if (latestGrant == null) {
+            return new Allowance(AllowanceStatus.NO_GRANT, 0, 0, 0, 0, "NO_GRANT");
+        }
+        return allowance(latestGrant, true);
+    }
+
+    private Allowance allowance(EntitlementGrant grant, boolean inactive) {
         return jdbcTemplate.query(
                 """
-                SELECT g.granted_characters, g.valid_until,
+                SELECT g.granted_characters,
                        COALESCE(SUM(e.available_delta), 0) AS available_characters,
                        COALESCE(SUM(e.reserved_delta), 0) AS reserved_characters,
-                       COALESCE(SUM(e.committed_delta), 0) AS committed_characters,
-                       COUNT(*) FILTER (WHERE e.entry_type = 'EXPIRY') AS expiry_count
-                FROM free_conversion_grant g
+                       COALESCE(SUM(e.committed_delta), 0) AS committed_characters
+                FROM conversion_entitlement_grant g
                 JOIN character_entitlement_ledger_entry e ON e.grant_id = g.grant_id
-                WHERE g.listener_id = ?
-                GROUP BY g.granted_characters, g.valid_until
+                WHERE g.grant_id = ?
+                GROUP BY g.granted_characters
                 """,
                 resultSet -> {
-                    if (!resultSet.next()) {
-                        return new Allowance(AllowanceStatus.NO_GRANT, 0, 0, 0, 0, "NO_GRANT");
-                    }
+                    resultSet.next();
                     long granted = resultSet.getLong("granted_characters");
                     long available = resultSet.getLong("available_characters");
                     long reserved = resultSet.getLong("reserved_characters");
                     long committed = resultSet.getLong("committed_characters");
-                    Instant validUntil = resultSet.getObject("valid_until", OffsetDateTime.class).toInstant();
-                    if (resultSet.getLong("expiry_count") > 0 || !clock.instant().isBefore(validUntil)) {
-                        return new Allowance(AllowanceStatus.EXPIRED, granted, 0, reserved, committed, "GRANT_EXPIRED");
+                    if (inactive) {
+                        return new Allowance(
+                                AllowanceStatus.EXPIRED,
+                                granted,
+                                0,
+                                reserved,
+                                committed,
+                                "GRANT_EXPIRED",
+                                source(grant),
+                                subscriptionStatus(grant));
                     }
                     if (available <= 0) {
                         return new Allowance(
-                                AllowanceStatus.EXHAUSTED, granted, 0, reserved, committed, "ALLOWANCE_EXHAUSTED");
+                                AllowanceStatus.EXHAUSTED,
+                                granted,
+                                0,
+                                reserved,
+                                committed,
+                                "ALLOWANCE_EXHAUSTED",
+                                source(grant),
+                                subscriptionStatus(grant));
                     }
-                    return new Allowance(AllowanceStatus.AVAILABLE, granted, available, reserved, committed, null);
+                    return new Allowance(
+                            AllowanceStatus.AVAILABLE,
+                            granted,
+                            available,
+                            reserved,
+                            committed,
+                            null,
+                            source(grant),
+                            subscriptionStatus(grant));
                 },
-                listenerId);
+                grant.grantId());
+    }
+
+    private EntitlementSource source(EntitlementGrant grant) {
+        return "DEMONSTRATION_SUBSCRIPTION".equals(grant.grantKind())
+                ? EntitlementSource.DEMONSTRATION_SUBSCRIPTION
+                : EntitlementSource.FREE;
+    }
+
+    private DemonstrationSubscriptionStatus subscriptionStatus(EntitlementGrant grant) {
+        if (!"DEMONSTRATION_SUBSCRIPTION".equals(grant.grantKind())) {
+            return null;
+        }
+        return jdbcTemplate.query(
+                """
+                SELECT s.subscription_status
+                FROM demonstration_subscription s
+                JOIN demonstration_subscription_invoice_grant i
+                  ON i.stripe_subscription_id = s.stripe_subscription_id
+                WHERE i.grant_id = ?
+                """,
+                resultSet -> resultSet.next()
+                        ? DemonstrationSubscriptionStatus.valueOf(resultSet.getString("subscription_status"))
+                        : null,
+                grant.grantId());
     }
 
     @Override
@@ -127,12 +196,14 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
         }
 
         Instant now = clock.instant();
-        FreeGrant grant = findGrantByListener(admission.listenerId());
+        EntitlementGrant grant = findActiveGrant(admission.listenerId(), now);
         if (grant == null) {
-            return deny(admission, AdmissionDenial.NO_GRANT, now);
-        }
-        if (!now.isBefore(grant.validUntil())) {
-            return deny(admission, AdmissionDenial.GRANT_EXPIRED, now);
+            return deny(
+                    admission,
+                    findLatestGrant(admission.listenerId()) == null
+                            ? AdmissionDenial.NO_GRANT
+                            : AdmissionDenial.GRANT_EXPIRED,
+                    now);
         }
         Allowance currentAllowance = allowance(admission.listenerId());
         if (currentAllowance.status() == AllowanceStatus.EXPIRED) {
@@ -250,7 +321,7 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
         }
 
         Instant now = clock.instant();
-        long characterRelease = now.isBefore(reservation.grantValidUntil())
+        long characterRelease = now.isBefore(reservation.grantValidUntil()) && !isGrantRevoked(reservation.grantId())
                 ? reservation.reservedCharacters() - request.committedCharacters()
                 : 0;
         jdbcTemplate.update(
@@ -344,7 +415,7 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
         if (grant == null) {
             throw new IllegalStateException("Listener has no free Conversion Entitlement");
         }
-        Allowance current = allowance(request.listenerId());
+        GrantBalance current = grantBalance(grant.grantId());
         if (current.availableCharacters() + request.availableCharacterDelta() < 0) {
             throw new IllegalArgumentException("Correction cannot make available characters negative");
         }
@@ -396,8 +467,8 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
         if (grant == null) {
             throw new IllegalStateException("Listener has no free Conversion Entitlement");
         }
-        Allowance current = allowance(listenerId);
-        if (current.status() == AllowanceStatus.EXPIRED) {
+        GrantBalance current = grantBalance(grant.grantId());
+        if (current.expired()) {
             throw new IllegalStateException("Free Conversion Entitlement is already expired");
         }
 
@@ -483,9 +554,10 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
     private FreeGrant findGrant(String predicate, Object value) {
         return jdbcTemplate.query(
                 """
-                SELECT grant_id, granted_characters, valid_from, valid_until
-                FROM free_conversion_grant
-                WHERE %s
+                SELECT f.grant_id, g.granted_characters, g.valid_from, g.valid_until
+                FROM free_conversion_grant f
+                JOIN conversion_entitlement_grant g ON g.grant_id = f.grant_id
+                WHERE f.%s
                 """.formatted(predicate),
                 resultSet -> resultSet.next()
                         ? new FreeGrant(
@@ -496,6 +568,78 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
                                 false)
                         : null,
                 value);
+    }
+
+    private EntitlementGrant findActiveGrant(UUID listenerId, Instant now) {
+        return jdbcTemplate.query(
+                """
+                SELECT g.grant_id, g.grant_kind, g.granted_characters, g.valid_from, g.valid_until
+                FROM conversion_entitlement_grant g
+                WHERE g.listener_id = ? AND g.valid_from <= ? AND ? < g.valid_until
+                  AND NOT EXISTS (
+                      SELECT 1 FROM demonstration_subscription_grant_adjustment a
+                      WHERE a.grant_id = g.grant_id
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM character_entitlement_ledger_entry e
+                      WHERE e.grant_id = g.grant_id AND e.entry_type = 'EXPIRY'
+                  )
+                ORDER BY CASE g.grant_kind WHEN 'DEMONSTRATION_SUBSCRIPTION' THEN 0 ELSE 1 END,
+                         g.valid_from DESC
+                LIMIT 1
+                """,
+                resultSet -> resultSet.next() ? entitlementGrant(resultSet) : null,
+                listenerId,
+                databaseTime(now),
+                databaseTime(now));
+    }
+
+    private EntitlementGrant findLatestGrant(UUID listenerId) {
+        return jdbcTemplate.query(
+                """
+                SELECT grant_id, grant_kind, granted_characters, valid_from, valid_until
+                FROM conversion_entitlement_grant
+                WHERE listener_id = ?
+                ORDER BY valid_from DESC
+                LIMIT 1
+                """,
+                resultSet -> resultSet.next() ? entitlementGrant(resultSet) : null,
+                listenerId);
+    }
+
+    private static EntitlementGrant entitlementGrant(java.sql.ResultSet resultSet) throws java.sql.SQLException {
+        return new EntitlementGrant(
+                resultSet.getObject("grant_id", UUID.class),
+                resultSet.getString("grant_kind"),
+                resultSet.getLong("granted_characters"),
+                resultSet.getObject("valid_from", OffsetDateTime.class).toInstant(),
+                resultSet.getObject("valid_until", OffsetDateTime.class).toInstant());
+    }
+
+    private GrantBalance grantBalance(UUID grantId) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT COALESCE(SUM(available_delta), 0),
+                       COALESCE(SUM(reserved_delta), 0),
+                       COALESCE(SUM(committed_delta), 0),
+                       COUNT(*) FILTER (WHERE entry_type = 'EXPIRY') > 0
+                FROM character_entitlement_ledger_entry
+                WHERE grant_id = ?
+                """,
+                (resultSet, rowNumber) -> new GrantBalance(
+                        resultSet.getLong(1),
+                        resultSet.getLong(2),
+                        resultSet.getLong(3),
+                        resultSet.getBoolean(4)),
+                grantId);
+    }
+
+    private boolean isGrantRevoked(UUID grantId) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM demonstration_subscription_grant_adjustment WHERE grant_id = ?",
+                Integer.class,
+                grantId);
+        return count != null && count > 0;
     }
 
     private Reservation findReservation(UUID reservationId) {
@@ -518,7 +662,7 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
                        c.reserved_characters, p.provider, p.generation_recipe_reference,
                        p.rate_card_version, p.reserved_cost_micros
                 FROM character_totals c
-                JOIN free_conversion_grant g ON g.grant_id = c.grant_id
+                JOIN conversion_entitlement_grant g ON g.grant_id = c.grant_id
                 JOIN provider_totals p ON p.reservation_id = c.reservation_id
                 """,
                 resultSet -> resultSet.next()
@@ -708,5 +852,20 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
             String recipeReference,
             String rateCardVersion,
             long reservedCostMicros) {
+    }
+
+    private record EntitlementGrant(
+            UUID grantId,
+            String grantKind,
+            long grantedCharacters,
+            Instant validFrom,
+            Instant validUntil) {
+    }
+
+    private record GrantBalance(
+            long availableCharacters,
+            long reservedCharacters,
+            long committedCharacters,
+            boolean expired) {
     }
 }

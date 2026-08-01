@@ -87,7 +87,10 @@ public class LibraryController {
             long reservedCharacters,
             long committedCharacters,
             boolean canStartConversion,
-            String denialReason) {
+            String denialReason,
+            ConversionEntitlementService.EntitlementSource source,
+            ConversionEntitlementService.DemonstrationSubscriptionStatus demonstrationSubscriptionStatus,
+            boolean demonstrationOnly) {
 
         static ConversionEntitlementView from(ConversionEntitlementService.Allowance allowance) {
             return new ConversionEntitlementView(
@@ -97,7 +100,10 @@ public class LibraryController {
                     allowance.reservedCharacters(),
                     allowance.committedCharacters(),
                     allowance.status() == ConversionEntitlementService.AllowanceStatus.AVAILABLE,
-                    allowance.denialReason());
+                    allowance.denialReason(),
+                    allowance.source(),
+                    allowance.demonstrationSubscriptionStatus(),
+                    allowance.source() == ConversionEntitlementService.EntitlementSource.DEMONSTRATION_SUBSCRIPTION);
         }
     }
 }

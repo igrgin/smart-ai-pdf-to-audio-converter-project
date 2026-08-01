@@ -73,6 +73,12 @@ server:
       tracking-modes: cookie
 
 platform:
+  demonstration-subscription:
+    webhook-secret: ${STRIPE_WEBHOOK_SECRET:whsec_local_demonstration_only}
+    monthly-price-id: ${STRIPE_DEMONSTRATION_MONTHLY_PRICE_ID:price_folio_demo_monthly}
+    monthly-grant-characters: 500000
+    signature-tolerance: 5m
+    projector-enabled: ${STRIPE_PROJECTOR_ENABLED:true}
   narration:
     working-asset-path: ${NARRATION_WORKING_ASSET_PATH:${java.io.tmpdir}/folio-working/narration-plans}
     working-bucket: local-working

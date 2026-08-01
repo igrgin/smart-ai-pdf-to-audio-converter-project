@@ -1,6 +1,7 @@
 package dev.audiobook.platform.identity;
 
 import dev.audiobook.platform.admission.InspectionWorkDeliveryController;
+import dev.audiobook.platform.entitlement.StripeDemonstrationSubscriptionWebhookController;
 import java.time.Clock;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -131,6 +132,9 @@ public class SecurityConfiguration {
         var inspectionDelivery = PathPatternRequestMatcher.withDefaults().matcher(
                 org.springframework.http.HttpMethod.POST,
                 InspectionWorkDeliveryController.DELIVERY_PATH);
+        var stripeEvents = PathPatternRequestMatcher.withDefaults().matcher(
+                org.springframework.http.HttpMethod.POST,
+                StripeDemonstrationSubscriptionWebhookController.EVENT_PATH);
         http
                 .securityContext(context -> context.securityContextRepository(securityContextRepository))
                 .authorizeHttpRequests(authorize -> authorize
@@ -147,10 +151,11 @@ public class SecurityConfiguration {
                         .permitAll()
                         .requestMatchers(uploadCapability).permitAll()
                         .requestMatchers(inspectionDelivery).permitAll()
+                        .requestMatchers(stripeEvents).permitAll()
                         .requestMatchers("/api/v1/operator/**").hasRole("OPERATOR")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
-                .csrf(csrf -> csrf.ignoringRequestMatchers(uploadCapability, inspectionDelivery))
+                .csrf(csrf -> csrf.ignoringRequestMatchers(uploadCapability, inspectionDelivery, stripeEvents))
                 .oauth2Login(oauth -> oauth
                         .authorizationEndpoint(endpoint -> endpoint.authorizationRequestResolver(authorizationRequestResolver))
                         .userInfoEndpoint(userInfo -> userInfo.oidcUserService(brokerOidcUserService))
