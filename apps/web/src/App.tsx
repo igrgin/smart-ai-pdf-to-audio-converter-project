@@ -449,6 +449,20 @@ function ConversionCard({
     };
   }, [conversion.conversionId]);
 
+  if (progress.state === "CANCELLED" || progress.state === "FAILED") {
+    const cancelled = progress.state === "CANCELLED";
+    return (
+      <article className="preparing-audiobook" aria-live="polite">
+        <span className="empty-mark" aria-hidden="true"><ShieldCheck size={28} /></span>
+        <span className="card-kicker">{progress.reasonCode}</span>
+        <h2>{cancelled ? "Conversion cancelled" : "Conversion stopped"}</h2>
+        <p>{cancelled
+          ? "No further work will be claimed. Partial results remain unavailable while cleanup completes."
+          : "No partial Private Audiobook is available. Any reusable allowance has been restored."}</p>
+      </article>
+    );
+  }
+
   if (progress.state === "PREPARING" || progress.state === "PAUSED") {
     const requiresIntervention = progress.reasonCode === "NARRATION_PLAN_REQUIRES_INTERVENTION";
     const sourceTooDamaged = progress.reasonCode === "SOURCE_TOO_DAMAGED";

@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AudiobookConversionController {
 
     private final AudiobookConversionService conversionService;
+    private final ConversionLifecycleService lifecycleService;
     private final NarrationPlanService narrationPlanService;
 
     @GetMapping("/{conversionId}")
@@ -42,6 +43,10 @@ public class AudiobookConversionController {
                         && "NARRATION_REVIEW_AVAILABLE".equals(conversion.reasonCode())
                 ? narrationPlanService.plan(principal.listenerId(), conversionId)
                 : null;
+        ConversionLifecycleService.PauseDetails pause =
+                conversion.state() == AudiobookConversionService.ConversionState.PAUSED
+                        ? lifecycleService.pauseDetails(principal.listenerId(), conversionId)
+                        : null;
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
                 .eTag(entityTag)
@@ -52,7 +57,8 @@ public class AudiobookConversionController {
                         conversion.allowedActions(),
                         conversion.version(),
                         conversion.recovery(),
-                        plan));
+                        plan,
+                        pause));
     }
 
     @PostMapping("/{conversionId}/narration-plan-recovery")
@@ -64,6 +70,52 @@ public class AudiobookConversionController {
         long expectedVersion = expectedVersion(ifMatch);
         AudiobookConversionService.AudiobookConversion conversion = conversionService.resumeNarrationPlan(
                 principal.listenerId(), conversionId, expectedVersion, idempotencyKey);
+        return ResponseEntity.accepted()
+                .cacheControl(CacheControl.noStore())
+                .eTag(Long.toString(conversion.version()))
+                .body(new ConversionProgress(
+                        conversion.conversionId(),
+                        conversion.state(),
+                        conversion.reasonCode(),
+                        conversion.allowedActions(),
+                        conversion.version(),
+                        conversion.recovery(),
+                        null));
+    }
+
+    @PostMapping("/{conversionId}/cancellation")
+    public ResponseEntity<ConversionProgress> cancel(
+            @AuthenticationPrincipal ListenerPrincipal principal,
+            @PathVariable UUID conversionId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestHeader("If-Match") String ifMatch) {
+        long expectedVersion = expectedVersion(ifMatch);
+        ConversionLifecycleService.CancellationResult cancellation = lifecycleService.cancelListener(
+                principal.listenerId(), conversionId, expectedVersion, idempotencyKey);
+        return ResponseEntity.accepted()
+                .cacheControl(CacheControl.noStore())
+                .eTag(Long.toString(cancellation.version()))
+                .body(new ConversionProgress(
+                        cancellation.conversionId(),
+                        cancellation.state(),
+                        cancellation.reasonCode(),
+                        java.util.List.of(),
+                        cancellation.version(),
+                        null,
+                        null));
+    }
+
+    @PostMapping("/{conversionId}/resume")
+    public ResponseEntity<ConversionProgress> resume(
+            @AuthenticationPrincipal ListenerPrincipal principal,
+            @PathVariable UUID conversionId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestHeader("If-Match") String ifMatch) {
+        long expectedVersion = expectedVersion(ifMatch);
+        lifecycleService.resume(new ConversionLifecycleService.ResumeCommand(
+                principal.listenerId(), conversionId, expectedVersion, idempotencyKey));
+        AudiobookConversionService.AudiobookConversion conversion =
+                conversionService.conversion(principal.listenerId(), conversionId);
         return ResponseEntity.accepted()
                 .cacheControl(CacheControl.noStore())
                 .eTag(Long.toString(conversion.version()))
@@ -108,6 +160,18 @@ public class AudiobookConversionController {
             java.util.List<AudiobookConversionService.AllowedAction> allowedActions,
             long version,
             AudiobookConversionService.RecoveryDetails recovery,
-            NarrationPlanService.PlanView narrationPlan) {
+            NarrationPlanService.PlanView narrationPlan,
+            ConversionLifecycleService.PauseDetails pause) {
+
+        public ConversionProgress(
+                UUID conversionId,
+                AudiobookConversionService.ConversionState state,
+                String reasonCode,
+                java.util.List<AudiobookConversionService.AllowedAction> allowedActions,
+                long version,
+                AudiobookConversionService.RecoveryDetails recovery,
+                NarrationPlanService.PlanView narrationPlan) {
+            this(conversionId, state, reasonCode, allowedActions, version, recovery, narrationPlan, null);
+        }
     }
 }

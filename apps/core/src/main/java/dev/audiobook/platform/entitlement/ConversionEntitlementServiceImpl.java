@@ -379,6 +379,39 @@ public class ConversionEntitlementServiceImpl implements ConversionEntitlementSe
 
     @Override
     @Transactional(readOnly = true)
+    public ResumeEligibility resumeEligibility(UUID listenerId, UUID conversionId) {
+        Objects.requireNonNull(listenerId, "listenerId");
+        Objects.requireNonNull(conversionId, "conversionId");
+        Instant now = clock.instant();
+        Integer eligible = jdbcTemplate.queryForObject(
+                """
+                SELECT count(*) FROM (
+                    SELECT c.reservation_id
+                    FROM character_entitlement_ledger_entry c
+                    JOIN conversion_entitlement_grant g ON g.grant_id = c.grant_id
+                    JOIN provider_spend_ledger_entry p ON p.reservation_id = c.reservation_id
+                    WHERE c.listener_id = ? AND c.conversion_id = ?
+                      AND g.valid_from <= ? AND ? < g.valid_until
+                      AND NOT EXISTS (
+                          SELECT 1 FROM demonstration_subscription_grant_adjustment a
+                          WHERE a.grant_id = g.grant_id
+                      )
+                    GROUP BY c.reservation_id
+                    HAVING SUM(c.reserved_delta) > 0 AND SUM(p.reserved_delta) > 0
+                ) active_reservation
+                """,
+                Integer.class,
+                listenerId,
+                conversionId,
+                databaseTime(now),
+                databaseTime(now));
+        return eligible != null && eligible == 1
+                ? new ResumeEligibility(true, null)
+                : new ResumeEligibility(false, "ENTITLEMENT_RESERVATION_INELIGIBLE");
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public ProviderSpend providerSpend(String provider) {
         String normalizedProvider = requiredReference(provider, "provider").toLowerCase(Locale.ROOT);
         return jdbcTemplate.queryForObject(

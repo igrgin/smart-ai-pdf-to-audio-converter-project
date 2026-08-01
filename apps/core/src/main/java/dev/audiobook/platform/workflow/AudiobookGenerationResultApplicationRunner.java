@@ -26,7 +26,14 @@ public class AudiobookGenerationResultApplicationRunner {
                 SELECT c.listener_id, c.conversion_id
                 FROM workflow.audiobook_conversion c
                 JOIN generation.packaged_audiobook_result p ON p.conversion_id = c.conversion_id
+                JOIN workflow.conversion_stage_run stage
+                  ON stage.conversion_id = c.conversion_id AND stage.stage = 'PACKAGING'
+                JOIN workflow.conversion_accepted_result accepted
+                  ON accepted.stage_run_id = stage.stage_run_id
+                 AND accepted.operation_key = 'packaging-stage:' || c.conversion_id
+                 AND accepted.result_sha256 = p.manifest_digest
                 WHERE c.state IN ('GENERATING', 'FINALIZING')
+                  AND stage.state = 'SUCCEEDED'
                   AND NOT EXISTS (
                     SELECT 1 FROM library.private_audiobook a
                     WHERE a.conversion_id = c.conversion_id

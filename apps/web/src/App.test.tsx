@@ -1335,6 +1335,63 @@ describe("public sample", () => {
     expect(screen.getByText(/otherwise start a new conversion with a clearer copy/i)).toBeVisible();
     expect(screen.getByRole("button", { name: /retry bounded extraction/i })).toBeVisible();
   });
+
+  it("renders a cancelled conversion as terminal instead of a ready narration plan", async () => {
+    const cancelled = {
+      conversionId: "01985f42-5f8d-7000-8000-000000000128",
+      state: "CANCELLED",
+      reasonCode: "LISTENER_CANCELLED",
+      allowedActions: [],
+      version: 6,
+      explicitNarrationChoiceRequired: false
+    };
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            authenticated: true,
+            listener: { displayName: "Mara", signInMethods: ["google"] },
+            csrf: { headerName: "X-CSRF-TOKEN", parameterName: "_csrf", token: "private-csrf" }
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/library")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            displayName: "Mara",
+            signInMethods: ["google"],
+            audiobooks: [cancelled],
+            conversionEntitlement: {
+              status: "AVAILABLE",
+              grantedCharacters: 500000,
+              availableCharacters: 500000,
+              reservedCharacters: 0,
+              committedCharacters: 0,
+              canStartConversion: true
+            }
+          })
+        });
+      }
+      if (url.includes("/api/v1/audiobook-conversions/")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: () => '"6"' },
+          json: async () => cancelled
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: /conversion cancelled/i })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: /narration plan ready/i })).not.toBeInTheDocument();
+  });
 });
 
 describe("session teardown", () => {
