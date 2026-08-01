@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
@@ -223,5 +223,98 @@ describe("public sample", () => {
     expect(await screen.findByText(/no free conversion entitlement is available yet/i)).toBeVisible();
     expect(screen.getByRole("button", { name: /create audiobook/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /start a private audiobook/i })).toBeDisabled();
+  });
+
+  it("keeps EPUB bytes local until Create audiobook then shows the preparing conversion", async () => {
+    const calls: string[] = [];
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.endsWith("/api/v1/auth/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            authenticated: true,
+            listener: { displayName: "Mara", signInMethods: ["google"] },
+            csrf: { headerName: "X-CSRF-TOKEN", parameterName: "_csrf", token: "private-csrf" }
+          })
+        });
+      }
+      if (url.endsWith("/api/v1/library")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            displayName: "Mara",
+            signInMethods: ["google"],
+            audiobooks: [],
+            conversionEntitlement: {
+              status: "AVAILABLE",
+              grantedCharacters: 500000,
+              availableCharacters: 500000,
+              reservedCharacters: 0,
+              committedCharacters: 0,
+              canStartConversion: true
+            }
+          })
+        });
+      }
+      if (url === "/api/v1/publication-submissions" && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            submissionId: "01985f42-5f8d-7000-8000-000000000123",
+            state: "AWAITING_UPLOAD",
+            uploadSession: {
+              endpoint: "/api/v1/publication-submissions/01985f42-5f8d-7000-8000-000000000123/upload",
+              token: "upload-secret",
+              chunkSize: 8388608
+            }
+          })
+        });
+      }
+      if (url.endsWith("/upload") && init?.method === "PUT") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ nextOffset: 8, complete: true, storageGeneration: "generation-23" })
+        });
+      }
+      if (url.endsWith("/confirm") && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ state: "UPLOADED" }) });
+      }
+      if (url.endsWith("/01985f42-5f8d-7000-8000-000000000123")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            submissionId: "01985f42-5f8d-7000-8000-000000000123",
+            state: "ADMITTED",
+            conversionId: "01985f42-5f8d-7000-8000-000000000223"
+          })
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /start a private audiobook/i }));
+
+    const epub = new File(["epubdata"], "authorized.epub", { type: "application/epub+zip" });
+    fireEvent.change(screen.getByLabelText(/choose drm-free epub/i), { target: { files: [epub] } });
+
+    expect(screen.getByText(/authorized\.epub stays on this device/i)).toBeVisible();
+    expect(calls.filter((call) => call.includes("publication-submissions"))).toHaveLength(0);
+
+    const dialog = screen.getByRole("dialog", { name: /create a private audiobook/i });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /i attest/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /^create audiobook$/i }));
+
+    expect(await screen.findByText(/preparing your private audiobook/i)).toBeVisible();
+    expect(calls).toContain("POST /api/v1/publication-submissions");
+    expect(calls).toContain(
+      "PUT /api/v1/publication-submissions/01985f42-5f8d-7000-8000-000000000123/upload"
+    );
+    expect(calls).toContain(
+      "POST /api/v1/publication-submissions/01985f42-5f8d-7000-8000-000000000123/confirm"
+    );
   });
 });

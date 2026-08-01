@@ -23,6 +23,7 @@ import {
   type Library
 } from "./identity-session";
 import { fetchPlatformStatus, type PlatformStatus } from "./platform-status";
+import { submitAuthorizedEpub, type Submission, type TransferStage } from "./publication-submission";
 
 type Theme = "light" | "dark";
 
@@ -213,6 +214,7 @@ function PublicStudio({
 
 function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }) {
   const [methodsOpen, setMethodsOpen] = useState(false);
+  const [creationOpen, setCreationOpen] = useState(false);
   const availableProviders = providers.filter((provider) => !library.signInMethods.includes(provider));
   const canStartConversion = library.conversionEntitlement.canStartConversion;
   return (
@@ -223,16 +225,29 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
           <h1 id="library-title">Your Library</h1>
           <p>Welcome back, <strong>{library.displayName}</strong>.</p>
         </div>
-        <Button disabled={!canStartConversion}><Upload size={17} /> Create audiobook</Button>
+        <Button disabled={!canStartConversion} onClick={() => setCreationOpen(true)}><Upload size={17} /> Create audiobook</Button>
       </div>
 
       <div className="library-grid">
-        <article className="empty-library">
-          <span className="empty-mark" aria-hidden="true"><BookOpen size={28} /></span>
-          <h2>Your first audiobook will live here</h2>
-          <p>Choose an authorized PDF or DRM-free EPUB when you’re ready. Nothing leaves your device until you confirm.</p>
-          <Button disabled={!canStartConversion}><Plus size={17} /> Start a private audiobook</Button>
-        </article>
+        {library.audiobooks.length === 0 ? (
+          <article className="empty-library">
+            <span className="empty-mark" aria-hidden="true"><BookOpen size={28} /></span>
+            <h2>Your first audiobook will live here</h2>
+            <p>Choose an authorized PDF or DRM-free EPUB when you’re ready. Nothing leaves your device until you confirm.</p>
+            <Button disabled={!canStartConversion} onClick={() => setCreationOpen(true)}><Plus size={17} /> Start a private audiobook</Button>
+          </article>
+        ) : (
+          <div className="conversion-list" aria-label="Private audiobooks">
+            {library.audiobooks.map((conversion) => (
+              <article className="preparing-audiobook" key={conversion.conversionId}>
+                <span className="empty-mark" aria-hidden="true"><Sparkles size={28} /></span>
+                <span className="card-kicker">{conversion.state}</span>
+                <h2>Preparing your private audiobook</h2>
+                <p>The publication passed quarantine inspection. Folio is preparing its narration plan.</p>
+              </article>
+            ))}
+          </div>
+        )}
 
         <div className="library-sidebar">
           <EntitlementCard entitlement={library.conversionEntitlement} />
@@ -263,8 +278,95 @@ function PrivateLibrary({ library, csrf }: { library: Library; csrf: CsrfProof }
           </aside>
         </div>
       </div>
+      {creationOpen && <CreateAudiobookDialog csrf={csrf} onClose={() => setCreationOpen(false)} />}
     </section>
   );
+}
+
+function CreateAudiobookDialog({ csrf, onClose }: { csrf: CsrfProof; onClose: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [attested, setAttested] = useState(false);
+  const [stage, setStage] = useState<TransferStage | "PREPARING" | "FAILED" | null>(null);
+  const [submission, setSubmission] = useState<Submission | null>(null);
+  const busy = stage !== null && stage !== "PREPARING" && stage !== "FAILED";
+
+  const choose = (candidate?: File) => {
+    if (!candidate) return;
+    const epub = candidate.name.toLowerCase().endsWith(".epub")
+      && (candidate.type === "" || candidate.type === "application/epub+zip")
+      && candidate.size > 0
+      && candidate.size <= 262_144_000;
+    setFile(epub ? candidate : null);
+    if (!epub) setStage("FAILED");
+  };
+
+  const create = async () => {
+    if (!file || !attested || busy) return;
+    setSubmission(null);
+    try {
+      const result = await submitAuthorizedEpub(file, csrf, setStage);
+      setSubmission(result);
+      setStage(result.state === "ADMITTED" ? "PREPARING" : "FAILED");
+    } catch {
+      setStage("FAILED");
+    }
+  };
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
+      <section className="create-dialog" role="dialog" aria-modal="true" aria-labelledby="create-title" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="dialog-close" type="button" onClick={onClose} disabled={busy} aria-label="Close Create audiobook">×</button>
+        <span className="card-kicker">Private creation flow</span>
+        <h2 id="create-title">Create a private audiobook</h2>
+        {stage === "PREPARING" ? (
+          <div className="creation-result" aria-live="polite">
+            <Sparkles size={24} />
+            <h3>Preparing your private audiobook</h3>
+            <p>The EPUB passed quarantine inspection. Folio is preparing its narration plan.</p>
+            <span>Conversion {submission?.conversionId?.slice(0, 8)}</span>
+          </div>
+        ) : (
+          <>
+            <label
+              className="epub-dropzone"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                choose(event.dataTransfer.files[0]);
+              }}
+            >
+              <Upload size={24} />
+              <strong>Choose DRM-free EPUB</strong>
+              <span>or drop one file here · up to 250 MiB</span>
+              <input
+                type="file"
+                accept=".epub,application/epub+zip"
+                onChange={(event) => choose(event.target.files?.[0])}
+                disabled={busy}
+              />
+            </label>
+            {file && <p className="local-file">{file.name} stays on this device until you activate Create audiobook.</p>}
+            <label className="attestation-check">
+              <input type="checkbox" checked={attested} onChange={(event) => setAttested(event.target.checked)} disabled={busy} />
+              <span>I attest that I’m permitted to reproduce this DRM-free publication as a private audiobook.</span>
+            </label>
+            <p className="rights-note">Rights Attestation · terms rights-v1 · notice notice-v1</p>
+            {stage && <p className={`creation-status creation-status--${stage.toLowerCase()}`} aria-live="polite">{stageLabel(stage)}</p>}
+            <Button type="button" onClick={() => void create()} disabled={!file || !attested || busy}>
+              <Upload size={17} /> Create audiobook
+            </Button>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function stageLabel(stage: TransferStage | "FAILED"): string {
+  if (stage === "HASHING") return "Checking the EPUB locally…";
+  if (stage === "UPLOADING") return "Transferring to private quarantine…";
+  if (stage === "INSPECTING") return "Inspecting the DRM-free EPUB…";
+  return "This EPUB could not be submitted. Check the file and try again.";
 }
 
 function EntitlementCard({ entitlement }: { entitlement: Library["conversionEntitlement"] }) {
@@ -278,7 +380,7 @@ function EntitlementCard({ entitlement }: { entitlement: Library["conversionEnti
       </h2>
       <p>
         {entitlement.canStartConversion
-          ? "Your allowance is reserved only after the narration plan is measured."
+          ? "A bounded allowance and provider-cost ceiling are reserved when you activate Create audiobook."
           : "A conversion can start after an approved free grant is added to your Listener Identity."}
       </p>
     </aside>

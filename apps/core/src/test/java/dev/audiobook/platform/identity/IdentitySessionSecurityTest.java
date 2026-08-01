@@ -13,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
+import dev.audiobook.platform.admission.PublicationSubmissionService;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -55,6 +56,9 @@ class IdentitySessionSecurityTest {
 
     @MockitoBean
     private ConversionEntitlementService conversionEntitlementService;
+
+    @MockitoBean
+    private PublicationSubmissionService publicationSubmissionService;
 
     @MockitoBean
     private DataSource dataSource;

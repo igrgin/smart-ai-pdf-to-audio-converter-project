@@ -133,6 +133,9 @@ public class SecurityConfiguration {
             SameOriginFilter sameOriginFilter,
             SecurityHeadersFilter securityHeadersFilter,
             SessionLifecycleFilter sessionLifecycleFilter) throws Exception {
+        var uploadCapability = PathPatternRequestMatcher.withDefaults().matcher(
+                org.springframework.http.HttpMethod.PUT,
+                "/api/v1/publication-submissions/{submissionId}/upload");
         http
                 .securityContext(context -> context.securityContextRepository(securityContextRepository))
                 .authorizeHttpRequests(authorize -> authorize
@@ -147,9 +150,11 @@ public class SecurityConfiguration {
                                 "/login/oauth2/code/**",
                                 "/actuator/health/**")
                         .permitAll()
+                        .requestMatchers(uploadCapability).permitAll()
                         .requestMatchers("/api/v1/operator/**").hasRole("OPERATOR")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+                .csrf(csrf -> csrf.ignoringRequestMatchers(uploadCapability))
                 .oauth2Login(oauth -> oauth
                         .authorizationEndpoint(endpoint -> endpoint.authorizationRequestResolver(authorizationRequestResolver))
                         .userInfoEndpoint(userInfo -> userInfo.oidcUserService(brokerOidcUserService))

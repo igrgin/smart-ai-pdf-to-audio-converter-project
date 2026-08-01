@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.audiobook.platform.PlatformApplication;
+import dev.audiobook.platform.admission.PublicationSubmissionService;
 import dev.audiobook.platform.identity.ListenerIdentityService;
 import dev.audiobook.platform.identity.ListenerPrincipal;
 import dev.audiobook.platform.identity.SignInProvider;
@@ -38,6 +39,9 @@ class ConversionEntitlementControllerTest {
 
     @MockitoBean
     private ConversionEntitlementService entitlementService;
+
+    @MockitoBean
+    private PublicationSubmissionService submissionService;
 
     @MockitoBean
     private ListenerIdentityService listenerIdentityService;

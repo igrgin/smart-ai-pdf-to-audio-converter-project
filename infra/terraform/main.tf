@@ -78,6 +78,11 @@ resource "random_password" "database" {
   special = true
 }
 
+resource "random_password" "upload_capability" {
+  length  = 48
+  special = false
+}
+
 resource "google_sql_database_instance" "postgres" {
   name                = "${local.prefix}-postgres"
   region              = var.region
@@ -137,6 +142,24 @@ resource "google_secret_manager_secret" "database_password" {
 resource "google_secret_manager_secret_version" "database_password" {
   secret      = google_secret_manager_secret.database_password.id
   secret_data = random_password.database.result
+}
+
+resource "google_secret_manager_secret" "upload_capability" {
+  secret_id = "${local.prefix}-upload-capability"
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.required["secretmanager.googleapis.com"]]
+}
+
+resource "google_secret_manager_secret_version" "upload_capability" {
+  secret      = google_secret_manager_secret.upload_capability.id
+  secret_data = random_password.upload_capability.result
 }
 
 resource "google_storage_bucket" "working" {
@@ -223,6 +246,12 @@ resource "google_secret_manager_secret_iam_member" "core_zitadel_client_secret" 
   member    = "serviceAccount:${google_service_account.core.email}"
 }
 
+resource "google_secret_manager_secret_iam_member" "core_upload_capability" {
+  secret_id = google_secret_manager_secret.upload_capability.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.core.email}"
+}
+
 resource "google_secret_manager_secret_iam_member" "worker_database_password" {
   secret_id = google_secret_manager_secret.database_password.id
   role      = "roles/secretmanager.secretAccessor"
@@ -245,6 +274,12 @@ resource "google_storage_bucket_iam_member" "worker_working_objects" {
   bucket = google_storage_bucket.working.name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_storage_bucket_iam_member" "core_working_objects" {
+  bucket = google_storage_bucket.working.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.core.email}"
 }
 
 resource "google_storage_bucket_iam_member" "worker_finalized_objects" {
@@ -316,6 +351,18 @@ resource "google_cloud_run_v2_service" "core" {
         value = substr(regex("sha256:([0-9a-f]{64})$", var.core_image)[0], 0, 12)
       }
       env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = var.project_id
+      }
+      env {
+        name  = "WORKING_BUCKET"
+        value = google_storage_bucket.working.name
+      }
+      env {
+        name  = "WORK_TOPIC"
+        value = google_pubsub_topic.work.name
+      }
+      env {
         name  = "TRACING_SAMPLE_RATE"
         value = "0.1"
       }
@@ -381,6 +428,15 @@ resource "google_cloud_run_v2_service" "core" {
           }
         }
       }
+      env {
+        name = "UPLOAD_TOKEN_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.upload_capability.secret_id
+            version = "latest"
+          }
+        }
+      }
 
       startup_probe {
         initial_delay_seconds = 5
@@ -411,6 +467,8 @@ resource "google_cloud_run_v2_service" "core" {
     google_project_service.required["run.googleapis.com"],
     google_secret_manager_secret_iam_member.core_database_password,
     google_secret_manager_secret_iam_member.core_zitadel_client_secret,
+    google_secret_manager_secret_iam_member.core_upload_capability,
+    google_storage_bucket_iam_member.core_working_objects,
     google_sql_user.platform
   ]
 }
@@ -489,8 +547,16 @@ resource "google_cloud_run_v2_job" "workers" {
           value = google_storage_bucket.finalized.name
         }
         env {
-          name  = "PUBSUB_TOPIC"
+          name  = "WORK_TOPIC"
           value = google_pubsub_topic.work.name
+        }
+        env {
+          name  = "GOOGLE_CLOUD_PROJECT"
+          value = var.project_id
+        }
+        env {
+          name  = "UPLOAD_TOKEN_SECRET"
+          value = "worker-does-not-mint-upload-capabilities"
         }
         env {
           name = "DATABASE_PASSWORD"

@@ -44,6 +44,19 @@ server:
         secure: false
 
 platform:
+  admission:
+    rights-terms-version: rights-v1
+    rights-notice-version: notice-v1
+    maximum-upload-bytes: 262144000
+    upload-chunk-bytes: 8388608
+    upload-session-validity: 15m
+    quarantine-retention: 23d
+    reserved-characters: 500000
+    reserved-provider-cost-micros: 1000000
+    provider: openai
+    rate-card-version: preinspection-v1
+    upload-token-secret: test-only-upload-capability-secret
+    quarantine-path: ${java.io.tmpdir}/folio-quarantine-tests
   entitlement:
     free-grant-characters: 500000
     free-grant-validity: 365d
