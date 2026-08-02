@@ -1,4 +1,4 @@
-package dev.audiobook.platform.admission.submission.exception;
+package dev.audiobook.platform.admission.submission.error.exception;
 
 public class SubmissionRejectedException extends RuntimeException {
 

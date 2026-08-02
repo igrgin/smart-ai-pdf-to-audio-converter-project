@@ -1,6 +1,7 @@
-package dev.audiobook.platform.admission.submission.exception;
+package dev.audiobook.platform.admission.submission.error;
 
 import dev.audiobook.platform.admission.submission.PublicationSubmissionController;
+import dev.audiobook.platform.admission.submission.error.exception.SubmissionRejectedException;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;

@@ -1,7 +1,7 @@
-package dev.audiobook.platform.narration.selection;
+package dev.audiobook.platform.narration.selection.error;
 
-import dev.audiobook.platform.narration.NarrationSelectionRejectedException;
-import dev.audiobook.platform.narration.selection.service.*;
+import dev.audiobook.platform.narration.selection.NarrationController;
+import dev.audiobook.platform.narration.selection.error.exception.NarrationSelectionRejectedException;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;

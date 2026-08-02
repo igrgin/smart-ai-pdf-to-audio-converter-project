@@ -2,6 +2,8 @@ package dev.audiobook.platform.trustoperations;
 
 import dev.audiobook.platform.identity.ListenerPrincipal;
 import dev.audiobook.platform.trustoperations.delegated.DelegatedAccessRequestWorkflow;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsAccessDeniedException;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsPreconditionException;
 import dev.audiobook.platform.trustoperations.service.*;
 import dev.audiobook.platform.trustoperations.service.TrustOperationsService;
 

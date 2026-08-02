@@ -8,6 +8,7 @@ import dev.audiobook.platform.narration.NarrationReviewAssetStore;
 import dev.audiobook.platform.narration.planning.assets.NarrationPlanAssetIdentity;
 import dev.audiobook.platform.narration.planning.service.NarrationPlanService;
 import dev.audiobook.platform.narration.review.*;
+import dev.audiobook.platform.narration.review.error.exception.NarrationReviewRejectedException;
 
 import lombok.RequiredArgsConstructor;
 

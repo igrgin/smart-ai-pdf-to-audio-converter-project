@@ -6,6 +6,9 @@ import dev.audiobook.platform.trustoperations.audit.TrustOperationsAuditJournal;
 import dev.audiobook.platform.trustoperations.audit.TrustOperationsAuditJournal.AuditCommand;
 import dev.audiobook.platform.trustoperations.audit.TrustOperationsAuditJournal.AuditReplay;
 import dev.audiobook.platform.trustoperations.audit.TrustOperationsAuditJournal.NotificationCommand;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsAccessDeniedException;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsConflictException;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsPreconditionException;
 import dev.audiobook.platform.trustoperations.policy.TrustOperationsPolicy;
 
 import lombok.RequiredArgsConstructor;

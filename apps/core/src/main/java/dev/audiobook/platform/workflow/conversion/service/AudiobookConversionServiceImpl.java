@@ -2,7 +2,7 @@ package dev.audiobook.platform.workflow.conversion.service;
 
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
 import dev.audiobook.platform.narration.selection.service.NarrationSelectionService;
-import dev.audiobook.platform.workflow.conversion.exception.AudiobookConversionUnavailableException;
+import dev.audiobook.platform.workflow.conversion.error.exception.AudiobookConversionUnavailableException;
 import dev.audiobook.platform.workflow.lifecycle.service.ConversionLifecycleService;
 import dev.audiobook.platform.workflow.stage.service.ConversionWorkflowService;
 

@@ -1,6 +1,7 @@
-package dev.audiobook.platform.narration.review;
+package dev.audiobook.platform.narration.review.error;
 
-import dev.audiobook.platform.narration.review.service.*;
+import dev.audiobook.platform.narration.review.NarrationReviewController;
+import dev.audiobook.platform.narration.review.error.exception.NarrationReviewRejectedException;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;

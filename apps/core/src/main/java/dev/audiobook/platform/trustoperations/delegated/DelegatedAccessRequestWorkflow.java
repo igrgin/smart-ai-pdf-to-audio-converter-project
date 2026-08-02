@@ -1,10 +1,10 @@
 package dev.audiobook.platform.trustoperations.delegated;
 
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
-import dev.audiobook.platform.trustoperations.TrustOperationsAccessDeniedException;
-import dev.audiobook.platform.trustoperations.TrustOperationsConflictException;
-import dev.audiobook.platform.trustoperations.TrustOperationsPreconditionException;
 import dev.audiobook.platform.trustoperations.TrustOperationsProperties;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsAccessDeniedException;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsConflictException;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsPreconditionException;
 import dev.audiobook.platform.trustoperations.policy.TrustOperationsPolicy;
 import dev.audiobook.platform.trustoperations.service.TrustOperationsService;
 import dev.audiobook.platform.trustoperations.service.TrustOperationsService.ApproveDelegatedAccessCommand;

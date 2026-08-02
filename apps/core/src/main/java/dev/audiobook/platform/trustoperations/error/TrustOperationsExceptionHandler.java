@@ -1,6 +1,10 @@
-package dev.audiobook.platform.trustoperations;
+package dev.audiobook.platform.trustoperations.error;
 
-import dev.audiobook.platform.trustoperations.service.*;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsAccessDeniedException;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsConflictException;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsForbiddenException;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsFreshMfaRequiredException;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsPreconditionException;
 
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;

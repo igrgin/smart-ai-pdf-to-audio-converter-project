@@ -29,10 +29,10 @@ import dev.audiobook.platform.narration.*;
 import dev.audiobook.platform.narration.SourceTooDamagedException;
 import dev.audiobook.platform.narration.extraction.pdf.PdfDocumentUnderstandingBoundary;
 import dev.audiobook.platform.narration.planning.service.NarrationPlanService;
-import dev.audiobook.platform.narration.review.NarrationReviewRejectedException;
 import dev.audiobook.platform.narration.review.NarrationReviewRejectionReason;
+import dev.audiobook.platform.narration.review.error.exception.NarrationReviewRejectedException;
 import dev.audiobook.platform.narration.review.service.NarrationReviewService;
-import dev.audiobook.platform.workflow.conversion.exception.AudiobookConversionUnavailableException;
+import dev.audiobook.platform.workflow.conversion.error.exception.AudiobookConversionUnavailableException;
 import dev.audiobook.platform.workflow.conversion.service.AudiobookConversionService;
 import dev.audiobook.platform.workflow.narrationanalysis.service.NarrationAnalysisStageRunService;
 

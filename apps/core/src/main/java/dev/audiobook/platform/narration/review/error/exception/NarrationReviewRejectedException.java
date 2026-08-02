@@ -1,6 +1,6 @@
-package dev.audiobook.platform.narration.review;
+package dev.audiobook.platform.narration.review.error.exception;
 
-import dev.audiobook.platform.narration.review.service.*;
+import dev.audiobook.platform.narration.review.NarrationReviewRejectionReason;
 
 public class NarrationReviewRejectedException extends RuntimeException {
 

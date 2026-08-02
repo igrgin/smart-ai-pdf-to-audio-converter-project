@@ -18,8 +18,8 @@ import static dev.audiobook.platform.narration.NarrationRejectionReason.VOICE_TE
 
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
 import dev.audiobook.platform.narration.NarrationRejectionReason;
-import dev.audiobook.platform.narration.NarrationSelectionRejectedException;
 import dev.audiobook.platform.narration.selection.*;
+import dev.audiobook.platform.narration.selection.error.exception.NarrationSelectionRejectedException;
 
 import lombok.RequiredArgsConstructor;
 

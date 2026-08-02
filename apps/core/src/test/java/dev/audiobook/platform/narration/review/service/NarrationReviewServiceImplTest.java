@@ -4,8 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.audiobook.platform.narration.planning.service.NarrationPlanService;
-import dev.audiobook.platform.narration.review.NarrationReviewRejectedException;
 import dev.audiobook.platform.narration.review.NarrationReviewRejectionReason;
+import dev.audiobook.platform.narration.review.error.exception.NarrationReviewRejectedException;
 
 import org.junit.jupiter.api.Test;
 

@@ -1,6 +1,7 @@
-package dev.audiobook.platform.workflow.conversion.exception;
+package dev.audiobook.platform.workflow.conversion.error;
 
 import dev.audiobook.platform.workflow.conversion.controller.AudiobookConversionController;
+import dev.audiobook.platform.workflow.conversion.error.exception.AudiobookConversionUnavailableException;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;

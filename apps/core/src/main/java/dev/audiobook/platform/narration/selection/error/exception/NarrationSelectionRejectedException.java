@@ -1,4 +1,6 @@
-package dev.audiobook.platform.narration;
+package dev.audiobook.platform.narration.selection.error.exception;
+
+import dev.audiobook.platform.narration.NarrationRejectionReason;
 
 public class NarrationSelectionRejectedException extends RuntimeException {
 

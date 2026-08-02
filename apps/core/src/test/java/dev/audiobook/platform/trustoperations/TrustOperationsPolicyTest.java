@@ -4,6 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsAccessDeniedException;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsForbiddenException;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsFreshMfaRequiredException;
+import dev.audiobook.platform.trustoperations.error.exception.TrustOperationsPreconditionException;
 import dev.audiobook.platform.trustoperations.policy.TrustOperationsPolicy;
 import dev.audiobook.platform.trustoperations.service.TrustOperationsService.ApproveDelegatedAccessCommand;
 import dev.audiobook.platform.trustoperations.service.TrustOperationsService.CaseType;

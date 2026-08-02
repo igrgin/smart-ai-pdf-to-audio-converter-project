@@ -5,7 +5,7 @@ import dev.audiobook.platform.admission.QuarantineObjectStore;
 import dev.audiobook.platform.admission.inspection.work.service.InspectionOutcomeRecordingService;
 import dev.audiobook.platform.admission.inspection.work.service.InspectionWorkflowService;
 import dev.audiobook.platform.admission.submission.*;
-import dev.audiobook.platform.admission.submission.exception.SubmissionRejectedException;
+import dev.audiobook.platform.admission.submission.error.exception.SubmissionRejectedException;
 import dev.audiobook.platform.entitlement.ledger.service.ConversionEntitlementService;
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
 import dev.audiobook.platform.workflow.conversion.service.AudiobookConversionService;

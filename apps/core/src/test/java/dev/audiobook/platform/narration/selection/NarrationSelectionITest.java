@@ -8,6 +8,7 @@ import dev.audiobook.platform.identity.SignInProvider;
 import dev.audiobook.platform.identity.listener.service.ListenerIdentityService;
 import dev.audiobook.platform.identity.signin.ExternalIdentity;
 import dev.audiobook.platform.narration.*;
+import dev.audiobook.platform.narration.selection.error.exception.NarrationSelectionRejectedException;
 import dev.audiobook.platform.narration.selection.service.NarrationSelectionService;
 import dev.audiobook.platform.workflow.conversion.service.AudiobookConversionService;
 
