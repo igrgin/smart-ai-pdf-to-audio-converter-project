@@ -32,6 +32,11 @@ class FilesystemNarrationPlanAssetStoreTest {
         assertThat(store.read(conversionId, first.reference())).isEqualTo(plan);
         assertThat(first.reference())
                 .isEqualTo("narration-plans/" + conversionId + "/plan-v1.json");
+
+        store.delete(conversionId, first.reference());
+        store.delete(conversionId, first.reference());
+        assertThatThrownBy(() -> store.read(conversionId, first.reference()))
+                .isInstanceOf(java.io.IOException.class);
     }
 
     @Test

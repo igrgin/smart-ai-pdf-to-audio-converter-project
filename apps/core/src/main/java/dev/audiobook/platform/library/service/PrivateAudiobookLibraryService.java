@@ -30,7 +30,8 @@ public interface PrivateAudiobookLibraryService {
             UUID assetVersionId,
             String availability,
             String manifestDigest,
-            long totalDurationMs) {}
+            long totalDurationMs,
+            long version) {}
 
     record PlaybackManifest(
             UUID audiobookId,

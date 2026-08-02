@@ -33,7 +33,8 @@ public interface TrustOperationsService {
         FAILED_STAGE(StaffRole.RELIABILITY),
         ENTITLEMENT_INTERVENTION(StaffRole.ENTITLEMENT),
         VOICE_AVAILABILITY(StaffRole.VOICE),
-        SERVICE_INCIDENT(StaffRole.INCIDENT_RESPONDER);
+        SERVICE_INCIDENT(StaffRole.INCIDENT_RESPONDER),
+        COMPLIANCE_INCIDENT(StaffRole.SECURITY_REVIEWER);
 
         private final StaffRole requiredRole;
 

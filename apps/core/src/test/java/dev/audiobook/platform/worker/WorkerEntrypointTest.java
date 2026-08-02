@@ -9,6 +9,8 @@ import static org.mockito.Mockito.verify;
 
 import dev.audiobook.platform.admission.inspection.work.service.InspectionWorkerService;
 import dev.audiobook.platform.generation.service.AudiobookGenerationWorkerService;
+import dev.audiobook.platform.retention.erasure.service.ErasureWorkerService;
+import dev.audiobook.platform.retention.reconciliation.service.ErasureReconciliationService;
 import dev.audiobook.platform.workflow.narrationanalysis.service.NarrationAnalysisStageRunService;
 
 import org.junit.jupiter.api.Test;
@@ -28,7 +30,9 @@ class WorkerEntrypointTest {
                         new WorkerProperties(WorkerProperties.Stage.INSPECTION, false, null, null),
                         narrationAnalysisStageRunService,
                         inspectionWorkerService,
-                        mock(AudiobookGenerationWorkerService.class));
+                        mock(AudiobookGenerationWorkerService.class),
+                        mock(ErasureWorkerService.class),
+                        mock(ErasureReconciliationService.class));
 
         assertThatCode(() -> entrypoint.run(mock(ApplicationArguments.class)))
                 .doesNotThrowAnyException();
@@ -46,7 +50,9 @@ class WorkerEntrypointTest {
                                 WorkerProperties.Stage.NARRATION_ANALYSIS, false, null, null),
                         narrationAnalysisStageRunService,
                         mock(InspectionWorkerService.class),
-                        mock(AudiobookGenerationWorkerService.class));
+                        mock(AudiobookGenerationWorkerService.class),
+                        mock(ErasureWorkerService.class),
+                        mock(ErasureReconciliationService.class));
 
         entrypoint.run(mock(ApplicationArguments.class));
 
@@ -68,7 +74,9 @@ class WorkerEntrypointTest {
                                 workId),
                         narrationAnalysisStageRunService,
                         mock(InspectionWorkerService.class),
-                        mock(AudiobookGenerationWorkerService.class));
+                        mock(AudiobookGenerationWorkerService.class),
+                        mock(ErasureWorkerService.class),
+                        mock(ErasureReconciliationService.class));
 
         entrypoint.run(mock(ApplicationArguments.class));
 
@@ -83,7 +91,9 @@ class WorkerEntrypointTest {
                         new WorkerProperties(null, false, null, null),
                         mock(NarrationAnalysisStageRunService.class),
                         mock(InspectionWorkerService.class),
-                        mock(AudiobookGenerationWorkerService.class));
+                        mock(AudiobookGenerationWorkerService.class),
+                        mock(ErasureWorkerService.class),
+                        mock(ErasureReconciliationService.class));
 
         assertThatThrownBy(() -> entrypoint.run(mock(ApplicationArguments.class)))
                 .isInstanceOf(IllegalStateException.class)
@@ -98,7 +108,9 @@ class WorkerEntrypointTest {
                                 WorkerProperties.Stage.RECONCILIATION, true, null, null),
                         mock(NarrationAnalysisStageRunService.class),
                         mock(InspectionWorkerService.class),
-                        mock(AudiobookGenerationWorkerService.class));
+                        mock(AudiobookGenerationWorkerService.class),
+                        mock(ErasureWorkerService.class),
+                        mock(ErasureReconciliationService.class));
         Thread.currentThread().interrupt();
 
         try {
@@ -119,7 +131,9 @@ class WorkerEntrypointTest {
                                 WorkerProperties.Stage.NARRATION_ANALYSIS, true, null, null),
                         narrationAnalysisStageRunService,
                         mock(InspectionWorkerService.class),
-                        mock(AudiobookGenerationWorkerService.class));
+                        mock(AudiobookGenerationWorkerService.class),
+                        mock(ErasureWorkerService.class),
+                        mock(ErasureReconciliationService.class));
         AtomicReference<Throwable> failure = new AtomicReference<>();
         Thread worker =
                 Thread.ofVirtual()
@@ -156,18 +170,52 @@ class WorkerEntrypointTest {
                         new WorkerProperties(WorkerProperties.Stage.SPEECH, false, null, null),
                         mock(NarrationAnalysisStageRunService.class),
                         mock(InspectionWorkerService.class),
-                        generationWorker);
+                        generationWorker,
+                        mock(ErasureWorkerService.class),
+                        mock(ErasureReconciliationService.class));
         WorkerEntrypoint packaging =
                 new WorkerEntrypoint(
                         new WorkerProperties(WorkerProperties.Stage.PACKAGING, false, null, null),
                         mock(NarrationAnalysisStageRunService.class),
                         mock(InspectionWorkerService.class),
-                        generationWorker);
+                        generationWorker,
+                        mock(ErasureWorkerService.class),
+                        mock(ErasureReconciliationService.class));
 
         speech.run(mock(ApplicationArguments.class));
         packaging.run(mock(ApplicationArguments.class));
 
         verify(generationWorker).generatePending();
         verify(generationWorker).packagePending();
+    }
+
+    @Test
+    void erasureAndReconciliationStagesRunTheirRetentionBoundaries() throws Exception {
+        ErasureWorkerService erasureWorker = mock(ErasureWorkerService.class);
+        ErasureReconciliationService reconciliation =
+                mock(ErasureReconciliationService.class);
+        WorkerEntrypoint erasure =
+                new WorkerEntrypoint(
+                        new WorkerProperties(WorkerProperties.Stage.ERASURE, false, null, null),
+                        mock(NarrationAnalysisStageRunService.class),
+                        mock(InspectionWorkerService.class),
+                        mock(AudiobookGenerationWorkerService.class),
+                        erasureWorker,
+                        reconciliation);
+        WorkerEntrypoint reconcile =
+                new WorkerEntrypoint(
+                        new WorkerProperties(
+                                WorkerProperties.Stage.RECONCILIATION, false, null, null),
+                        mock(NarrationAnalysisStageRunService.class),
+                        mock(InspectionWorkerService.class),
+                        mock(AudiobookGenerationWorkerService.class),
+                        erasureWorker,
+                        reconciliation);
+
+        erasure.run(mock(ApplicationArguments.class));
+        reconcile.run(mock(ApplicationArguments.class));
+
+        verify(erasureWorker).erasePending();
+        verify(reconciliation).reconcile();
     }
 }

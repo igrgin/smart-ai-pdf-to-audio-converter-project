@@ -12,6 +12,7 @@ import dev.audiobook.platform.identity.signin.service.BrokerOidcUserService;
 import dev.audiobook.platform.identity.signin.service.BrokerOidcUserServiceImpl;
 import dev.audiobook.platform.identity.websecurity.SameOriginFilter;
 import dev.audiobook.platform.identity.websecurity.SecurityHeadersFilter;
+import dev.audiobook.platform.retention.restore.RestoreSafetyFilter;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
@@ -147,7 +148,8 @@ public class PlatformSecurityConfiguration {
             OidcLoginSuccessHandler successHandler,
             SameOriginFilter sameOriginFilter,
             SecurityHeadersFilter securityHeadersFilter,
-            SessionLifecycleFilter sessionLifecycleFilter)
+            SessionLifecycleFilter sessionLifecycleFilter,
+            RestoreSafetyFilter restoreSafetyFilter)
             throws Exception {
         var uploadCapability =
                 PathPatternRequestMatcher.withDefaults()
@@ -252,6 +254,7 @@ public class PlatformSecurityConfiguration {
                                 headers.frameOptions(frame -> frame.deny())
                                         .httpStrictTransportSecurity(Customizer.withDefaults()))
                 .addFilterBefore(sameOriginFilter, CsrfFilter.class)
+                .addFilterBefore(restoreSafetyFilter, SameOriginFilter.class)
                 .addFilterAfter(sessionLifecycleFilter, CsrfFilter.class)
                 .addFilterAfter(securityHeadersFilter, HeaderWriterFilter.class);
         return http.build();

@@ -20,8 +20,13 @@ behaviors and failure modes considered before implementing its tests.
 | PWA shell is offline after a successful visit | Shell resources may be served from the service-worker cache; `/api/` and `/samples/` are never cached | `public/sw.js` policy plus production build verification |
 | A mutable container reference is supplied to Terraform | Input validation rejects any core image without a SHA-256 digest | Terraform variable validation |
 | Infrastructure or dependency definitions drift or become unsafe | Formatting, validation, dependency, secret, filesystem, CodeQL, and container scans fail CI | CI security and environment jobs |
+| Listener deletes one Private Audiobook | The request returns `202`, playback is denied transactionally, the authorization generation advances, and a tombstone plus exact erasure obligations are durable | `PrivateContentDeletionITest` audiobook path and `App.test.tsx` listener control |
+| Listener deletes the account | The Listener, sessions, sign-in sources, grants, and every Private Audiobook are denied before the `202` response; external identities are tombstoned | `PrivateContentDeletionITest` account path and `library/api.test.ts` |
+| Erasure work is delivered more than once | Working and finalized object deletion is idempotent, every finalized object generation is deleted, relational private data is removed last, and content-free evidence is recorded once | `PrivateContentDeletionITest`, filesystem asset-store tests, and `GoogleCloudAudiobookAssetStoreTest` |
+| An erasure target, provider proof, or retry deadline is missed | Reconciliation creates a content-free compliance incident that projects into the urgent Security Reviewer Action Queue | `ErasureDeadlinePolicyTest`, `PrivateContentDeletionITest`, and database constraints |
+| A backup resurrects deleted references | Tombstones replay while private traffic is gated, access and authorization generations are denied again, and fresh idempotent obligations remove restored data | `PrivateContentDeletionITest` restore-replay path and restore safety gate |
+| Retention configuration drifts beyond the contract | Startup rejects targets beyond 24 hours, day 23, 30 days, or 90 days; Terraform schedules erasure/reconciliation and validates the backup ceiling | `RetentionPropertiesTest` and Terraform validation |
 
-There is no request payload or user-controlled identifier in this feature, so invalid-input coverage is
-limited to deployment configuration validation. Retry, cancellation, idempotency, retention, and
-restore behavior belong to later ingestion and lifecycle slices; this skeleton only pins queue retry
-bounds, working-store expiry, database point-in-time recovery, and disposable-environment teardown.
+The public skeleton has no request payload or user-controlled identifier, so its invalid-input coverage
+remains limited to deployment configuration validation. Later lifecycle slices now cover retry,
+cancellation, idempotency, retention, and restore behavior at their owning feature boundaries.

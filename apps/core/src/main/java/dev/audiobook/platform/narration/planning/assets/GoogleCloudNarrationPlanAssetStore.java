@@ -63,4 +63,17 @@ public class GoogleCloudNarrationPlanAssetStore implements NarrationPlanAssetSto
         }
         return asset.getContent();
     }
+
+    @Override
+    public void delete(UUID conversionId, String reference) throws IOException {
+        if (!NarrationPlanAssetIdentity.reference(conversionId).equals(reference)) {
+            throw new IllegalArgumentException(
+                    "Narration Plan Working Asset reference does not match its conversion");
+        }
+        try {
+            storage.delete(properties.workingBucket(), reference);
+        } catch (StorageException exception) {
+            throw new IOException("Unable to delete the Narration Plan Working Asset", exception);
+        }
+    }
 }

@@ -62,6 +62,15 @@ public class FilesystemNarrationPlanAssetStore implements NarrationPlanAssetStor
         return Files.readAllBytes(path(conversionId));
     }
 
+    @Override
+    public void delete(UUID conversionId, String reference) throws IOException {
+        if (!NarrationPlanAssetIdentity.reference(conversionId).equals(reference)) {
+            throw new IllegalArgumentException(
+                    "Narration Plan Working Asset reference does not match its conversion");
+        }
+        Files.deleteIfExists(path(conversionId));
+    }
+
     private Path path(UUID conversionId) {
         return root.resolve(conversionId.toString()).resolve("plan-v1.json");
     }

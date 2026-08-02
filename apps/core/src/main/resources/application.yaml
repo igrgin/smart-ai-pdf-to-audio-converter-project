@@ -73,6 +73,18 @@ server:
       tracking-modes: cookie
 
 platform:
+  retention:
+    tombstone-key: ${RETENTION_TOMBSTONE_KEY:local-retention-tombstone-key-change-before-production}
+    tombstone-registry-path: ${RETENTION_TOMBSTONE_PATH:./local/retention-tombstones}
+    tombstone-registry-bucket: ${RETENTION_TOMBSTONE_BUCKET:local-retention-tombstones}
+    quick-erasure-target: 24h
+    live-erasure-deadline: 23d
+    provider-evidence-deadline: 30d
+    backup-expiry: 90d
+    evidence-retention: 365d
+    worker-batch-size: 100
+    maximum-attempts: 10
+    restore-replay-enabled: true
   offline-access:
     authorization-validity: 30d
     chunk-bytes: 1048576

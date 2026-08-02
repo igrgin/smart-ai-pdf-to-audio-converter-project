@@ -415,6 +415,7 @@ describe("public sample", () => {
   });
 
   it("plays a finalized audiobook through one persistent chaptered audio element", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
     let paused = true;
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => {
       paused = false;
@@ -460,6 +461,7 @@ describe("public sample", () => {
                 assetVersionId: "01985f42-5f8d-7000-8000-000000000232",
                 availability: "AVAILABLE",
                 totalDurationMs: 20000,
+                version: 4,
                 manifestUrl: "/api/v1/audiobooks/01985f42-5f8d-7000-8000-000000000132/asset-versions/01985f42-5f8d-7000-8000-000000000232/manifest"
               }
             }],
@@ -530,6 +532,22 @@ describe("public sample", () => {
           json: async () => ({ positionMs: 10000, version: 1 })
         });
       }
+      if (url.endsWith("/api/v1/audiobooks/01985f42-5f8d-7000-8000-000000000132")
+        && init?.method === "DELETE") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            requestId: "01985f42-5f8d-7000-8000-000000000732",
+            scope: "AUDIOBOOK",
+            state: "ACCEPTED",
+            requestedAt: "2026-08-02T12:00:00Z",
+            quickErasureDueAt: "2026-08-03T12:00:00Z",
+            liveErasureDueAt: "2026-08-25T12:00:00Z",
+            providerEvidenceDueAt: "2026-09-01T12:00:00Z",
+            backupExpiresAt: "2026-10-31T12:00:00Z"
+          })
+        });
+      }
       return Promise.resolve({ ok: false, status: 404 });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -568,6 +586,19 @@ describe("public sample", () => {
         })
       })
     ));
+
+    fireEvent.click(screen.getByRole("button", { name: /delete audiobook 1/i }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/audiobooks/01985f42-5f8d-7000-8000-000000000132",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          "If-Match": '"4"',
+          "X-CSRF-TOKEN": "private-csrf"
+        })
+      })
+    ));
+    expect(await screen.findByText(/audiobook 1 deletion accepted/i)).toBeVisible();
   });
 
   it("clearly denies conversion when the Listener has no free Conversion Entitlement", async () => {

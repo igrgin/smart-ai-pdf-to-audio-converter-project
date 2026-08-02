@@ -594,8 +594,10 @@ public class TrustOperationsServiceImpl implements TrustOperationsService {
                         """
                         SELECT g.grant_id, g.listener_id, g.purpose_code
                         FROM trust_operations.delegated_access_grant g
+                        JOIN listener_identity listener ON listener.listener_id = g.listener_id
                         LEFT JOIN trust_operations.delegated_access_revocation r ON r.grant_id = g.grant_id
                         WHERE g.case_id = ? AND g.staff_id = ? AND r.grant_id IS NULL
+                          AND listener.access_state = 'ACTIVE'
                           AND g.valid_from <= ? AND g.expires_at > ? AND ? = ANY (g.allowed_actions)
                         ORDER BY g.expires_at LIMIT 1
                         """,
@@ -620,7 +622,9 @@ public class TrustOperationsServiceImpl implements TrustOperationsService {
                         """
                         SELECT g.grant_id, g.listener_id, g.purpose_code
                         FROM trust_operations.emergency_access_grant g
+                        LEFT JOIN listener_identity listener ON listener.listener_id = g.listener_id
                         WHERE g.case_id = ? AND g.responder_id = ?
+                          AND (g.listener_id IS NULL OR listener.access_state = 'ACTIVE')
                           AND g.valid_from <= ? AND g.expires_at > ? AND ? = ANY (g.allowed_actions)
                         ORDER BY g.expires_at LIMIT 1
                         """,

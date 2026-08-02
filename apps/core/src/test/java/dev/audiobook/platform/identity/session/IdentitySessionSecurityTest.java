@@ -281,7 +281,12 @@ class IdentitySessionSecurityTest {
         when(privateAudiobookLibraryService.find(LISTENER_ONE, conversionId))
                 .thenReturn(
                         new PrivateAudiobookLibraryService.PrivateAudiobook(
-                                audiobookId, assetVersionId, "AVAILABLE", "a".repeat(64), 186000));
+                                audiobookId,
+                                assetVersionId,
+                                "AVAILABLE",
+                                "a".repeat(64),
+                                186000,
+                                7));
 
         mockMvc.perform(
                         get("/api/v1/library")
@@ -299,6 +304,7 @@ class IdentitySessionSecurityTest {
                                 .value(assetVersionId.toString()))
                 .andExpect(
                         jsonPath("$.audiobooks[0].privateAudiobook.totalDurationMs").value(186000))
+                .andExpect(jsonPath("$.audiobooks[0].privateAudiobook.version").value(7))
                 .andExpect(
                         jsonPath("$.audiobooks[0].privateAudiobook.manifestUrl")
                                 .value(

@@ -64,4 +64,14 @@ public class GoogleCloudNarrationReviewAssetStore implements NarrationReviewAsse
         }
         return asset.getContent();
     }
+
+    @Override
+    public void delete(UUID conversionId, UUID decisionId, String reference) throws IOException {
+        NarrationReviewAssetIdentity.requireReference(conversionId, decisionId, reference);
+        try {
+            storage.delete(properties.workingBucket(), reference);
+        } catch (StorageException exception) {
+            throw new IOException("Unable to delete the Narration Review Working Asset", exception);
+        }
+    }
 }

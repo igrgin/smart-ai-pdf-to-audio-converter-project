@@ -37,6 +37,11 @@ public class GoogleCloudAudiobookAssetStore implements AudiobookAssetStore {
     }
 
     @Override
+    public void deleteWorking(String objectKey) throws IOException {
+        delete(properties.workingBucket(), objectKey);
+    }
+
+    @Override
     public StoredAsset writeFinal(String objectKey, byte[] content, String contentType)
             throws IOException {
         return write(properties.finalBucket(), objectKey, content, contentType);
@@ -45,6 +50,11 @@ public class GoogleCloudAudiobookAssetStore implements AudiobookAssetStore {
     @Override
     public byte[] readFinal(String objectKey) throws IOException {
         return read(properties.finalBucket(), objectKey);
+    }
+
+    @Override
+    public void deleteFinal(String objectKey) throws IOException {
+        deleteAllVersions(properties.finalBucket(), objectKey);
     }
 
     private StoredAsset write(String bucket, String key, byte[] content, String contentType)
@@ -77,6 +87,33 @@ public class GoogleCloudAudiobookAssetStore implements AudiobookAssetStore {
             throw new IOException("Audiobook asset is unavailable");
         }
         return blob.getContent();
+    }
+
+    private void delete(String bucket, String key) throws IOException {
+        validateKey(key);
+        try {
+            storage.delete(bucket, key);
+        } catch (StorageException exception) {
+            throw new IOException("Unable to delete audiobook asset", exception);
+        }
+    }
+
+    private void deleteAllVersions(String bucket, String key) throws IOException {
+        validateKey(key);
+        try {
+            for (Blob blob :
+                    storage.list(
+                                    bucket,
+                                    Storage.BlobListOption.prefix(key),
+                                    Storage.BlobListOption.versions(true))
+                            .iterateAll()) {
+                if (blob.getName().equals(key)) {
+                    storage.delete(blob.getBlobId());
+                }
+            }
+        } catch (StorageException exception) {
+            throw new IOException("Unable to delete every audiobook asset generation", exception);
+        }
     }
 
     private static void validate(String key, byte[] content) {
