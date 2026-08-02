@@ -1,6 +1,6 @@
 import { Download, HardDrive, Play, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Button } from "../components/ui/button";
+import { Button } from "../ui";
 import type { OfflineCopyManager, OfflineCopyRecord, StorageEstimate } from "./offline-copy-manager";
 
 export type OfflineCopyCapability = Pick<

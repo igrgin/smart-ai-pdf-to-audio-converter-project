@@ -1,5 +1,7 @@
 package dev.audiobook.platform.trustoperations.internal;
 
+import dev.audiobook.platform.identity.ListenerPrincipal;
+
 import dev.audiobook.platform.trustoperations.TrustOperationsService;
 import java.time.Instant;
 import java.util.EnumSet;

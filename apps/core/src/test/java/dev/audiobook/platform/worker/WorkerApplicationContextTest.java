@@ -1,5 +1,8 @@
 package dev.audiobook.platform.worker;
 
+import dev.audiobook.platform.admission.InspectionWorkerService;
+import dev.audiobook.platform.worker.internal.WorkerEntrypoint;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.audiobook.platform.PlatformApplication;

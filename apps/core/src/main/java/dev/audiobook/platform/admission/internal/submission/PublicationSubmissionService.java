@@ -1,0 +1,87 @@
+package dev.audiobook.platform.admission.internal.submission;
+
+import java.time.Instant;
+import java.util.UUID;
+
+public interface PublicationSubmissionService {
+
+    Creation create(CreateCommand command);
+
+    UploadProgress upload(UploadCommand command);
+
+    Submission confirm(ConfirmCommand command);
+
+    Submission cancel(CancelCommand command);
+
+    int expireDue();
+
+    int applyInspectionResults();
+
+    Submission submission(UUID listenerId, UUID submissionId);
+
+    record CreateCommand(
+            UUID listenerId,
+            String mediaType,
+            long byteLength,
+            String sha256,
+            String termsVersion,
+            String noticeVersion,
+            String idempotencyKey) {
+    }
+
+    record Creation(
+            UUID submissionId,
+            SubmissionState state,
+            UploadSession uploadSession,
+            boolean created) {
+    }
+
+    record UploadSession(String token, Instant expiresAt, int chunkSize) {
+    }
+
+    record UploadCommand(
+            UUID submissionId,
+            String token,
+            long offset,
+            long totalBytes,
+            String chunkSha256,
+            byte[] bytes) {
+        @Override
+        public byte[] bytes() {
+            return bytes.clone();
+        }
+    }
+
+    record UploadProgress(long nextOffset, boolean complete, String storageGeneration) {
+    }
+
+    record ConfirmCommand(
+            UUID listenerId,
+            UUID submissionId,
+            String storageGeneration,
+            long byteLength,
+            String sha256,
+            String idempotencyKey) {
+    }
+
+    record CancelCommand(UUID listenerId, UUID submissionId, String idempotencyKey) {
+    }
+
+    record Submission(
+            UUID submissionId,
+            SubmissionState state,
+            String reasonCode,
+            UUID conversionId) {
+    }
+
+    enum SubmissionState {
+        AWAITING_UPLOAD,
+        UPLOADED,
+        INSPECTING,
+        ADMITTED,
+        REJECTED,
+        EXPIRED,
+        CANCELLED
+    }
+
+}

@@ -1,5 +1,17 @@
 package dev.audiobook.platform.admission;
 
+import dev.audiobook.platform.admission.internal.inspection.CommandLineMalwareScannerImpl;
+import dev.audiobook.platform.admission.internal.inspection.EpubInspectionServiceImpl;
+import dev.audiobook.platform.admission.internal.inspection.InspectionCommandRunner;
+import dev.audiobook.platform.admission.internal.inspection.InspectionProperties;
+import dev.audiobook.platform.admission.internal.inspection.MalwareScanner;
+import dev.audiobook.platform.admission.internal.inspection.PdfInspectionService;
+import dev.audiobook.platform.admission.internal.inspection.PdfInspectionServiceImpl;
+import dev.audiobook.platform.admission.internal.inspection.PublicationInspectionService;
+import dev.audiobook.platform.admission.internal.inspection.PublicationInspectionServiceImpl;
+import dev.audiobook.platform.admission.internal.inspection.QpdfValidationService;
+import dev.audiobook.platform.admission.internal.inspection.QpdfValidationServiceImpl;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.File;

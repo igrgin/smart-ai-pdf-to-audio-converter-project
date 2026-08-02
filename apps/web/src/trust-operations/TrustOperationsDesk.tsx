@@ -1,7 +1,7 @@
 import { Clock3, ShieldCheck } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { Button } from "../components/ui/button";
-import type { CsrfProof, StaffRole } from "../identity-session";
+import { Button } from "../ui";
+import type { CsrfProof, StaffRole } from "../session";
 import { fetchCaseDetails, mutationHeaders, performPrivilegedAction } from "./api";
 import { formatTime, humanize } from "./format";
 import type { ActionQueue, CaseDetails, PrivilegedActionResult } from "./types";

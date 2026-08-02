@@ -1,5 +1,8 @@
 package dev.audiobook.platform.entitlement;
 
+import dev.audiobook.platform.entitlement.internal.ConversionEntitlementServiceImpl;
+import dev.audiobook.platform.entitlement.internal.EntitlementPolicyProperties;
+
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;

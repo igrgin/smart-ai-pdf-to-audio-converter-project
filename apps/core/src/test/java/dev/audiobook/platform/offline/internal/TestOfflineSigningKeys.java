@@ -1,6 +1,6 @@
 package dev.audiobook.platform.offline.internal;
 
-import dev.audiobook.platform.offline.OfflineAccessProperties;
+import dev.audiobook.platform.offline.internal.OfflineAccessProperties;
 import java.security.GeneralSecurityException;
 import java.security.KeyPairGenerator;
 import java.security.spec.ECGenParameterSpec;

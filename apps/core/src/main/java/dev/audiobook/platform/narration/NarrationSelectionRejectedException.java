@@ -4,7 +4,7 @@ public class NarrationSelectionRejectedException extends RuntimeException {
 
     private final NarrationRejectionReason reason;
 
-    NarrationSelectionRejectedException(NarrationRejectionReason reason) {
+    public NarrationSelectionRejectedException(NarrationRejectionReason reason) {
         super(reason.name());
         this.reason = reason;
     }

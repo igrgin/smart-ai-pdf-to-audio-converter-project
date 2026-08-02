@@ -25,7 +25,7 @@ public interface AudiobookGenerationService {
             int chapterOrdinal,
             int segmentOrdinal,
             String spokenTextDigest,
-            SpeechSegmentationService.BoundaryKind boundaryKind) {
+            SpeechBoundaryKind boundaryKind) {
     }
 
     record AcceptedSegment(

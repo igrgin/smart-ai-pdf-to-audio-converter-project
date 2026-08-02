@@ -1,7 +1,7 @@
 package dev.audiobook.platform.offline.internal;
 
 import dev.audiobook.platform.library.PrivateAudiobookLibraryService;
-import dev.audiobook.platform.offline.OfflineAccessProperties;
+import dev.audiobook.platform.offline.internal.OfflineAccessProperties;
 import dev.audiobook.platform.offline.OfflineAccessService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

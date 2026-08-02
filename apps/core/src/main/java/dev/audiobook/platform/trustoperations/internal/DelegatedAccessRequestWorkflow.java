@@ -1,7 +1,7 @@
 package dev.audiobook.platform.trustoperations.internal;
 
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
-import dev.audiobook.platform.trustoperations.TrustOperationsProperties;
+import dev.audiobook.platform.trustoperations.internal.TrustOperationsProperties;
 import dev.audiobook.platform.trustoperations.TrustOperationsService;
 import dev.audiobook.platform.trustoperations.TrustOperationsService.ApproveDelegatedAccessCommand;
 import dev.audiobook.platform.trustoperations.TrustOperationsService.DelegatedAccessGrant;

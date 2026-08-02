@@ -1,5 +1,10 @@
 package dev.audiobook.platform.narration;
 
+import dev.audiobook.platform.narration.internal.document.PdfBoxDoclingTesseractBoundaryImpl;
+import dev.audiobook.platform.narration.internal.document.PdfNarrationPlanInterpreter;
+import dev.audiobook.platform.narration.internal.document.PdfNarrationPlanInterpreterImpl;
+import dev.audiobook.platform.narration.internal.document.PdfNarrationProperties;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.awt.Color;

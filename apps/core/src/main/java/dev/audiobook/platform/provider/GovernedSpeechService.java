@@ -1,6 +1,6 @@
 package dev.audiobook.platform.provider;
 
-import dev.audiobook.platform.generation.SpeechProvider;
+import dev.audiobook.platform.provider.SpeechProvider;
 import java.util.UUID;
 
 public interface GovernedSpeechService {

@@ -3,7 +3,7 @@ package dev.audiobook.platform.offline.internal;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.auth.oauth2.GoogleCredentials;
-import dev.audiobook.platform.offline.OfflineAccessProperties;
+import dev.audiobook.platform.offline.internal.OfflineAccessProperties;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;

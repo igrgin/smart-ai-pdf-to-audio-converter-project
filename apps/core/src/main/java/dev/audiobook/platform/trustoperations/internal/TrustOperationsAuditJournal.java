@@ -1,5 +1,7 @@
 package dev.audiobook.platform.trustoperations.internal;
 
+import dev.audiobook.platform.trustoperations.TrustOperationsService;
+
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
 import dev.audiobook.platform.trustoperations.TrustOperationsService.AuditEvent;
 import java.sql.ResultSet;

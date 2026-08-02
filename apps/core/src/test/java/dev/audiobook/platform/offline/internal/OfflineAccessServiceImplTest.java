@@ -9,7 +9,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 import dev.audiobook.platform.library.PrivateAudiobookLibraryService;
-import dev.audiobook.platform.offline.OfflineAccessProperties;
+import dev.audiobook.platform.offline.internal.OfflineAccessProperties;
 import dev.audiobook.platform.offline.OfflineAccessService;
 import java.time.Clock;
 import java.time.Duration;

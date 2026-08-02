@@ -6,12 +6,12 @@ import java.util.HexFormat;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
-final class StripeWebhookTestEvents {
+public final class StripeWebhookTestEvents {
 
     private StripeWebhookTestEvents() {
     }
 
-    static String signature(String payload, String secret) {
+    public static String signature(String payload, String secret) {
         try {
             long timestamp = Instant.now().getEpochSecond();
             Mac mac = Mac.getInstance("HmacSHA256");
