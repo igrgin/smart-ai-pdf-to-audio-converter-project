@@ -24,7 +24,7 @@ This document contains binding project instructions for implementation. Resolve 
 For Spring Boot:
 
 - Use the application's business modules as the first package level beneath the application root.
-- Keep types deliberately exposed to peer modules at the module's package root. Place the module's implementation beneath `internal`, subdividing it only where the general rules above justify another package.
+- Keep types deliberately exposed to peer modules in the narrowest owner-local package that names their role. Keep implementation details within the owner's responsibility packages; do not place an entire module beneath a blanket `internal` package.
 - Peer modules import only the owning module's exposed types. Framework-facing code such as controllers, persistence adapters, messaging adapters, configuration, and scheduled or asynchronous runners remains with the module whose behavior it supports.
 - Keep the Spring Boot application class above the application packages so component scanning covers the application without using the default package.
 
@@ -94,6 +94,22 @@ For React and TypeScript:
 **Verify:** GitHub-specific actions are executed through `gh`.
 
 ## Spring Boot code
+
+### Ownership-local package roles
+
+**Applies to:** Spring Boot production and test source packages beneath a business or platform owner.
+
+**Contract:**
+
+- Organize an owner's source by concrete responsibilities when doing so makes the area easier to navigate. Role packages such as `controller`, `dto`, `service`, `persistence`, `adapter`, and `error` are owner-local choices, not a mandatory template.
+- Create a role package only when source types actually perform that role. Do not create empty packages, speculative placeholders, or matching package trees solely for visual symmetry with another owner.
+- Keep a service interface and its `Impl` in the same `service` package. A supplying module may keep an adapter with the capability it supplies, while the consuming owner keeps the interface it defines.
+- Put SQL and other concrete persistence implementations in the owning area's `persistence` package and call them from the owning service. Do not create a `persistence` package for an area that owns no persistence implementation, including when it uses persistence owned by a parent or peer area.
+- Put transport-specific request and response shapes in the owning area's `dto` package. Keep domain types and cross-owner contracts with the area that owns their meaning rather than moving them into `dto` for convenience.
+- Put owner-specific exception translation in the owning area's `error` package. Keep a single exception-handler class directly in `error`, and place its exception types in the `error.exception` subpackage. Add another handler package level only when multiple independently changing handlers make that grouping meaningful.
+- Place a type in `shared` only when multiple owning areas actually use it and no single consumer owns its meaning. Do not use `shared` to avoid choosing an owner or to centralize unrelated role packages.
+
+**Verify:** Every role package contains source types that match its name; no empty or symmetry-only role packages exist; service interfaces and implementations are colocated; every `persistence` package contains concrete persistence code; and an owner with one exception handler uses `error/<Handler>` with its exception types under `error/exception`.
 
 ### Persistence
 
