@@ -10,6 +10,7 @@ import dev.audiobook.platform.identity.linking.IdentityLinkConflictException;
 import dev.audiobook.platform.identity.listener.ListenerIdentityRepository;
 import dev.audiobook.platform.identity.session.ListenerSession;
 import dev.audiobook.platform.identity.signin.ExternalIdentity;
+import dev.audiobook.platform.identity.signin.DeletedExternalIdentityPolicy;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,11 +30,12 @@ class ListenerIdentityServiceImplTest {
 
     private ListenerIdentityRepository repository;
     private ListenerIdentityService service;
+    private final DeletedExternalIdentityPolicy deletionPolicy = externalIdentity -> {};
 
     @BeforeEach
     void setUp() {
         repository = org.mockito.Mockito.mock(ListenerIdentityRepository.class);
-        service = new ListenerIdentityServiceImpl(repository, () -> FIRST_LISTENER);
+        service = new ListenerIdentityServiceImpl(repository, () -> FIRST_LISTENER, deletionPolicy);
     }
 
     @Test
@@ -78,7 +80,7 @@ class ListenerIdentityServiceImplTest {
                                 Set.of(SignInProvider.FACEBOOK)));
 
         ListenerSession firstSession = service.establish(first);
-        service = new ListenerIdentityServiceImpl(repository, () -> SECOND_LISTENER);
+        service = new ListenerIdentityServiceImpl(repository, () -> SECOND_LISTENER, deletionPolicy);
         ListenerSession secondSession = service.establish(second);
 
         assertThat(firstSession.listenerId()).isNotEqualTo(secondSession.listenerId());
@@ -111,7 +113,7 @@ class ListenerIdentityServiceImplTest {
                                 Set.of(SignInProvider.FACEBOOK)));
 
         assertThat(service.establish(relay).contactEmail()).endsWith("privaterelay.appleid.com");
-        service = new ListenerIdentityServiceImpl(repository, () -> SECOND_LISTENER);
+        service = new ListenerIdentityServiceImpl(repository, () -> SECOND_LISTENER, deletionPolicy);
         assertThat(service.establish(missing).contactEmail()).isNull();
     }
 

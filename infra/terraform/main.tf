@@ -13,6 +13,10 @@ locals {
     "reconciliation"
   ])
   worker_stages_without_narration = setsubtract(local.worker_stages, toset(["narration-analysis"]))
+  retention_worker_schedules = {
+    erasure        = "*/5 * * * *"
+    reconciliation = "0 * * * *"
+  }
   required_services = toset([
     "artifactregistry.googleapis.com",
     "cloudkms.googleapis.com",
@@ -104,8 +108,18 @@ resource "random_password" "generation_worker_database" {
   special = true
 }
 
+resource "random_password" "erasure_worker_database" {
+  length  = 32
+  special = true
+}
+
 resource "random_password" "upload_capability" {
   length  = 48
+  special = false
+}
+
+resource "random_password" "retention_tombstone" {
+  length  = 64
   special = false
 }
 
@@ -126,6 +140,11 @@ resource "google_sql_database_instance" "postgres" {
       enabled                        = true
       point_in_time_recovery_enabled = true
       start_time                     = "02:00"
+
+      backup_retention_settings {
+        retained_backups = 90
+        retention_unit   = "COUNT"
+      }
     }
 
     ip_configuration {
@@ -170,6 +189,12 @@ resource "google_sql_user" "generation_worker" {
   name     = "folio_${replace(each.key, "-", "_")}_worker"
   instance = google_sql_database_instance.postgres.name
   password = random_password.generation_worker_database[each.key].result
+}
+
+resource "google_sql_user" "erasure_worker" {
+  name     = "folio_erasure_worker"
+  instance = google_sql_database_instance.postgres.name
+  password = random_password.erasure_worker_database.result
 }
 
 resource "google_secret_manager_secret" "database_password" {
@@ -231,6 +256,19 @@ resource "google_secret_manager_secret" "generation_worker_database_password" {
   depends_on = [google_project_service.required["secretmanager.googleapis.com"]]
 }
 
+resource "google_secret_manager_secret" "erasure_worker_database_password" {
+  secret_id = "${local.prefix}-erasure-database-password"
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.required["secretmanager.googleapis.com"]]
+}
+
 resource "google_secret_manager_secret_version" "narration_database_password" {
   secret      = google_secret_manager_secret.narration_database_password.id
   secret_data = random_password.narration_database.result
@@ -246,6 +284,11 @@ resource "google_secret_manager_secret_version" "generation_worker_database_pass
 
   secret      = google_secret_manager_secret.generation_worker_database_password[each.key].id
   secret_data = random_password.generation_worker_database[each.key].result
+}
+
+resource "google_secret_manager_secret_version" "erasure_worker_database_password" {
+  secret      = google_secret_manager_secret.erasure_worker_database_password.id
+  secret_data = random_password.erasure_worker_database.result
 }
 
 resource "google_secret_manager_secret" "upload_capability" {
@@ -266,12 +309,34 @@ resource "google_secret_manager_secret_version" "upload_capability" {
   secret_data = random_password.upload_capability.result
 }
 
+resource "google_secret_manager_secret" "retention_tombstone" {
+  secret_id = "${local.prefix}-retention-tombstone"
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.required["secretmanager.googleapis.com"]]
+}
+
+resource "google_secret_manager_secret_version" "retention_tombstone" {
+  secret      = google_secret_manager_secret.retention_tombstone.id
+  secret_data = random_password.retention_tombstone.result
+}
+
 resource "google_storage_bucket" "working" {
   name                        = "${var.project_id}-${var.environment_name}-working"
   location                    = var.region
   force_destroy               = true
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
+
+  soft_delete_policy {
+    retention_duration_seconds = 604800
+  }
 
   lifecycle_rule {
     condition { age = 23 }
@@ -286,7 +351,25 @@ resource "google_storage_bucket" "finalized" {
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
 
+  soft_delete_policy {
+    retention_duration_seconds = 604800
+  }
+
   versioning { enabled = true }
+}
+
+resource "google_storage_bucket" "retention_tombstones" {
+  name                        = "${var.project_id}-${var.environment_name}-retention-tombstones"
+  location                    = var.region
+  force_destroy               = true
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+
+  versioning { enabled = true }
+
+  soft_delete_policy {
+    retention_duration_seconds = 7776000
+  }
 }
 
 resource "google_pubsub_topic" "work" {
@@ -390,12 +473,36 @@ resource "google_secret_manager_secret_iam_member" "core_upload_capability" {
   member    = "serviceAccount:${google_service_account.core.email}"
 }
 
+resource "google_secret_manager_secret_iam_member" "core_retention_tombstone" {
+  secret_id = google_secret_manager_secret.retention_tombstone.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.core.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "worker_retention_tombstone" {
+  for_each = local.worker_stages
+
+  secret_id = google_secret_manager_secret.retention_tombstone.id
+  role      = "roles/secretmanager.secretAccessor"
+  member = "serviceAccount:${
+    each.key == "inspection"
+    ? google_service_account.inspection_worker.email
+    : google_service_account.workers[each.key].email
+  }"
+}
+
 resource "google_secret_manager_secret_iam_member" "worker_database_password" {
-  for_each = setsubtract(local.worker_stages_without_narration, toset(["inspection", "speech", "packaging"]))
+  for_each = setsubtract(local.worker_stages_without_narration, toset(["inspection", "speech", "packaging", "erasure"]))
 
   secret_id = google_secret_manager_secret.database_password.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.workers[each.key].email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "erasure_worker_database_password" {
+  secret_id = google_secret_manager_secret.erasure_worker_database_password.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workers["erasure"].email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "generation_worker_database_password" {
@@ -518,6 +625,54 @@ resource "google_storage_bucket_iam_member" "core_working_objects" {
   member = "serviceAccount:${google_service_account.core.email}"
 }
 
+resource "google_project_iam_custom_role" "tombstone_registry" {
+  role_id     = "folio_tombstone_registry_${replace(var.environment_name, "-", "_")}"
+  title       = "${local.prefix} tombstone registry"
+  description = "Append and replay content-free deletion tombstones without mutation"
+  permissions = ["storage.objects.create", "storage.objects.get", "storage.objects.list"]
+}
+
+resource "google_storage_bucket_iam_member" "core_tombstone_registry" {
+  bucket = google_storage_bucket.retention_tombstones.name
+  role   = google_project_iam_custom_role.tombstone_registry.name
+  member = "serviceAccount:${google_service_account.core.email}"
+}
+
+resource "google_project_iam_custom_role" "working_erasure" {
+  role_id     = "folio_working_erasure_${replace(var.environment_name, "-", "_")}"
+  title       = "${local.prefix} working asset erasure"
+  description = "Delete exact private working assets without reading content"
+  permissions = ["storage.objects.delete"]
+}
+
+resource "google_project_iam_custom_role" "working_erasure_list" {
+  role_id     = "folio_working_erasure_list_${replace(var.environment_name, "-", "_")}"
+  title       = "${local.prefix} working asset erasure listing"
+  description = "List working-object names so exact private quarantine generations can be erased"
+  permissions = ["storage.objects.list"]
+}
+
+resource "google_storage_bucket_iam_member" "erasure_working_objects" {
+  bucket = google_storage_bucket.working.name
+  role   = google_project_iam_custom_role.working_erasure.name
+  member = "serviceAccount:${google_service_account.workers["erasure"].email}"
+
+  condition {
+    title = "PrivateWorkingAssetErasure"
+    expression = join(" || ", [
+      "resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.working.name}/objects/quarantine/\")",
+      "resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.working.name}/objects/narration-plans/\")",
+      "resource.name.startsWith(\"projects/_/buckets/${google_storage_bucket.working.name}/objects/conversions/\")"
+    ])
+  }
+}
+
+resource "google_storage_bucket_iam_member" "erasure_working_object_listing" {
+  bucket = google_storage_bucket.working.name
+  role   = google_project_iam_custom_role.working_erasure_list.name
+  member = "serviceAccount:${google_service_account.workers["erasure"].email}"
+}
+
 resource "google_storage_bucket_iam_member" "packaging_finalized_creator" {
   bucket = google_storage_bucket.finalized.name
   role   = "roles/storage.objectCreator"
@@ -544,6 +699,19 @@ resource "google_storage_bucket_iam_member" "core_finalized_objects" {
   bucket = google_storage_bucket.finalized.name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.core.email}"
+}
+
+resource "google_project_iam_custom_role" "finalized_erasure" {
+  role_id     = "folio_final_erasure_${replace(var.environment_name, "-", "_")}"
+  title       = "${local.prefix} finalized asset erasure"
+  description = "List object versions and delete private finalized assets without reading content"
+  permissions = ["storage.objects.delete", "storage.objects.list"]
+}
+
+resource "google_storage_bucket_iam_member" "erasure_finalized_objects" {
+  bucket = google_storage_bucket.finalized.name
+  role   = google_project_iam_custom_role.finalized_erasure.name
+  member = "serviceAccount:${google_service_account.workers["erasure"].email}"
 }
 
 resource "google_kms_crypto_key_iam_member" "core_signer" {
@@ -701,6 +869,19 @@ resource "google_cloud_run_v2_service" "core" {
           }
         }
       }
+      env {
+        name = "RETENTION_TOMBSTONE_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.retention_tombstone.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name  = "RETENTION_TOMBSTONE_BUCKET"
+        value = google_storage_bucket.retention_tombstones.name
+      }
 
       startup_probe {
         initial_delay_seconds = 5
@@ -732,10 +913,13 @@ resource "google_cloud_run_v2_service" "core" {
     google_secret_manager_secret_iam_member.core_database_password,
     google_secret_manager_secret_iam_member.core_zitadel_client_secret,
     google_secret_manager_secret_iam_member.core_upload_capability,
+    google_secret_manager_secret_iam_member.core_retention_tombstone,
+    google_storage_bucket_iam_member.core_tombstone_registry,
     google_storage_bucket_iam_member.core_working_objects,
     google_sql_user.narration_worker,
     google_sql_user.platform,
-    google_sql_user.inspection
+    google_sql_user.inspection,
+    google_sql_user.erasure_worker
   ]
 }
 
@@ -813,6 +997,10 @@ resource "google_cloud_run_v2_job" "workers" {
           value = "false"
         }
         env {
+          name  = "PLATFORM_RETENTION_RESTORE_REPLAY_ENABLED"
+          value = "false"
+        }
+        env {
           name  = "DATABASE_URL"
           value = "jdbc:postgresql://${google_sql_database_instance.postgres.private_ip_address}:5432/${google_sql_database.platform.name}"
         }
@@ -820,7 +1008,9 @@ resource "google_cloud_run_v2_job" "workers" {
           name = "DATABASE_USER"
           value = each.key == "inspection" ? google_sql_user.inspection.name : (
             each.key == "narration-analysis" ? google_sql_user.narration_worker.name : (
-              contains(["speech", "packaging"], each.key) ? google_sql_user.generation_worker[each.key].name : google_sql_user.platform.name
+              contains(["speech", "packaging"], each.key) ? google_sql_user.generation_worker[each.key].name : (
+                each.key == "erasure" ? google_sql_user.erasure_worker.name : google_sql_user.platform.name
+              )
             )
           )
         }
@@ -858,6 +1048,19 @@ resource "google_cloud_run_v2_job" "workers" {
         env {
           name  = "APPLICATION_ORIGIN"
           value = "https://worker.invalid"
+        }
+        env {
+          name = "RETENTION_TOMBSTONE_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.retention_tombstone.secret_id
+              version = "latest"
+            }
+          }
+        }
+        env {
+          name  = "RETENTION_TOMBSTONE_BUCKET"
+          value = google_storage_bucket.retention_tombstones.name
         }
         dynamic "env" {
           for_each = each.key == "speech" ? [true] : []
@@ -961,7 +1164,9 @@ resource "google_cloud_run_v2_job" "workers" {
             secret_key_ref {
               secret = each.key == "inspection" ? google_secret_manager_secret.inspection_database_password.secret_id : (
                 each.key == "narration-analysis" ? google_secret_manager_secret.narration_database_password.secret_id : (
-                  contains(["speech", "packaging"], each.key) ? google_secret_manager_secret.generation_worker_database_password[each.key].secret_id : google_secret_manager_secret.database_password.secret_id
+                  contains(["speech", "packaging"], each.key) ? google_secret_manager_secret.generation_worker_database_password[each.key].secret_id : (
+                    each.key == "erasure" ? google_secret_manager_secret.erasure_worker_database_password.secret_id : google_secret_manager_secret.database_password.secret_id
+                  )
                 )
               )
               version = "latest"
@@ -984,14 +1189,20 @@ resource "google_cloud_run_v2_job" "workers" {
     google_project_service.required["run.googleapis.com"],
     google_secret_manager_secret_iam_member.worker_database_password,
     google_secret_manager_secret_iam_member.generation_worker_database_password,
+    google_secret_manager_secret_iam_member.erasure_worker_database_password,
+    google_secret_manager_secret_iam_member.worker_retention_tombstone,
     google_secret_manager_secret_iam_member.narration_database_password,
     google_secret_manager_secret_iam_member.inspection_database_password,
     google_secret_manager_secret_iam_member.speech_openai_api_key,
     google_storage_bucket_iam_member.inspection_working_objects,
+    google_storage_bucket_iam_member.erasure_working_objects,
+    google_storage_bucket_iam_member.erasure_working_object_listing,
+    google_storage_bucket_iam_member.erasure_finalized_objects,
     google_sql_user.narration_worker,
     google_sql_user.platform,
     google_sql_user.inspection,
-    google_sql_user.generation_worker
+    google_sql_user.generation_worker,
+    google_sql_user.erasure_worker
   ]
 }
 
@@ -1022,6 +1233,40 @@ resource "google_cloud_scheduler_job" "inspection" {
   depends_on = [
     google_project_service.required["cloudscheduler.googleapis.com"],
     google_cloud_run_v2_job_iam_member.inspection_launcher
+  ]
+}
+
+resource "google_cloud_run_v2_job_iam_member" "retention_launcher" {
+  for_each = local.retention_worker_schedules
+
+  project  = var.project_id
+  location = google_cloud_run_v2_job.workers[each.key].location
+  name     = google_cloud_run_v2_job.workers[each.key].name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.workers[each.key].email}"
+}
+
+resource "google_cloud_scheduler_job" "retention" {
+  for_each = local.retention_worker_schedules
+
+  name      = "${local.prefix}-${each.key}"
+  region    = var.region
+  schedule  = each.value
+  time_zone = "Etc/UTC"
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.workers[each.key].name}:run"
+    body        = base64encode("{}")
+
+    oauth_token {
+      service_account_email = google_service_account.workers[each.key].email
+    }
+  }
+
+  depends_on = [
+    google_project_service.required["cloudscheduler.googleapis.com"],
+    google_cloud_run_v2_job_iam_member.retention_launcher
   ]
 }
 

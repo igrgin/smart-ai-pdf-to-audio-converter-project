@@ -40,7 +40,7 @@ public class PrivateAudiobookLibraryServiceImpl implements PrivateAudiobookLibra
                 jdbcTemplate.query(
                         """
                         SELECT pa.audiobook_id, pa.current_asset_version_id, pa.availability,
-                               av.manifest_digest, av.total_duration_ms
+                               av.manifest_digest, av.total_duration_ms, pa.version
                         FROM library.private_audiobook pa
                         JOIN library.audiobook_asset_version av
                           ON av.asset_version_id = pa.current_asset_version_id
@@ -52,7 +52,8 @@ public class PrivateAudiobookLibraryServiceImpl implements PrivateAudiobookLibra
                                         resultSet.getObject("current_asset_version_id", UUID.class),
                                         resultSet.getString("availability"),
                                         resultSet.getString("manifest_digest"),
-                                        resultSet.getLong("total_duration_ms")),
+                                        resultSet.getLong("total_duration_ms"),
+                                        resultSet.getLong("version")),
                         listenerId,
                         conversionId);
         return matches.isEmpty() ? null : matches.getFirst();

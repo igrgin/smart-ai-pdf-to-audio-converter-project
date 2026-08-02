@@ -237,6 +237,11 @@ fieldset.narration-review-item { border: 0; }
 .link-methods { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
 .link-methods p { margin: 0 0 9px; color: var(--muted); font-size: .7rem; line-height: 1.5; }
 .link-methods form, .link-methods .button { width: 100%; }
+.privacy-controls { display: grid; gap: 10px; }
+.privacy-controls h2 { margin-bottom: 0; }
+.privacy-controls > .button { width: 100%; }
+.deletion-status, .deletion-error { padding: 10px; border-left: 3px solid var(--accent); background: var(--canvas); line-height: 1.5; }
+.deletion-error { color: var(--accent); }
 .library-loading { display: grid; place-items: center; color: var(--muted); }
 
 .dialog-backdrop { position: fixed; z-index: 20; inset: 0; padding: 24px; display: grid; place-items: center; background: rgb(7 13 20 / 62%); backdrop-filter: blur(7px); }

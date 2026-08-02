@@ -47,6 +47,18 @@ server:
         secure: false
 
 platform:
+  retention:
+    tombstone-key: "00000000000000000000000000000000"
+    tombstone-registry-path: ${java.io.tmpdir}/folio-test-retention-tombstones
+    tombstone-registry-bucket: test-retention-tombstones
+    quick-erasure-target: 24h
+    live-erasure-deadline: 23d
+    provider-evidence-deadline: 30d
+    backup-expiry: 90d
+    evidence-retention: 365d
+    worker-batch-size: 100
+    maximum-attempts: 10
+    restore-replay-enabled: false
   offline-access:
     authorization-validity: 30d
     chunk-bytes: 1048576

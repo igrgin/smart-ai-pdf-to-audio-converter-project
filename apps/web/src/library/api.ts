@@ -29,7 +29,19 @@ export interface PrivateAudiobookSummary {
   assetVersionId: string;
   availability: "AVAILABLE" | "RIGHTS_QUARANTINED" | "TECHNICALLY_UNAVAILABLE" | "DELETING" | "ERASED";
   totalDurationMs: number;
+  version: number;
   manifestUrl: string;
+}
+
+export interface DeletionReceipt {
+  requestId: string;
+  scope: "AUDIOBOOK" | "ACCOUNT";
+  state: "ACCEPTED" | "ERASING" | "LIVE_ERASED" | "COMPLETED" | "FAILED";
+  requestedAt: string;
+  quickErasureDueAt: string;
+  liveErasureDueAt: string;
+  providerEvidenceDueAt: string;
+  backupExpiresAt: string;
 }
 
 export type AllowedAction = "REVIEW_NARRATION_PLAN" | "ACCEPT_RECOMMENDATIONS" | "RETRY_NARRATION_PLAN";
@@ -109,4 +121,35 @@ export async function retryNarrationPlan(
   );
   if (!response.ok) throw new Error(`Narration Plan recovery returned ${response.status}`);
   return response.json() as Promise<ConversionProgress>;
+}
+
+export async function deletePrivateAudiobook(
+  audiobookId: string,
+  version: number,
+  csrf: CsrfProof
+): Promise<DeletionReceipt> {
+  const response = await fetch(`/api/v1/audiobooks/${audiobookId}`, {
+    method: "DELETE",
+    headers: {
+      Accept: "application/json",
+      "Idempotency-Key": crypto.randomUUID(),
+      "If-Match": `"${version}"`,
+      [csrf.headerName]: csrf.token
+    }
+  });
+  if (!response.ok) throw new SameOriginResponseError(response.status, "Audiobook deletion");
+  return response.json() as Promise<DeletionReceipt>;
+}
+
+export async function deleteListenerAccount(csrf: CsrfProof): Promise<DeletionReceipt> {
+  const response = await fetch("/api/v1/account", {
+    method: "DELETE",
+    headers: {
+      Accept: "application/json",
+      "Idempotency-Key": crypto.randomUUID(),
+      [csrf.headerName]: csrf.token
+    }
+  });
+  if (!response.ok) throw new SameOriginResponseError(response.status, "Account deletion");
+  return response.json() as Promise<DeletionReceipt>;
 }

@@ -20,6 +20,8 @@ spring:
     timeout: 8s
 
 platform:
+  retention:
+    restore-replay-enabled: true
   offline-access:
     authorization-validity: 30d
     chunk-bytes: 4

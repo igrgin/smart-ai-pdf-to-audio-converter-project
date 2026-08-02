@@ -11,7 +11,11 @@ public interface AudiobookAssetStore extends FinalAudiobookAssetReader {
 
     byte[] readWorking(String objectKey) throws IOException;
 
+    void deleteWorking(String objectKey) throws IOException;
+
     StoredAsset writeFinal(String objectKey, byte[] content, String contentType) throws IOException;
+
+    void deleteFinal(String objectKey) throws IOException;
 
     record StoredAsset(String objectKey, String sha256, long byteLength) {}
 }

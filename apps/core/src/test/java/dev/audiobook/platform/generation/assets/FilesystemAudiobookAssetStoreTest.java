@@ -46,5 +46,14 @@ class FilesystemAudiobookAssetStoreTest {
                 .hasMessageContaining("different content");
         assertThatThrownBy(() -> store.readWorking("../private-source"))
                 .isInstanceOf(IllegalArgumentException.class);
+
+        store.deleteWorking(working.objectKey());
+        store.deleteWorking(working.objectKey());
+        store.deleteFinal(finalized.objectKey());
+        store.deleteFinal(finalized.objectKey());
+        assertThatThrownBy(() -> store.readWorking(working.objectKey()))
+                .isInstanceOf(java.io.IOException.class);
+        assertThatThrownBy(() -> store.readFinal(finalized.objectKey()))
+                .isInstanceOf(java.io.IOException.class);
     }
 }

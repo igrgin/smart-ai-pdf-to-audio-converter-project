@@ -35,6 +35,7 @@ public final class TrustOperationsCaseProjector {
         projectEntitlementInterventions(now);
         projectVoiceAvailability(now);
         projectServiceIncidents(now);
+        projectComplianceIncidents(now);
     }
 
     private void projectFailedStages(Instant now) {
@@ -228,6 +229,39 @@ public final class TrustOperationsCaseProjector {
         projectAndReconcile("service-incident:", cases, now);
     }
 
+    private void projectComplianceIncidents(Instant now) {
+        List<OpenCaseRequest> cases =
+                jdbcTemplate
+                        .query(
+                                """
+                                SELECT incident_id, incident_code, deadline
+                                FROM retention.compliance_incident
+                                WHERE resolved_at IS NULL
+                                """,
+                                (resultSet, row) ->
+                                        new ComplianceIncidentSource(
+                                                resultSet.getObject("incident_id", UUID.class),
+                                                resultSet.getString("incident_code"),
+                                                resultSet.getTimestamp("deadline").toInstant()))
+                        .stream()
+                        .map(
+                                source ->
+                                        new OpenCaseRequest(
+                                                CaseType.COMPLIANCE_INCIDENT,
+                                                null,
+                                                "ERASURE_REQUEST",
+                                                source.incidentId(),
+                                                source.code(),
+                                                "ERASURE_EVIDENCE_REQUIRES_URGENT_REVIEW",
+                                                source.deadline(),
+                                                100,
+                                                100,
+                                                VIEW_REFERENCE,
+                                                "compliance-incident:" + source.incidentId()))
+                        .toList();
+        projectAndReconcile("compliance-incident:", cases, now);
+    }
+
     private void projectAndReconcile(
             String correlationPrefix, List<OpenCaseRequest> cases, Instant now) {
         Set<String> activeCorrelations =
@@ -286,4 +320,6 @@ public final class TrustOperationsCaseProjector {
 
     private record TimedSource(
             UUID resourceId, UUID listenerId, String correlationId, Instant occurredAt) {}
+
+    private record ComplianceIncidentSource(UUID incidentId, String code, Instant deadline) {}
 }

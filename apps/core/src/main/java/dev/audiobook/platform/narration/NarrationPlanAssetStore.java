@@ -9,6 +9,8 @@ public interface NarrationPlanAssetStore {
 
     byte[] read(UUID conversionId, String reference) throws IOException;
 
+    void delete(UUID conversionId, String reference) throws IOException;
+
     record StoredAsset(String reference, String sha256) {
     }
 }

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  deleteListenerAccount,
+  deletePrivateAudiobook,
   fetchConversionProgress,
   fetchLibrary
 } from "./api";
@@ -42,4 +44,41 @@ describe("Audiobook Conversion polling", () => {
     expect(failure).toBeInstanceOf(SameOriginResponseError);
     expect(failure).toMatchObject({ status: 404 });
   });
+
+  it("requests audiobook deletion with idempotency, version, and CSRF proofs", async () => {
+    const receipt = { requestId: "request-1", scope: "AUDIOBOOK", state: "ACCEPTED" };
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => receipt });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deletePrivateAudiobook("book-1", 7, csrf())).resolves.toEqual(receipt);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/audiobooks/book-1", {
+      method: "DELETE",
+      headers: {
+        Accept: "application/json",
+        "Idempotency-Key": expect.any(String),
+        "If-Match": '"7"',
+        "X-CSRF-TOKEN": "csrf-test"
+      }
+    });
+  });
+
+  it("requests account deletion with idempotency and CSRF proofs", async () => {
+    const receipt = { requestId: "request-2", scope: "ACCOUNT", state: "ACCEPTED" };
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => receipt });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteListenerAccount(csrf())).resolves.toEqual(receipt);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/account", {
+      method: "DELETE",
+      headers: {
+        Accept: "application/json",
+        "Idempotency-Key": expect.any(String),
+        "X-CSRF-TOKEN": "csrf-test"
+      }
+    });
+  });
 });
+
+function csrf() {
+  return { headerName: "X-CSRF-TOKEN", parameterName: "_csrf", token: "csrf-test" };
+}

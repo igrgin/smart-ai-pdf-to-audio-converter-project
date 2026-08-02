@@ -39,6 +39,11 @@ public class FilesystemAudiobookAssetStore implements AudiobookAssetStore {
     }
 
     @Override
+    public void deleteWorking(String objectKey) throws IOException {
+        Files.deleteIfExists(resolve(workingRoot, objectKey));
+    }
+
+    @Override
     public StoredAsset writeFinal(String objectKey, byte[] content, String contentType)
             throws IOException {
         return write(finalRoot, objectKey, content);
@@ -47,6 +52,11 @@ public class FilesystemAudiobookAssetStore implements AudiobookAssetStore {
     @Override
     public byte[] readFinal(String objectKey) throws IOException {
         return Files.readAllBytes(resolve(finalRoot, objectKey));
+    }
+
+    @Override
+    public void deleteFinal(String objectKey) throws IOException {
+        Files.deleteIfExists(resolve(finalRoot, objectKey));
     }
 
     private static StoredAsset write(Path root, String objectKey, byte[] content)

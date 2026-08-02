@@ -117,6 +117,7 @@ public class LibraryController {
             java.util.UUID assetVersionId,
             String availability,
             long totalDurationMs,
+            long version,
             String manifestUrl) {
 
         static PrivateAudiobookView from(
@@ -129,6 +130,7 @@ public class LibraryController {
                     audiobook.assetVersionId(),
                     audiobook.availability(),
                     audiobook.totalDurationMs(),
+                    audiobook.version(),
                     "/api/v1/audiobooks/"
                             + audiobook.audiobookId()
                             + "/asset-versions/"

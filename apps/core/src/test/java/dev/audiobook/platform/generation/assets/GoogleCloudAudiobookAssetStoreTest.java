@@ -5,9 +5,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.google.api.gax.paging.Page;
 import com.google.cloud.storage.Blob;
+import com.google.cloud.storage.BlobId;
 import com.google.cloud.storage.BlobInfo;
 import com.google.cloud.storage.Storage;
 import com.google.cloud.storage.StorageException;
@@ -17,6 +20,7 @@ import dev.audiobook.platform.generation.AudioGenerationProperties;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
+import java.util.List;
 
 class GoogleCloudAudiobookAssetStoreTest {
 
@@ -62,5 +66,32 @@ class GoogleCloudAudiobookAssetStoreTest {
                 .hasMessageContaining("unavailable");
         assertThatThrownBy(() -> store.readWorking("../private-source"))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void finalErasureDeletesEveryVersionOfOnlyTheExactObject() throws Exception {
+        String key = "audiobooks/one/part.mp3";
+        Blob current = mock(Blob.class);
+        Blob older = mock(Blob.class);
+        Blob neighbor = mock(Blob.class);
+        BlobId currentId = BlobId.of("local-final", key, 3L);
+        BlobId olderId = BlobId.of("local-final", key, 2L);
+        BlobId neighborId = BlobId.of("local-final", key + ".metadata", 1L);
+        Page<Blob> versions = mock(Page.class);
+        when(storage.list(eq("local-final"), any(Storage.BlobListOption[].class)))
+                .thenReturn(versions);
+        when(versions.iterateAll()).thenReturn(List.of(current, older, neighbor));
+        when(current.getName()).thenReturn(key);
+        when(current.getBlobId()).thenReturn(currentId);
+        when(older.getName()).thenReturn(key);
+        when(older.getBlobId()).thenReturn(olderId);
+        when(neighbor.getName()).thenReturn(key + ".metadata");
+        when(neighbor.getBlobId()).thenReturn(neighborId);
+
+        store.deleteFinal(key);
+
+        verify(storage).delete(currentId);
+        verify(storage).delete(olderId);
+        verify(storage, org.mockito.Mockito.never()).delete(neighborId);
     }
 }

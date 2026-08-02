@@ -79,6 +79,9 @@ platform:
     emergency-access-maximum-duration: ${EMERGENCY_ACCESS_MAXIMUM_DURATION:30m}
     emergency-review-deadline: ${EMERGENCY_REVIEW_DEADLINE:24h}
     fresh-mfa-maximum-age: ${EMERGENCY_FRESH_MFA_MAXIMUM_AGE:5m}
+  retention:
+    tombstone-key: ${RETENTION_TOMBSTONE_KEY}
+    tombstone-registry-bucket: ${RETENTION_TOMBSTONE_BUCKET}
 
 management:
   tracing:

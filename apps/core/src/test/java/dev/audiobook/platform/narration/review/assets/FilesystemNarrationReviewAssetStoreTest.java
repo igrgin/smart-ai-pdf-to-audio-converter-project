@@ -34,6 +34,11 @@ class FilesystemNarrationReviewAssetStoreTest {
         assertThat(store.read(conversionId, decisionId, first.reference())).isEqualTo(review);
         assertThat(first.reference())
                 .isEqualTo(NarrationReviewAssetIdentity.reference(conversionId, decisionId));
+
+        store.delete(conversionId, decisionId, first.reference());
+        store.delete(conversionId, decisionId, first.reference());
+        assertThatThrownBy(() -> store.read(conversionId, decisionId, first.reference()))
+                .isInstanceOf(java.io.IOException.class);
     }
 
     @Test

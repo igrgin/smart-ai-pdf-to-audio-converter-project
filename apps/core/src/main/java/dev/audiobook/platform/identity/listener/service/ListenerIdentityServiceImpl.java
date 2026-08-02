@@ -4,6 +4,7 @@ import dev.audiobook.platform.identity.linking.IdentityLinkConflictException;
 import dev.audiobook.platform.identity.listener.*;
 import dev.audiobook.platform.identity.session.ListenerSession;
 import dev.audiobook.platform.identity.signin.ExternalIdentity;
+import dev.audiobook.platform.identity.signin.DeletedExternalIdentityPolicy;
 
 import lombok.RequiredArgsConstructor;
 
@@ -20,10 +21,12 @@ public class ListenerIdentityServiceImpl implements ListenerIdentityService {
 
     private final ListenerIdentityRepository repository;
     private final ListenerIdGenerator listenerIdGenerator;
+    private final DeletedExternalIdentityPolicy deletedExternalIdentityPolicy;
 
     @Override
     @Transactional
     public ListenerSession establish(ExternalIdentity externalIdentity) {
+        deletedExternalIdentityPolicy.requireAllowed(externalIdentity);
         Optional<ListenerSession> existing =
                 repository.findByExternalIdentity(
                         externalIdentity.issuer(), externalIdentity.subject());
@@ -36,6 +39,7 @@ public class ListenerIdentityServiceImpl implements ListenerIdentityService {
     @Override
     @Transactional
     public ListenerSession link(UUID listenerId, ExternalIdentity externalIdentity) {
+        deletedExternalIdentityPolicy.requireAllowed(externalIdentity);
         Optional<ListenerSession> owner =
                 repository.findByExternalIdentity(
                         externalIdentity.issuer(), externalIdentity.subject());

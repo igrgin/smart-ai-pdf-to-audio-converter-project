@@ -60,6 +60,12 @@ public class FilesystemNarrationReviewAssetStore implements NarrationReviewAsset
         return Files.readAllBytes(path(conversionId, decisionId));
     }
 
+    @Override
+    public void delete(UUID conversionId, UUID decisionId, String reference) throws IOException {
+        NarrationReviewAssetIdentity.requireReference(conversionId, decisionId, reference);
+        Files.deleteIfExists(path(conversionId, decisionId));
+    }
+
     private Path path(UUID conversionId, UUID decisionId) {
         return root.resolve(conversionId.toString())
                 .resolve("reviews")

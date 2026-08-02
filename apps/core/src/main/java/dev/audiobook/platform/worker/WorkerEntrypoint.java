@@ -2,6 +2,8 @@ package dev.audiobook.platform.worker;
 
 import dev.audiobook.platform.admission.inspection.work.service.InspectionWorkerService;
 import dev.audiobook.platform.generation.service.AudiobookGenerationWorkerService;
+import dev.audiobook.platform.retention.erasure.service.ErasureWorkerService;
+import dev.audiobook.platform.retention.reconciliation.service.ErasureReconciliationService;
 import dev.audiobook.platform.workflow.narrationanalysis.service.NarrationAnalysisStageRunService;
 
 import lombok.RequiredArgsConstructor;
@@ -22,6 +24,8 @@ public class WorkerEntrypoint implements ApplicationRunner {
     private final NarrationAnalysisStageRunService narrationAnalysisStageRunService;
     private final InspectionWorkerService inspectionWorkerService;
     private final AudiobookGenerationWorkerService audiobookGenerationWorkerService;
+    private final ErasureWorkerService erasureWorkerService;
+    private final ErasureReconciliationService erasureReconciliationService;
 
     @Override
     public void run(ApplicationArguments arguments) throws InterruptedException {
@@ -52,6 +56,12 @@ public class WorkerEntrypoint implements ApplicationRunner {
             }
             if (workerProperties.stage() == WorkerProperties.Stage.PACKAGING) {
                 audiobookGenerationWorkerService.packagePending();
+            }
+            if (workerProperties.stage() == WorkerProperties.Stage.ERASURE) {
+                erasureWorkerService.erasePending();
+            }
+            if (workerProperties.stage() == WorkerProperties.Stage.RECONCILIATION) {
+                erasureReconciliationService.reconcile();
             }
             if (workerProperties.idle()) {
                 Thread.sleep(1_000);
