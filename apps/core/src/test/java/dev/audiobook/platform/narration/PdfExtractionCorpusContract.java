@@ -1,24 +1,12 @@
 package dev.audiobook.platform.narration;
 
-import dev.audiobook.platform.narration.internal.extraction.pdf.PdfBoxDoclingTesseractBoundaryImpl;
-import dev.audiobook.platform.narration.internal.extraction.pdf.PdfNarrationPlanInterpreter;
-import dev.audiobook.platform.narration.internal.extraction.pdf.PdfNarrationPlanInterpreterImpl;
-import dev.audiobook.platform.narration.internal.extraction.pdf.PdfNarrationProperties;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.awt.Color;
-import java.awt.Font;
-import java.awt.Graphics2D;
-import java.awt.image.BufferedImage;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.Duration;
-import java.util.Comparator;
-import java.util.Map;
-import java.util.List;
+import dev.audiobook.platform.narration.extraction.pdf.PdfBoxDoclingTesseractBoundaryImpl;
+import dev.audiobook.platform.narration.extraction.pdf.PdfNarrationPlanInterpreter;
+import dev.audiobook.platform.narration.extraction.pdf.PdfNarrationPlanInterpreterImpl;
+import dev.audiobook.platform.narration.extraction.pdf.PdfNarrationProperties;
+
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -31,67 +19,93 @@ import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlin
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+
 abstract class PdfExtractionCorpusContract {
 
-    @TempDir
-    protected Path scratch;
+    @TempDir protected Path scratch;
 
     protected abstract Toolchain toolchain(Corpus corpus) throws Exception;
 
     @Test
-    void representativeRealPdfCorpusMeetsFidelityStructureAndProvenanceThresholds() throws Exception {
-        List<String> expectedPages = List.of(
-                "A precise born-digital opening.",
-                "The second page preserves punctuation, spacing, and order.",
-                "A scanned page remains accurately recoverable.",
-                "A second chapter begins with source-backed evidence.",
-                "The damaged scan has one smudged character.");
+    void representativeRealPdfCorpusMeetsFidelityStructureAndProvenanceThresholds()
+            throws Exception {
+        List<String> expectedPages =
+                List.of(
+                        "A precise born-digital opening.",
+                        "The second page preserves punctuation, spacing, and order.",
+                        "A scanned page remains accurately recoverable.",
+                        "A second chapter begins with source-backed evidence.",
+                        "The damaged scan has one smudged character.");
         Path publication = representativePdf(expectedPages);
 
         PublicationNarrationPlanInterpreter.NarrationPlan plan;
         try (Toolchain toolchain = toolchain(Corpus.MIXED_OUTLINE);
                 InputStream source = Files.newInputStream(publication)) {
-            var properties = new PdfNarrationProperties(
-                    2,
-                    2,
-                    1,
-                    4_000_000,
-                    toolchain.timeout(),
-                    scratch,
-                    "java",
-                    System.getProperty("java.class.path"),
-                    "dev.audiobook.pdfbox.PdfBoxBoundaryMain",
-                    256,
-                    toolchain.doclingCommand().toString(),
-                    "ignored-docling-adapter",
-                    toolchain.tesseractCommand().toString());
-            PdfNarrationPlanInterpreter interpreter = new PdfNarrationPlanInterpreterImpl(
-                    new PdfBoxDoclingTesseractBoundaryImpl(properties), properties);
+            var properties =
+                    new PdfNarrationProperties(
+                            2,
+                            2,
+                            1,
+                            4_000_000,
+                            toolchain.timeout(),
+                            scratch,
+                            "java",
+                            System.getProperty("java.class.path"),
+                            "dev.audiobook.pdfbox.PdfBoxBoundaryMain",
+                            256,
+                            toolchain.doclingCommand().toString(),
+                            "ignored-docling-adapter",
+                            toolchain.tesseractCommand().toString());
+            PdfNarrationPlanInterpreter interpreter =
+                    new PdfNarrationPlanInterpreterImpl(
+                            new PdfBoxDoclingTesseractBoundaryImpl(properties), properties);
             plan = interpreter.interpret(source);
         }
 
-        List<PublicationNarrationPlanInterpreter.NormalProse> prose = plan.chapters().stream()
-                .flatMap(chapter -> chapter.normalProse().stream())
-                .sorted(Comparator.comparingInt(PublicationNarrationPlanInterpreter.NormalProse::sourceOrdinal))
-                .toList();
-        List<String> actualPages = prose.stream()
-                .map(PublicationNarrationPlanInterpreter.NormalProse::text)
-                .toList();
-        double bornDigitalFidelity = 1.0 - characterErrorRate(
-                String.join("\n", expectedPages.subList(0, 2)),
-                String.join("\n", actualPages.subList(0, 2)));
-        List<Double> ocrErrorDistribution = List.of(
-                characterErrorRate(expectedPages.get(2), actualPages.get(2)),
-                characterErrorRate(expectedPages.get(4), actualPages.get(4)));
-        double chapterInclusionAndOrder = plan.chapters().stream()
-                        .map(PublicationNarrationPlanInterpreter.Chapter::title)
-                        .toList()
-                        .equals(List.of("Opening", "Evidence"))
-                ? 1.0
-                : 0.0;
-        double chapterBoundaryF1 = boundaryF1(
-                List.of(1, 4),
-                plan.chapters().stream().map(chapter -> chapter.provenance().sourceIndex() + 1).toList());
+        List<PublicationNarrationPlanInterpreter.NormalProse> prose =
+                plan.chapters().stream()
+                        .flatMap(chapter -> chapter.normalProse().stream())
+                        .sorted(
+                                Comparator.comparingInt(
+                                        PublicationNarrationPlanInterpreter.NormalProse
+                                                ::sourceOrdinal))
+                        .toList();
+        List<String> actualPages =
+                prose.stream().map(PublicationNarrationPlanInterpreter.NormalProse::text).toList();
+        double bornDigitalFidelity =
+                1.0
+                        - characterErrorRate(
+                                String.join("\n", expectedPages.subList(0, 2)),
+                                String.join("\n", actualPages.subList(0, 2)));
+        List<Double> ocrErrorDistribution =
+                List.of(
+                        characterErrorRate(expectedPages.get(2), actualPages.get(2)),
+                        characterErrorRate(expectedPages.get(4), actualPages.get(4)));
+        double chapterInclusionAndOrder =
+                plan.chapters().stream()
+                                .map(PublicationNarrationPlanInterpreter.Chapter::title)
+                                .toList()
+                                .equals(List.of("Opening", "Evidence"))
+                        ? 1.0
+                        : 0.0;
+        double chapterBoundaryF1 =
+                boundaryF1(
+                        List.of(1, 4),
+                        plan.chapters().stream()
+                                .map(chapter -> chapter.provenance().sourceIndex() + 1)
+                                .toList());
 
         assertThat(bornDigitalFidelity).isGreaterThanOrEqualTo(0.995);
         assertThat(median(ocrErrorDistribution)).isLessThan(0.02);
@@ -107,14 +121,19 @@ abstract class PdfExtractionCorpusContract {
         assertThat(prose)
                 .extracting(unit -> unit.provenance().sourceUnit())
                 .containsExactly("page:1", "page:2", "page:3", "page:4", "page:5");
-        assertThat(prose).allSatisfy(unit -> {
-            assertThat(unit.provenance().sourceUnit()).startsWith("page:");
-            assertThat(unit.provenance().source())
-                    .isIn(
-                            PublicationNarrationPlanInterpreter.ProvenanceSource.PDFBOX_TEXT,
-                            PublicationNarrationPlanInterpreter.ProvenanceSource.TESSERACT_OCR,
-                            PublicationNarrationPlanInterpreter.ProvenanceSource.PDF_LAYOUT);
-        });
+        assertThat(prose)
+                .allSatisfy(
+                        unit -> {
+                            assertThat(unit.provenance().sourceUnit()).startsWith("page:");
+                            assertThat(unit.provenance().source())
+                                    .isIn(
+                                            PublicationNarrationPlanInterpreter.ProvenanceSource
+                                                    .PDFBOX_TEXT,
+                                            PublicationNarrationPlanInterpreter.ProvenanceSource
+                                                    .TESSERACT_OCR,
+                                            PublicationNarrationPlanInterpreter.ProvenanceSource
+                                                    .PDF_LAYOUT);
+                        });
     }
 
     @Test
@@ -125,23 +144,25 @@ abstract class PdfExtractionCorpusContract {
         PublicationNarrationPlanInterpreter.NarrationPlan plan;
         try (Toolchain toolchain = toolchain(Corpus.IMAGE_ONLY_DAMAGED);
                 InputStream source = Files.newInputStream(publication)) {
-            var properties = new PdfNarrationProperties(
-                    2,
-                    2,
-                    1,
-                    4_000_000,
-                    toolchain.timeout(),
-                    scratch,
-                    "java",
-                    System.getProperty("java.class.path"),
-                    "dev.audiobook.pdfbox.PdfBoxBoundaryMain",
-                    256,
-                    toolchain.doclingCommand().toString(),
-                    "ignored-docling-adapter",
-                    toolchain.tesseractCommand().toString());
-            plan = new PdfNarrationPlanInterpreterImpl(
-                            new PdfBoxDoclingTesseractBoundaryImpl(properties), properties)
-                    .interpret(source);
+            var properties =
+                    new PdfNarrationProperties(
+                            2,
+                            2,
+                            1,
+                            4_000_000,
+                            toolchain.timeout(),
+                            scratch,
+                            "java",
+                            System.getProperty("java.class.path"),
+                            "dev.audiobook.pdfbox.PdfBoxBoundaryMain",
+                            256,
+                            toolchain.doclingCommand().toString(),
+                            "ignored-docling-adapter",
+                            toolchain.tesseractCommand().toString());
+            plan =
+                    new PdfNarrationPlanInterpreterImpl(
+                                    new PdfBoxDoclingTesseractBoundaryImpl(properties), properties)
+                            .interpret(source);
         }
 
         assertThat(plan.chapters())
@@ -149,29 +170,35 @@ abstract class PdfExtractionCorpusContract {
                 .containsExactly("CHAPTER ONE", "CHAPTER TWO");
         assertThat(plan.chapters())
                 .extracting(chapter -> chapter.provenance().source())
-                .containsOnly(PublicationNarrationPlanInterpreter.ProvenanceSource.DOCLING_HIERARCHY);
+                .containsOnly(
+                        PublicationNarrationPlanInterpreter.ProvenanceSource.DOCLING_HIERARCHY);
         assertThat(plan.chapters())
                 .extracting(chapter -> chapter.provenance().sourceIndex())
                 .containsExactly(0, 2);
         assertThat(plan.chapters().getFirst().gaps())
-                .containsExactly(new PublicationNarrationPlanInterpreter.Gap(
-                        "page:2", "UNREADABLE_PDF_PAGE"));
+                .containsExactly(
+                        new PublicationNarrationPlanInterpreter.Gap(
+                                "page:2", "UNREADABLE_PDF_PAGE"));
         assertThat(plan.reviewItems())
                 .extracting(item -> item.provenance().sourceUnit())
                 .containsExactly("page:2");
-        assertThat(plan.chapters().stream()
-                        .flatMap(chapter -> chapter.normalProse().stream())
-                        .map(unit -> unit.provenance().sourceUnit()))
+        assertThat(
+                        plan.chapters().stream()
+                                .flatMap(chapter -> chapter.normalProse().stream())
+                                .map(unit -> unit.provenance().sourceUnit()))
                 .containsExactly("page:1", "page:3", "page:4");
-        Map<String, String> recoveredByPage = plan.chapters().stream()
-                .flatMap(chapter -> chapter.normalProse().stream())
-                .collect(java.util.stream.Collectors.toMap(
-                        unit -> unit.provenance().sourceUnit(),
-                        PublicationNarrationPlanInterpreter.NormalProse::text));
+        Map<String, String> recoveredByPage =
+                plan.chapters().stream()
+                        .flatMap(chapter -> chapter.normalProse().stream())
+                        .collect(
+                                java.util.stream.Collectors.toMap(
+                                        unit -> unit.provenance().sourceUnit(),
+                                        PublicationNarrationPlanInterpreter.NormalProse::text));
         assertThat(recoveredByPage.get("page:1")).contains("Fully scanned opening");
         assertThat(recoveredByPage.get("page:4")).contains("Scanned continuation");
-        assertThat(characterErrorRate(
-                        "Degraded but recoverable text.", recoveredByPage.get("page:3")))
+        assertThat(
+                        characterErrorRate(
+                                "Degraded but recoverable text.", recoveredByPage.get("page:3")))
                 .isLessThan(0.15);
     }
 
@@ -191,7 +218,8 @@ abstract class PdfExtractionCorpusContract {
                 try (PDPageContentStream content = new PDPageContentStream(document, page)) {
                     if (index == 2 || index == 4) {
                         BufferedImage scan = scan(pages.get(index));
-                        content.drawImage(LosslessFactory.createFromImage(document, scan), 36, 600, 540, 90);
+                        content.drawImage(
+                                LosslessFactory.createFromImage(document, scan), 36, 600, 540, 90);
                     } else {
                         content.beginText();
                         content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
@@ -220,8 +248,8 @@ abstract class PdfExtractionCorpusContract {
         return publication;
     }
 
-    private static void addScanPage(PDDocument document, String heading, String prose, boolean degraded)
-            throws Exception {
+    private static void addScanPage(
+            PDDocument document, String heading, String prose, boolean degraded) throws Exception {
         PDPage page = new PDPage();
         document.addPage(page);
         BufferedImage scan = new BufferedImage(1_200, 1_600, BufferedImage.TYPE_INT_RGB);
@@ -292,9 +320,12 @@ abstract class PdfExtractionCorpusContract {
         for (int left = 1; left <= expected.length(); left++) {
             for (int right = 1; right <= actual.length(); right++) {
                 int substitution = expected.charAt(left - 1) == actual.charAt(right - 1) ? 0 : 1;
-                distance[left][right] = Math.min(
-                        Math.min(distance[left - 1][right] + 1, distance[left][right - 1] + 1),
-                        distance[left - 1][right - 1] + substitution);
+                distance[left][right] =
+                        Math.min(
+                                Math.min(
+                                        distance[left - 1][right] + 1,
+                                        distance[left][right - 1] + 1),
+                                distance[left - 1][right - 1] + substitution);
             }
         }
         return (double) distance[expected.length()][actual.length()] / expected.length();
@@ -318,13 +349,11 @@ abstract class PdfExtractionCorpusContract {
     }
 
     protected record Toolchain(
-            Path doclingCommand,
-            Path tesseractCommand,
-            Duration timeout,
-            AutoCloseable resource) implements AutoCloseable {
+            Path doclingCommand, Path tesseractCommand, Duration timeout, AutoCloseable resource)
+            implements AutoCloseable {
 
         protected Toolchain(Path doclingCommand, Path tesseractCommand, Duration timeout) {
-            this(doclingCommand, tesseractCommand, timeout, () -> { });
+            this(doclingCommand, tesseractCommand, timeout, () -> {});
         }
 
         @Override
