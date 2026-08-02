@@ -1,4 +1,4 @@
 package dev.audiobook.platform.trustoperations.internal;
 
-final class TrustOperationsPreconditionException extends RuntimeException {
+public final class TrustOperationsPreconditionException extends RuntimeException {
 }

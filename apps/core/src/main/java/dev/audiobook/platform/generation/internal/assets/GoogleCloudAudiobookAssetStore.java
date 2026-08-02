@@ -1,7 +1,7 @@
 package dev.audiobook.platform.generation.internal.assets;
 
 import dev.audiobook.platform.generation.internal.AudioGenerationProperties;
-import dev.audiobook.platform.generation.internal.speech.SpeechSegmentationServiceImpl;
+import dev.audiobook.platform.generation.internal.speech.segmentation.SpeechSegmentationServiceImpl;
 
 import com.google.cloud.storage.Blob;
 import com.google.cloud.storage.BlobInfo;

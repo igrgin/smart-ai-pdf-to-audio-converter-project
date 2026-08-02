@@ -3,6 +3,11 @@ package dev.audiobook.platform.library.internal;
 import dev.audiobook.platform.library.PrivateAudiobookLibraryService;
 
 import dev.audiobook.platform.library.FinalAudiobookAssetReader;
+import dev.audiobook.platform.library.internal.playback.HttpByteRange;
+import dev.audiobook.platform.library.internal.playback.PrivateAudiobookUnavailableException;
+import dev.audiobook.platform.library.internal.position.PlaybackPositionConflictException;
+import dev.audiobook.platform.library.internal.position.PlaybackPositionRejectedException;
+import dev.audiobook.platform.library.internal.position.PlaybackPositionRequestConflictException;
 import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;

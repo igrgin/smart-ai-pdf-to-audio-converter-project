@@ -1,6 +1,6 @@
 package dev.audiobook.platform.admission.internal.submission;
 
-import dev.audiobook.platform.admission.internal.delivery.AdmissionOutboxRelayService;
+import dev.audiobook.platform.admission.internal.inspection.dispatch.AdmissionOutboxRelayService;
 
 import dev.audiobook.platform.identity.ListenerPrincipal;
 import java.net.URI;

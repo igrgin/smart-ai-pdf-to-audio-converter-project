@@ -5,8 +5,8 @@ import dev.audiobook.platform.entitlement.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.audiobook.platform.PlatformApplication;
-import dev.audiobook.platform.identity.internal.oidc.ExternalIdentity;
-import dev.audiobook.platform.identity.internal.session.ListenerIdentityService;
+import dev.audiobook.platform.identity.internal.signin.ExternalIdentity;
+import dev.audiobook.platform.identity.internal.listener.ListenerIdentityService;
 import dev.audiobook.platform.identity.SignInProvider;
 import java.net.URI;
 import java.util.List;

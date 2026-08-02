@@ -3,7 +3,7 @@ package dev.audiobook.platform.generation.internal.packaging;
 import dev.audiobook.platform.generation.SpeechBoundaryKind;
 import dev.audiobook.platform.generation.FfmpegTestToolchain;
 import dev.audiobook.platform.generation.internal.AudioGenerationProperties;
-import dev.audiobook.platform.generation.internal.speech.SpeechSegmentationService;
+import dev.audiobook.platform.generation.internal.speech.segmentation.SpeechSegmentationService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

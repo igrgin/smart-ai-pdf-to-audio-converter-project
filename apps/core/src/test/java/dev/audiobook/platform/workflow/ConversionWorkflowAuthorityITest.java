@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
-import dev.audiobook.platform.workflow.internal.ConversionWorkflowAdministrationService;
+import dev.audiobook.platform.workflow.internal.orchestration.ConversionWorkflowAdministrationService;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;

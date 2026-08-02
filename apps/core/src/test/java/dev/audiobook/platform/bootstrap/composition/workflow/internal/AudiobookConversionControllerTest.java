@@ -1,11 +1,10 @@
 package dev.audiobook.platform.bootstrap.composition.workflow.internal;
 
-import dev.audiobook.platform.workflow.internal.*;
-
-import dev.audiobook.platform.admission.internal.inspection.InspectionWorkflowService;
+import dev.audiobook.platform.admission.internal.inspection.work.InspectionWorkflowService;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
 import dev.audiobook.platform.workflow.ConversionLifecycleService;
 import dev.audiobook.platform.workflow.ConversionWorkflowService;
+import dev.audiobook.platform.workflow.internal.conversion.AudiobookConversionUnavailableException;
 
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -19,12 +18,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.audiobook.platform.PlatformApplication;
-import dev.audiobook.platform.admission.internal.delivery.AdmissionOutboxRelayService;
-import dev.audiobook.platform.admission.internal.delivery.InspectionWorkPublisher;
-import dev.audiobook.platform.admission.internal.delivery.PubSubPushAuthenticator;
+import dev.audiobook.platform.admission.internal.inspection.dispatch.AdmissionOutboxRelayService;
+import dev.audiobook.platform.admission.internal.inspection.dispatch.InspectionWorkPublisher;
+import dev.audiobook.platform.admission.internal.inspection.intake.PubSubPushAuthenticator;
 import dev.audiobook.platform.admission.internal.submission.PublicationSubmissionService;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
-import dev.audiobook.platform.identity.internal.session.ListenerIdentityService;
+import dev.audiobook.platform.identity.internal.listener.ListenerIdentityService;
 import dev.audiobook.platform.identity.ListenerPrincipal;
 import dev.audiobook.platform.identity.SignInProvider;
 import dev.audiobook.platform.narration.NarrationPlanService;

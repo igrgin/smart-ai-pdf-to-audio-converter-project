@@ -1,9 +1,9 @@
 package dev.audiobook.platform.narration;
 
-import dev.audiobook.platform.narration.internal.document.PdfBoxDoclingTesseractBoundaryImpl;
-import dev.audiobook.platform.narration.internal.document.PdfNarrationPlanInterpreter;
-import dev.audiobook.platform.narration.internal.document.PdfNarrationPlanInterpreterImpl;
-import dev.audiobook.platform.narration.internal.document.PdfNarrationProperties;
+import dev.audiobook.platform.narration.internal.extraction.pdf.PdfBoxDoclingTesseractBoundaryImpl;
+import dev.audiobook.platform.narration.internal.extraction.pdf.PdfNarrationPlanInterpreter;
+import dev.audiobook.platform.narration.internal.extraction.pdf.PdfNarrationPlanInterpreterImpl;
+import dev.audiobook.platform.narration.internal.extraction.pdf.PdfNarrationProperties;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

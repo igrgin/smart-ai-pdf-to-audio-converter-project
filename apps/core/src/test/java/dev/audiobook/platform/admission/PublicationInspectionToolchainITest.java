@@ -1,16 +1,16 @@
 package dev.audiobook.platform.admission;
 
-import dev.audiobook.platform.admission.internal.inspection.CommandLineMalwareScannerImpl;
-import dev.audiobook.platform.admission.internal.inspection.EpubInspectionServiceImpl;
-import dev.audiobook.platform.admission.internal.inspection.InspectionCommandRunner;
-import dev.audiobook.platform.admission.internal.inspection.InspectionProperties;
-import dev.audiobook.platform.admission.internal.inspection.MalwareScanner;
-import dev.audiobook.platform.admission.internal.inspection.PdfInspectionService;
-import dev.audiobook.platform.admission.internal.inspection.PdfInspectionServiceImpl;
-import dev.audiobook.platform.admission.internal.inspection.PublicationInspectionService;
-import dev.audiobook.platform.admission.internal.inspection.PublicationInspectionServiceImpl;
-import dev.audiobook.platform.admission.internal.inspection.QpdfValidationService;
-import dev.audiobook.platform.admission.internal.inspection.QpdfValidationServiceImpl;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.malware.CommandLineMalwareScannerImpl;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.epub.EpubInspectionServiceImpl;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.InspectionCommandRunner;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.InspectionProperties;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.malware.MalwareScanner;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.pdf.PdfInspectionService;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.pdf.PdfInspectionServiceImpl;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.PublicationInspectionService;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.PublicationInspectionServiceImpl;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.pdf.QpdfValidationService;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.pdf.QpdfValidationServiceImpl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

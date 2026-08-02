@@ -2,8 +2,8 @@ package dev.audiobook.platform.generation.internal.packaging;
 
 import dev.audiobook.platform.generation.SpeechBoundaryKind;
 import dev.audiobook.platform.generation.internal.AudioGenerationProperties;
-import dev.audiobook.platform.generation.internal.speech.SpeechSegmentationService;
-import dev.audiobook.platform.generation.internal.speech.SpeechSegmentationServiceImpl;
+import dev.audiobook.platform.generation.internal.speech.segmentation.SpeechSegmentationService;
+import dev.audiobook.platform.generation.internal.speech.segmentation.SpeechSegmentationServiceImpl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

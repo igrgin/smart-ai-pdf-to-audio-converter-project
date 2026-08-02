@@ -3,6 +3,7 @@ package dev.audiobook.platform.bootstrap.composition.library.internal;
 import dev.audiobook.platform.library.internal.*;
 
 import dev.audiobook.platform.library.PrivateAudiobookLibraryService;
+import dev.audiobook.platform.library.internal.playback.UnsatisfiedRangeException;
 
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -18,7 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.admission.internal.submission.PublicationSubmissionService;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
-import dev.audiobook.platform.identity.internal.session.ListenerIdentityService;
+import dev.audiobook.platform.identity.internal.listener.ListenerIdentityService;
 import dev.audiobook.platform.identity.ListenerPrincipal;
 import dev.audiobook.platform.identity.SignInProvider;
 import dev.audiobook.platform.narration.NarrationSelectionService;

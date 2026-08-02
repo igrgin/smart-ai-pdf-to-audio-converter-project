@@ -7,4 +7,5 @@ export type {
   IdentitySession,
   StaffRole
 } from "./api";
-export { CsrfForm, SignInDialog } from "./SessionUi";
+export { CsrfForm } from "./components/CsrfForm";
+export { SignInDialog } from "./SignInDialog";

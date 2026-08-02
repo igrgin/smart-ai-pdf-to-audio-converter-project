@@ -2,6 +2,7 @@ package dev.audiobook.platform.trustoperations.internal;
 
 import dev.audiobook.platform.identity.ListenerPrincipal;
 import dev.audiobook.platform.trustoperations.TrustOperationsService;
+import dev.audiobook.platform.trustoperations.internal.delegated.DelegatedAccessRequestWorkflow;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.CacheControl;

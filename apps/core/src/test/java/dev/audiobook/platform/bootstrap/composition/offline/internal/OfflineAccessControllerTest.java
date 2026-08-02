@@ -1,7 +1,5 @@
 package dev.audiobook.platform.bootstrap.composition.offline.internal;
 
-import dev.audiobook.platform.offline.internal.*;
-
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
@@ -14,7 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.admission.internal.submission.PublicationSubmissionService;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
-import dev.audiobook.platform.identity.internal.session.ListenerIdentityService;
+import dev.audiobook.platform.identity.internal.listener.ListenerIdentityService;
 import dev.audiobook.platform.identity.ListenerPrincipal;
 import dev.audiobook.platform.identity.SignInProvider;
 import dev.audiobook.platform.narration.NarrationSelectionService;

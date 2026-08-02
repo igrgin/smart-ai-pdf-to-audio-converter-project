@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 @RequiredArgsConstructor
-final class TrustOperationsPolicy {
+public final class TrustOperationsPolicy {
 
     private final TrustOperationsProperties properties;
 
@@ -114,7 +114,7 @@ final class TrustOperationsPolicy {
         }
     }
 
-    static void requireOperationKey(String operationKey) {
+    public static void requireOperationKey(String operationKey) {
         if (operationKey == null || operationKey.isBlank() || operationKey.length() > 200) {
             throw new IllegalArgumentException("Invalid Idempotency-Key");
         }

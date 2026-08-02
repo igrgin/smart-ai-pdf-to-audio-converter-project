@@ -2,7 +2,7 @@ package dev.audiobook.platform.provider.internal.speech;
 
 import dev.audiobook.platform.provider.SpeechProvider;
 import dev.audiobook.platform.provider.SpeechProviderException;
-import dev.audiobook.platform.provider.internal.ProviderRuntimeProperties;
+import dev.audiobook.platform.provider.internal.adapters.ProviderRuntimeProperties;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

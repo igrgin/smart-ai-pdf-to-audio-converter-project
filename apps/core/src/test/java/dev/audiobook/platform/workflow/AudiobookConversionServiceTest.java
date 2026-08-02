@@ -1,6 +1,6 @@
 package dev.audiobook.platform.workflow;
 
-import dev.audiobook.platform.workflow.internal.AudiobookConversionServiceImpl;
+import dev.audiobook.platform.workflow.internal.conversion.AudiobookConversionServiceImpl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

@@ -2,11 +2,11 @@ package dev.audiobook.platform.bootstrap.composition.admission;
 
 import dev.audiobook.platform.admission.*;
 
-import dev.audiobook.platform.admission.internal.delivery.AdmissionOutboxRelayService;
-import dev.audiobook.platform.admission.internal.delivery.InspectionWorkPublisher;
-import dev.audiobook.platform.admission.internal.inspection.InspectionOutcomeRecordingService;
-import dev.audiobook.platform.admission.internal.inspection.MalwareScanner;
-import dev.audiobook.platform.admission.internal.inspection.QpdfValidationService;
+import dev.audiobook.platform.admission.internal.inspection.dispatch.AdmissionOutboxRelayService;
+import dev.audiobook.platform.admission.internal.inspection.dispatch.InspectionWorkPublisher;
+import dev.audiobook.platform.admission.internal.inspection.work.InspectionOutcomeRecordingService;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.malware.MalwareScanner;
+import dev.audiobook.platform.admission.internal.inspection.toolchain.pdf.QpdfValidationService;
 import dev.audiobook.platform.admission.internal.submission.PublicationSubmissionService;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -14,11 +14,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
-import dev.audiobook.platform.identity.internal.oidc.ExternalIdentity;
-import dev.audiobook.platform.identity.internal.session.ListenerIdentityService;
+import dev.audiobook.platform.identity.internal.signin.ExternalIdentity;
+import dev.audiobook.platform.identity.internal.listener.ListenerIdentityService;
 import dev.audiobook.platform.identity.SignInProvider;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
-import dev.audiobook.platform.admission.internal.inspection.InspectionWorkflowService;
+import dev.audiobook.platform.admission.internal.inspection.work.InspectionWorkflowService;
 import dev.audiobook.platform.admission.InspectionWorkerService;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;

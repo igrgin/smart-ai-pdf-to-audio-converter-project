@@ -1,18 +1,18 @@
 package dev.audiobook.platform.bootstrap.internal;
 
 import dev.audiobook.platform.identity.internal.IdentitySecurityProperties;
-import dev.audiobook.platform.identity.internal.oidc.BrokerAuthorizationRequestResolver;
-import dev.audiobook.platform.identity.internal.oidc.BrokerIdentity;
-import dev.audiobook.platform.identity.internal.oidc.BrokerOidcUserService;
-import dev.audiobook.platform.identity.internal.oidc.BrokerOidcUserServiceImpl;
-import dev.audiobook.platform.identity.internal.oidc.OidcLoginSuccessHandler;
-import dev.audiobook.platform.identity.internal.session.ListenerIdentityService;
-import dev.audiobook.platform.identity.internal.session.SameOriginFilter;
-import dev.audiobook.platform.identity.internal.session.SecurityHeadersFilter;
+import dev.audiobook.platform.identity.internal.signin.BrokerAuthorizationRequestResolver;
+import dev.audiobook.platform.identity.internal.signin.BrokerIdentity;
+import dev.audiobook.platform.identity.internal.signin.BrokerOidcUserService;
+import dev.audiobook.platform.identity.internal.signin.BrokerOidcUserServiceImpl;
+import dev.audiobook.platform.identity.internal.signin.OidcLoginSuccessHandler;
+import dev.audiobook.platform.identity.internal.listener.ListenerIdentityService;
+import dev.audiobook.platform.identity.internal.websecurity.SameOriginFilter;
+import dev.audiobook.platform.identity.internal.websecurity.SecurityHeadersFilter;
 import dev.audiobook.platform.identity.internal.session.SessionLifecycleFilter;
 
-import dev.audiobook.platform.admission.internal.delivery.InspectionWorkDeliveryController;
-import dev.audiobook.platform.entitlement.internal.stripe.StripeDemonstrationSubscriptionWebhookController;
+import dev.audiobook.platform.admission.internal.inspection.intake.InspectionWorkDeliveryController;
+import dev.audiobook.platform.entitlement.internal.subscription.stripe.StripeDemonstrationSubscriptionWebhookController;
 import java.time.Clock;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;

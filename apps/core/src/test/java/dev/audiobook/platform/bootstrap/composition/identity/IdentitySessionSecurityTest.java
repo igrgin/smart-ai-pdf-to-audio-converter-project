@@ -3,7 +3,7 @@ package dev.audiobook.platform.bootstrap.composition.identity;
 import dev.audiobook.platform.identity.*;
 
 import dev.audiobook.platform.identity.SignInProvider;
-import dev.audiobook.platform.identity.internal.session.ListenerIdentityService;
+import dev.audiobook.platform.identity.internal.listener.ListenerIdentityService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;

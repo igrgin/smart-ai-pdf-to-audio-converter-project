@@ -1,7 +1,7 @@
 package dev.audiobook.platform.provider.internal.speech;
 
 import dev.audiobook.platform.provider.ProviderUsage;
-import dev.audiobook.platform.provider.internal.capability.ProviderCapabilityService;
+import dev.audiobook.platform.provider.internal.governance.ProviderCapabilityService;
 
 public interface ProviderSpeechAdapter {
 

@@ -4,7 +4,7 @@ public final class ProviderAnalysisException extends RuntimeException {
 
     private final Code code;
 
-    ProviderAnalysisException(Code code) {
+    public ProviderAnalysisException(Code code) {
         super("Governed provider analysis failed");
         this.code = code;
     }

@@ -4,10 +4,10 @@ import dev.audiobook.platform.generation.SpeechBoundaryKind;
 import dev.audiobook.platform.generation.AudiobookGenerationService;
 import dev.audiobook.platform.generation.internal.assets.AudiobookAssetStore;
 import dev.audiobook.platform.generation.internal.packaging.AudioPackagingService;
-import dev.audiobook.platform.generation.internal.speech.SpeechResultValidationService;
-import dev.audiobook.platform.generation.internal.speech.SpeechSegmentationService;
-import dev.audiobook.platform.generation.internal.speech.SpeechSegmentationServiceImpl;
-import dev.audiobook.platform.generation.internal.speech.SpeechValidationException;
+import dev.audiobook.platform.generation.internal.speech.validation.SpeechResultValidationService;
+import dev.audiobook.platform.generation.internal.speech.segmentation.SpeechSegmentationService;
+import dev.audiobook.platform.generation.internal.speech.segmentation.SpeechSegmentationServiceImpl;
+import dev.audiobook.platform.generation.internal.speech.validation.SpeechValidationException;
 import dev.audiobook.platform.provider.SpeechProviderException;
 import dev.audiobook.platform.provider.SpeechProvider;
 

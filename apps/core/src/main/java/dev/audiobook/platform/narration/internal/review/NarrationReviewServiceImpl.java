@@ -3,7 +3,7 @@ package dev.audiobook.platform.narration.internal.review;
 import dev.audiobook.platform.narration.NarrationPlanService;
 import dev.audiobook.platform.narration.NarrationReviewAssetStore;
 import dev.audiobook.platform.narration.NarrationReviewService;
-import dev.audiobook.platform.narration.internal.assets.NarrationPlanAssetIdentity;
+import dev.audiobook.platform.narration.internal.planning.assets.NarrationPlanAssetIdentity;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;

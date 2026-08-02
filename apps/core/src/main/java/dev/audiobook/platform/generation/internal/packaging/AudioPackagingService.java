@@ -1,7 +1,7 @@
 package dev.audiobook.platform.generation.internal.packaging;
 
 import dev.audiobook.platform.generation.SpeechBoundaryKind;
-import dev.audiobook.platform.generation.internal.speech.SpeechSegmentationService;
+import dev.audiobook.platform.generation.internal.speech.segmentation.SpeechSegmentationService;
 
 import java.util.List;
 import java.util.UUID;

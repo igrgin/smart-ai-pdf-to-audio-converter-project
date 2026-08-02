@@ -13,7 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.admission.internal.submission.PublicationSubmissionService;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
-import dev.audiobook.platform.identity.internal.session.ListenerIdentityService;
+import dev.audiobook.platform.identity.internal.listener.ListenerIdentityService;
 import dev.audiobook.platform.identity.ListenerPrincipal;
 import dev.audiobook.platform.identity.SignInProvider;
 import java.time.Instant;

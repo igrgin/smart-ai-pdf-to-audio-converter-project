@@ -11,8 +11,8 @@ import static org.mockito.BDDMockito.given;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.audiobook.platform.PlatformApplication;
-import dev.audiobook.platform.identity.internal.oidc.ExternalIdentity;
-import dev.audiobook.platform.identity.internal.session.ListenerIdentityService;
+import dev.audiobook.platform.identity.internal.signin.ExternalIdentity;
+import dev.audiobook.platform.identity.internal.listener.ListenerIdentityService;
 import dev.audiobook.platform.identity.SignInProvider;
 import dev.audiobook.platform.narration.NarrationSelectionService;
 import java.net.URI;

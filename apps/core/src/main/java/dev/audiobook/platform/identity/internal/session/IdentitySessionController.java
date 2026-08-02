@@ -2,7 +2,7 @@ package dev.audiobook.platform.identity.internal.session;
 
 import dev.audiobook.platform.identity.ListenerPrincipal;
 import dev.audiobook.platform.identity.internal.IdentitySecurityProperties;
-import dev.audiobook.platform.identity.internal.oidc.IdentityLinkCeremony;
+import dev.audiobook.platform.identity.internal.linking.IdentityLinkCeremony;
 import dev.audiobook.platform.identity.SignInProvider;
 
 import jakarta.servlet.http.HttpServletRequest;

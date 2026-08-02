@@ -1,4 +1,4 @@
 package dev.audiobook.platform.trustoperations.internal;
 
-final class TrustOperationsAccessDeniedException extends RuntimeException {
+public final class TrustOperationsAccessDeniedException extends RuntimeException {
 }

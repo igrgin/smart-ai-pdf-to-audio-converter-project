@@ -1,7 +1,7 @@
 package dev.audiobook.platform.provider.internal.speech;
 
 import dev.audiobook.platform.provider.GovernedSpeechService;
-import dev.audiobook.platform.provider.internal.capability.ProviderCapabilityService;
+import dev.audiobook.platform.provider.internal.governance.ProviderCapabilityService;
 
 import dev.audiobook.platform.provider.SpeechProvider;
 import dev.audiobook.platform.provider.SpeechProviderException;

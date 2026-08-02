@@ -1,6 +1,6 @@
 package dev.audiobook.platform.narration;
 
-import dev.audiobook.platform.narration.internal.delivery.GooglePubSubNarrationPlanWorkPublisher;
+import dev.audiobook.platform.narration.internal.dispatch.GooglePubSubNarrationPlanWorkPublisher;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;

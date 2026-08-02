@@ -1,13 +1,13 @@
 package dev.audiobook.platform.admission.internal.submission;
 
 import dev.audiobook.platform.admission.QuarantineObjectStore;
-import dev.audiobook.platform.admission.internal.inspection.AdmissionProperties;
-import dev.audiobook.platform.admission.internal.inspection.InspectionOutcomeRecordingService;
+import dev.audiobook.platform.admission.internal.AdmissionProperties;
+import dev.audiobook.platform.admission.internal.inspection.work.InspectionOutcomeRecordingService;
 
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
 import dev.audiobook.platform.identifier.PlatformIdentifierGenerator;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
-import dev.audiobook.platform.admission.internal.inspection.InspectionWorkflowService;
+import dev.audiobook.platform.admission.internal.inspection.work.InspectionWorkflowService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

@@ -1,7 +1,7 @@
 package dev.audiobook.platform.provider.internal.analysis;
 
 import dev.audiobook.platform.provider.ProviderUsage;
-import dev.audiobook.platform.provider.internal.capability.ProviderCapabilityService;
+import dev.audiobook.platform.provider.internal.governance.ProviderCapabilityService;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.charset.StandardCharsets;

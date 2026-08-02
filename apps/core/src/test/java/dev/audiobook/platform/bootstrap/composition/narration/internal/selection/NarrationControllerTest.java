@@ -16,11 +16,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.audiobook.platform.PlatformApplication;
 import dev.audiobook.platform.entitlement.ConversionEntitlementService;
-import dev.audiobook.platform.identity.internal.session.ListenerIdentityService;
+import dev.audiobook.platform.identity.internal.listener.ListenerIdentityService;
 import dev.audiobook.platform.identity.ListenerPrincipal;
 import dev.audiobook.platform.identity.SignInProvider;
 import dev.audiobook.platform.workflow.AudiobookConversionService;
-import dev.audiobook.platform.admission.internal.inspection.InspectionWorkflowService;
+import dev.audiobook.platform.admission.internal.inspection.work.InspectionWorkflowService;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
