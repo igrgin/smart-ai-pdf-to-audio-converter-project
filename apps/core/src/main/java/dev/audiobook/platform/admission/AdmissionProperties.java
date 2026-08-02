@@ -1,8 +1,9 @@
 package dev.audiobook.platform.admission;
 
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
 import java.nio.file.Path;
 import java.time.Duration;
-import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("platform.admission")
 public record AdmissionProperties(
@@ -22,5 +23,4 @@ public record AdmissionProperties(
         String workingBucket,
         String workTopic,
         String pushAudience,
-        String pushServiceAccount) {
-}
+        String pushServiceAccount) {}

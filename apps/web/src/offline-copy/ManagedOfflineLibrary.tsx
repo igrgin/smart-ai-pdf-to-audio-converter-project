@@ -1,7 +1,7 @@
 import { BookOpen, Pause, Play } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button } from "../components/ui/button";
-import type { OfflineCopyCapability } from "./OfflineCopyControls";
+import { Button } from "../ui";
+import type { OfflineCopyCapability } from "./components/OfflineCopyControls";
 import type { OfflineChapter, OfflineCopyRecord, OfflinePart } from "./offline-copy-manager";
 
 interface PositionedOfflinePart {

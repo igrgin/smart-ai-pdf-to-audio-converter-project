@@ -3,12 +3,15 @@ package dev.audiobook.platform.worker;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.audiobook.platform.PlatformApplication;
-import javax.sql.DataSource;
+import dev.audiobook.platform.admission.inspection.work.service.InspectionWorkerService;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+
+import javax.sql.DataSource;
 
 @ActiveProfiles("test")
 @SpringBootTest(
@@ -21,14 +24,11 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
         })
 class WorkerApplicationContextTest {
 
-    @MockitoBean
-    private DataSource dataSource;
+    @MockitoBean private DataSource dataSource;
 
-    @MockitoBean
-    private InspectionWorkerService inspectionWorkerService;
+    @MockitoBean private InspectionWorkerService inspectionWorkerService;
 
-    @Autowired
-    private WorkerEntrypoint workerEntrypoint;
+    @Autowired private WorkerEntrypoint workerEntrypoint;
 
     @Test
     void inspectionWorkerModeStartsWithoutCoreOnlyHttpCollaborators() {

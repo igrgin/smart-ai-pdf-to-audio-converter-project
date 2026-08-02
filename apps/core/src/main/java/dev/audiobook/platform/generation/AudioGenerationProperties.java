@@ -1,8 +1,11 @@
 package dev.audiobook.platform.generation;
 
+import dev.audiobook.platform.generation.service.*;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
 import java.nio.file.Path;
 import java.time.Duration;
-import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("platform.generation")
 public record AudioGenerationProperties(

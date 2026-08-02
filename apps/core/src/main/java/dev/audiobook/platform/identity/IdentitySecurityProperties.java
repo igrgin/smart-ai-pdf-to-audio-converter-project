@@ -1,11 +1,12 @@
 package dev.audiobook.platform.identity;
 
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
 import java.net.URI;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("platform.identity")
 public record IdentitySecurityProperties(
@@ -27,7 +28,8 @@ public record IdentitySecurityProperties(
 
     public IdentitySecurityProperties {
         brokerProviderIds = Map.copyOf(brokerProviderIds);
-        operatorListenerIds = operatorListenerIds == null ? Set.of() : Set.copyOf(operatorListenerIds);
+        operatorListenerIds =
+                operatorListenerIds == null ? Set.of() : Set.copyOf(operatorListenerIds);
         supportStaffListenerIds = immutable(supportStaffListenerIds);
         reliabilityStaffListenerIds = immutable(reliabilityStaffListenerIds);
         entitlementStaffListenerIds = immutable(entitlementStaffListenerIds);
@@ -36,19 +38,20 @@ public record IdentitySecurityProperties(
         securityReviewerListenerIds = immutable(securityReviewerListenerIds);
     }
 
-    String brokerProviderId(SignInProvider provider) {
+    public String brokerProviderId(SignInProvider provider) {
         String providerId = brokerProviderIds.get(provider);
         if (providerId == null || providerId.isBlank()) {
-            throw new IllegalStateException("Missing ZITADEL broker provider ID for " + provider.name());
+            throw new IllegalStateException(
+                    "Missing ZITADEL broker provider ID for " + provider.name());
         }
         return providerId;
     }
 
-    boolean isOperator(UUID listenerId) {
+    public boolean isOperator(UUID listenerId) {
         return operatorListenerIds.contains(listenerId);
     }
 
-    java.util.List<String> staffAuthorities(UUID listenerId) {
+    public java.util.List<String> staffAuthorities(UUID listenerId) {
         java.util.ArrayList<String> authorities = new java.util.ArrayList<>();
         add(authorities, supportStaffListenerIds, listenerId, "ROLE_SUPPORT");
         add(authorities, reliabilityStaffListenerIds, listenerId, "ROLE_RELIABILITY");
@@ -63,7 +66,11 @@ public record IdentitySecurityProperties(
         return identifiers == null ? Set.of() : Set.copyOf(identifiers);
     }
 
-    private static void add(java.util.List<String> authorities, Set<UUID> identifiers, UUID listenerId, String authority) {
+    private static void add(
+            java.util.List<String> authorities,
+            Set<UUID> identifiers,
+            UUID listenerId,
+            String authority) {
         if (identifiers.contains(listenerId)) {
             authorities.add(authority);
         }

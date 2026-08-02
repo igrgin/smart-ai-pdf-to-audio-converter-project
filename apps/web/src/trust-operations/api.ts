@@ -1,4 +1,4 @@
-import type { CsrfProof } from "../identity-session";
+import type { CsrfProof } from "../session";
 import type {
   ActionQueue,
   CaseDetails,

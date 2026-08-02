@@ -10,7 +10,7 @@ import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.images.builder.ImageFromDockerfile;
 
-final class FfmpegTestToolchain implements AutoCloseable {
+public final class FfmpegTestToolchain implements AutoCloseable {
 
     private static final ImageFromDockerfile IMAGE = new ImageFromDockerfile(
                     "folio-ffmpeg-toolchain-itest", false)
@@ -28,7 +28,7 @@ final class FfmpegTestToolchain implements AutoCloseable {
         this.command = command;
     }
 
-    static FfmpegTestToolchain start(Path wrapperDirectory) throws Exception {
+    public static FfmpegTestToolchain start(Path wrapperDirectory) throws Exception {
         String temporaryDirectory = Path.of(System.getProperty("java.io.tmpdir"))
                 .toAbsolutePath()
                 .normalize()
@@ -46,7 +46,7 @@ final class FfmpegTestToolchain implements AutoCloseable {
         return new FfmpegTestToolchain(container, command);
     }
 
-    Path command() {
+    public Path command() {
         return command;
     }
 

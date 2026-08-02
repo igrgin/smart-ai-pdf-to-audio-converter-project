@@ -1,7 +1,8 @@
 package dev.audiobook.platform.worker;
 
-import java.util.UUID;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.util.UUID;
 
 @ConfigurationProperties("worker")
 public record WorkerProperties(Stage stage, boolean idle, UUID messageId, UUID workId) {

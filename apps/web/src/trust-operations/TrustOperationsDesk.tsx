@@ -1,8 +1,11 @@
 import { Clock3, ShieldCheck } from "lucide-react";
-import { useState, type FormEvent } from "react";
-import { Button } from "../components/ui/button";
-import type { CsrfProof, StaffRole } from "../identity-session";
-import { fetchCaseDetails, mutationHeaders, performPrivilegedAction } from "./api";
+import { useState } from "react";
+import { Button } from "../ui";
+import type { CsrfProof, StaffRole } from "../session";
+import { fetchCaseDetails, performPrivilegedAction } from "./api";
+import { DelegatedRequestForm } from "./components/DelegatedRequestForm";
+import { EmergencyAccessForm } from "./components/EmergencyAccessForm";
+import { EmergencyReviewForm } from "./components/EmergencyReviewForm";
 import { formatTime, humanize } from "./format";
 import type { ActionQueue, CaseDetails, PrivilegedActionResult } from "./types";
 
@@ -99,90 +102,5 @@ export function TrustOperationsDesk({
       {staffRoles.includes("SECURITY_REVIEWER") && <EmergencyReviewForm csrf={csrf} />}
       {status && <p className="operations-status" role="status">{status}</p>}
     </section>
-  );
-}
-
-function DelegatedRequestForm({ caseId, csrf }: { caseId: string; csrf: CsrfProof }) {
-  const [status, setStatus] = useState<string | null>(null);
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    const response = await fetch(`/api/v1/operator/action-queue/${caseId}/delegated-access-requests`, {
-      method: "POST",
-      headers: mutationHeaders(csrf, { "Idempotency-Key": crypto.randomUUID() }),
-      body: JSON.stringify({
-        purposeCode: data.get("purposeCode"),
-        allowedActions: ["VIEW_RESOURCE_REFERENCE"],
-        expiresAt: new Date(String(data.get("expiresAt"))).toISOString()
-      })
-    });
-    setStatus(response.ok ? "The Listener can now review your named, bounded access request."
-      : "The access request was not accepted. Check its purpose and expiry.");
-  };
-  return (
-    <form className="support-access-form" onSubmit={(event) => void submit(event)}>
-      <h3>Request Listener approval</h3>
-      <label>Purpose<input name="purposeCode" required placeholder="RESTORE_PLAYBACK" /></label>
-      <label>Hard expiry<input name="expiresAt" type="datetime-local" required /></label>
-      <Button type="submit">Request minimum access</Button>
-      {status && <p role="status">{status}</p>}
-    </form>
-  );
-}
-
-function EmergencyAccessForm({ caseId, csrf }: { caseId: string; csrf: CsrfProof }) {
-  const [status, setStatus] = useState<string | null>(null);
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    const response = await fetch(`/api/v1/operator/action-queue/${caseId}/emergency-access`, {
-      method: "POST",
-      headers: mutationHeaders(csrf, { "Idempotency-Key": crypto.randomUUID() }),
-      body: JSON.stringify({
-        incidentReference: data.get("incidentReference"),
-        justificationCode: data.get("justificationCode"),
-        purposeCode: data.get("purposeCode"),
-        allowedActions: ["VIEW_RESOURCE_REFERENCE"],
-        expiresAt: new Date(String(data.get("expiresAt"))).toISOString()
-      })
-    });
-    setStatus(response.ok ? "Emergency access started; Listener notification and independent review are required."
-      : "Emergency access denied. Fresh MFA and incident-bound minimum scope are required.");
-  };
-  return (
-    <form className="emergency-access-form" onSubmit={(event) => void submit(event)}>
-      <h3>Start emergency access</h3>
-      <label>Incident reference<input name="incidentReference" required /></label>
-      <label>Justification code<input name="justificationCode" required /></label>
-      <label>Purpose<input name="purposeCode" required /></label>
-      <label>Hard expiry<input name="expiresAt" type="datetime-local" required /></label>
-      <Button type="submit">Start incident-bound access</Button>
-      {status && <p role="status">{status}</p>}
-    </form>
-  );
-}
-
-function EmergencyReviewForm({ csrf }: { csrf: CsrfProof }) {
-  const [status, setStatus] = useState<string | null>(null);
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    const grantId = String(data.get("grantId"));
-    const response = await fetch(`/api/v1/operator/action-queue/emergency-access-grants/${grantId}/review`, {
-      method: "POST",
-      headers: mutationHeaders(csrf, { "Idempotency-Key": crypto.randomUUID() }),
-      body: JSON.stringify({ outcome: data.get("outcome"), reviewCode: data.get("reviewCode") })
-    });
-    setStatus(response.ok ? "Independent emergency-access review recorded immutably." : "Review could not be recorded.");
-  };
-  return (
-    <form className="emergency-review-form" onSubmit={(event) => void submit(event)}>
-      <h2>Independent emergency review</h2>
-      <label>Grant ID<input name="grantId" required /></label>
-      <label>Outcome<select name="outcome"><option>APPROPRIATE</option><option>POLICY_GAP</option><option>UNJUSTIFIED</option></select></label>
-      <label>Review code<input name="reviewCode" required /></label>
-      <Button type="submit">Record retrospective review</Button>
-      {status && <p role="status">{status}</p>}
-    </form>
   );
 }

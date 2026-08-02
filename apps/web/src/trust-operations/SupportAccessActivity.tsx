@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Button } from "../components/ui/button";
-import type { CsrfProof } from "../identity-session";
+import { Button } from "../ui";
+import type { CsrfProof } from "../session";
 import { approveDelegatedRequest, revokeDelegatedGrant } from "./api";
 import { formatTime, humanize } from "./format";
 import type { DelegatedAccessGrant, ListenerAccessSummary, PendingAccessRequest } from "./types";

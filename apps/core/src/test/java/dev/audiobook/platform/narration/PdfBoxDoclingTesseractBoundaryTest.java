@@ -3,11 +3,11 @@ package dev.audiobook.platform.narration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.Duration;
-import java.util.List;
+import dev.audiobook.platform.narration.extraction.DocumentUnderstandingException;
+import dev.audiobook.platform.narration.extraction.pdf.PdfBoxDoclingTesseractBoundaryImpl;
+import dev.audiobook.platform.narration.extraction.pdf.PdfDocumentUnderstandingBoundary;
+import dev.audiobook.platform.narration.extraction.pdf.PdfNarrationProperties;
+
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -20,70 +20,108 @@ import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlin
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
+
 class PdfBoxDoclingTesseractBoundaryTest {
 
-    @TempDir
-    Path scratch;
+    @TempDir Path scratch;
 
     @Test
     void pdfBoxTextAndOutlineRemainAuthoritativeWhileDoclingSuppliesLayout() throws Exception {
         Path publication = textPdf("Opening prose exactly.", "Declared chapter");
-        Path docling = executable("docling-ok", """
-                #!/bin/sh
-                printf '%s' '[{"pageNumber":1,"items":[{"role":"heading","text":"Detected heading","confidence":0.97},{"role":"table","text":"Year 2026","confidence":0.91}]}]'
-                """);
-        var boundary = boundary(docling.toString(), executable("unused-tesseract", "#!/bin/sh\nexit 1\n").toString());
+        Path docling =
+                executable(
+                        "docling-ok",
+                        """
+                        #!/bin/sh
+                        printf '%s' '[{"pageNumber":1,"items":[{"role":"heading","text":"Detected heading","confidence":0.97},{"role":"table","text":"Year 2026","confidence":0.91}]}]'
+                        """);
+        var boundary =
+                boundary(
+                        docling.toString(),
+                        executable("unused-tesseract", "#!/bin/sh\nexit 1\n").toString());
 
         PdfDocumentUnderstandingBoundary.DocumentProfile profile = boundary.inspect(publication);
-        List<PdfDocumentUnderstandingBoundary.PageEvidence> pages = boundary.understandBatch(
-                publication, new PdfDocumentUnderstandingBoundary.PageRange(1, 1));
+        List<PdfDocumentUnderstandingBoundary.PageEvidence> pages =
+                boundary.understandBatch(
+                        publication, new PdfDocumentUnderstandingBoundary.PageRange(1, 1));
 
         assertThat(profile.pageCount()).isEqualTo(1);
-        assertThat(profile.outline()).containsExactly(
-                new PdfDocumentUnderstandingBoundary.OutlineEntry("Declared chapter", 1, "outline:0"));
-        assertThat(pages).singleElement().satisfies(page -> {
-            assertThat(page.text()).isEqualTo("Opening prose exactly.");
-            assertThat(page.textSource()).isEqualTo(PdfDocumentUnderstandingBoundary.TextSource.PDFBOX_TEXT);
-            assertThat(page.layoutItems()).extracting(PdfDocumentUnderstandingBoundary.LayoutItem::role)
-                    .containsExactly(
-                            PdfDocumentUnderstandingBoundary.LayoutRole.HEADING,
-                            PdfDocumentUnderstandingBoundary.LayoutRole.TABLE);
-        });
+        assertThat(profile.outline())
+                .containsExactly(
+                        new PdfDocumentUnderstandingBoundary.OutlineEntry(
+                                "Declared chapter", 1, "outline:0"));
+        assertThat(pages)
+                .singleElement()
+                .satisfies(
+                        page -> {
+                            assertThat(page.text()).isEqualTo("Opening prose exactly.");
+                            assertThat(page.textSource())
+                                    .isEqualTo(
+                                            PdfDocumentUnderstandingBoundary.TextSource
+                                                    .PDFBOX_TEXT);
+                            assertThat(page.layoutItems())
+                                    .extracting(PdfDocumentUnderstandingBoundary.LayoutItem::role)
+                                    .containsExactly(
+                                            PdfDocumentUnderstandingBoundary.LayoutRole.HEADING,
+                                            PdfDocumentUnderstandingBoundary.LayoutRole.TABLE);
+                        });
     }
 
     @Test
     void failedSinglePageDoclingFallsBackToBoundedLocalTesseract() throws Exception {
         Path publication = blankPdf(new PDRectangle(2_000, 2_000));
         Path docling = executable("docling-fails", "#!/bin/sh\nexit 17\n");
-        Path tesseract = executable("tesseract-ok", """
-                #!/bin/sh
-                dimensions=$(python3 -c 'import struct,sys; data=open(sys.argv[1],"rb").read(24); width,height=struct.unpack(">II",data[16:24]); print(width*height)' "$1")
-                [ "$dimensions" -le 1000000 ] || exit 19
-                printf '%s' 'OCR recovered prose.'
-                """);
+        Path tesseract =
+                executable(
+                        "tesseract-ok",
+                        """
+                        #!/bin/sh
+                        dimensions=$(python3 -c 'import struct,sys; data=open(sys.argv[1],"rb").read(24); width,height=struct.unpack(">II",data[16:24]); print(width*height)' "$1")
+                        [ "$dimensions" -le 1000000 ] || exit 19
+                        printf '%s' 'OCR recovered prose.'
+                        """);
 
-        PdfDocumentUnderstandingBoundary.PageEvidence page = boundary(docling.toString(), tesseract.toString())
-                .understandPage(publication, 1);
+        PdfDocumentUnderstandingBoundary.PageEvidence page =
+                boundary(docling.toString(), tesseract.toString()).understandPage(publication, 1);
 
         assertThat(page.text()).isEqualTo("OCR recovered prose.");
-        assertThat(page.textSource()).isEqualTo(PdfDocumentUnderstandingBoundary.TextSource.TESSERACT_OCR);
+        assertThat(page.textSource())
+                .isEqualTo(PdfDocumentUnderstandingBoundary.TextSource.TESSERACT_OCR);
     }
 
     @Test
     void malformedOrOutOfRangeDoclingEvidenceFailsClosed() throws Exception {
         Path publication = textPdf("Private source.", null);
         Path malformed = executable("docling-malformed", "#!/bin/sh\nprintf '%s' '{not-json}'\n");
-        Path outOfRange = executable("docling-range", """
-                #!/bin/sh
-                printf '%s' '[{"pageNumber":2,"items":[]}]'
-                """);
+        Path outOfRange =
+                executable(
+                        "docling-range",
+                        """
+                        #!/bin/sh
+                        printf '%s' '[{"pageNumber":2,"items":[]}]'
+                        """);
 
-        assertThatThrownBy(() -> boundary(malformed.toString(), "unused").understandBatch(
-                        publication, new PdfDocumentUnderstandingBoundary.PageRange(1, 1)))
+        assertThatThrownBy(
+                        () ->
+                                boundary(malformed.toString(), "unused")
+                                        .understandBatch(
+                                                publication,
+                                                new PdfDocumentUnderstandingBoundary.PageRange(
+                                                        1, 1)))
                 .isInstanceOf(DocumentUnderstandingException.class)
                 .hasMessage("Docling returned invalid document evidence");
-        assertThatThrownBy(() -> boundary(outOfRange.toString(), "unused").understandBatch(
-                        publication, new PdfDocumentUnderstandingBoundary.PageRange(1, 1)))
+        assertThatThrownBy(
+                        () ->
+                                boundary(outOfRange.toString(), "unused")
+                                        .understandBatch(
+                                                publication,
+                                                new PdfDocumentUnderstandingBoundary.PageRange(
+                                                        1, 1)))
                 .isInstanceOf(DocumentUnderstandingException.class)
                 .hasMessage("Docling returned evidence outside the requested page range");
     }
@@ -98,24 +136,27 @@ class PdfBoxDoclingTesseractBoundaryTest {
                 boundary(docling.toString(), tesseract.toString()).understandPage(publication, 1);
 
         assertThat(page.readable()).isFalse();
-        assertThat(page.textSource()).isEqualTo(PdfDocumentUnderstandingBoundary.TextSource.UNREADABLE);
+        assertThat(page.textSource())
+                .isEqualTo(PdfDocumentUnderstandingBoundary.TextSource.UNREADABLE);
     }
 
-    private PdfDocumentUnderstandingBoundary boundary(String doclingCommand, String tesseractCommand) {
-        PdfNarrationProperties properties = new PdfNarrationProperties(
-                2,
-                2,
-                1,
-                1_000_000,
-                Duration.ofSeconds(5),
-                scratch,
-                "java",
-                System.getProperty("java.class.path"),
-                "dev.audiobook.pdfbox.PdfBoxBoundaryMain",
-                256,
-                doclingCommand,
-                "ignored-docling-script",
-                tesseractCommand);
+    private PdfDocumentUnderstandingBoundary boundary(
+            String doclingCommand, String tesseractCommand) {
+        PdfNarrationProperties properties =
+                new PdfNarrationProperties(
+                        2,
+                        2,
+                        1,
+                        1_000_000,
+                        Duration.ofSeconds(5),
+                        scratch,
+                        "java",
+                        System.getProperty("java.class.path"),
+                        "dev.audiobook.pdfbox.PdfBoxBoundaryMain",
+                        256,
+                        doclingCommand,
+                        "ignored-docling-script",
+                        tesseractCommand);
         return new PdfBoxDoclingTesseractBoundaryImpl(properties);
     }
 

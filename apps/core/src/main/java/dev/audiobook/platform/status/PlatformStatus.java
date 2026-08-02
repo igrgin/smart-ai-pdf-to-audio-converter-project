@@ -1,5 +1,7 @@
 package dev.audiobook.platform.status;
 
+import dev.audiobook.platform.status.service.*;
+
 public record PlatformStatus(String apiVersion, Build build, AvailabilityState availability) {
 
     public PlatformStatus(
@@ -14,11 +16,9 @@ public record PlatformStatus(String apiVersion, Build build, AvailabilityState a
                 new AvailabilityState(coreAvailability, databaseAvailability));
     }
 
-    public record Build(String version, String revision) {
-    }
+    public record Build(String version, String revision) {}
 
-    public record AvailabilityState(Availability core, Availability database) {
-    }
+    public record AvailabilityState(Availability core, Availability database) {}
 
     public enum Availability {
         AVAILABLE,

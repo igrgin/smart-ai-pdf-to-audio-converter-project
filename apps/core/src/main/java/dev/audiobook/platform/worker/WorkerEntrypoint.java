@@ -1,9 +1,12 @@
 package dev.audiobook.platform.worker;
 
-import dev.audiobook.platform.generation.AudiobookGenerationWorkerService;
-import dev.audiobook.platform.narration.NarrationPlanJobService;
+import dev.audiobook.platform.admission.inspection.work.service.InspectionWorkerService;
+import dev.audiobook.platform.generation.service.AudiobookGenerationWorkerService;
+import dev.audiobook.platform.workflow.narrationanalysis.service.NarrationAnalysisStageRunService;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -16,7 +19,7 @@ import org.springframework.stereotype.Component;
 public class WorkerEntrypoint implements ApplicationRunner {
 
     private final WorkerProperties workerProperties;
-    private final NarrationPlanJobService narrationPlanJobService;
+    private final NarrationAnalysisStageRunService narrationAnalysisStageRunService;
     private final InspectionWorkerService inspectionWorkerService;
     private final AudiobookGenerationWorkerService audiobookGenerationWorkerService;
 
@@ -29,7 +32,7 @@ public class WorkerEntrypoint implements ApplicationRunner {
         log.info("worker_ready stage={}", workerProperties.stage());
         if (workerProperties.stage() == WorkerProperties.Stage.NARRATION_ANALYSIS) {
             if (workerProperties.messageId() != null && workerProperties.workId() != null) {
-                narrationPlanJobService.processDelivery(
+                narrationAnalysisStageRunService.processDelivery(
                         workerProperties.messageId(), workerProperties.workId());
                 return;
             }
@@ -42,7 +45,7 @@ public class WorkerEntrypoint implements ApplicationRunner {
                 }
             }
             if (workerProperties.stage() == WorkerProperties.Stage.NARRATION_ANALYSIS) {
-                narrationPlanJobService.processPending();
+                narrationAnalysisStageRunService.processPending();
             }
             if (workerProperties.stage() == WorkerProperties.Stage.SPEECH) {
                 audiobookGenerationWorkerService.generatePending();
